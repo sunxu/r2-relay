@@ -34,6 +34,9 @@ class R2Worker:
         spec = record["request"]["r2_request"]
         record["status"] = "RUNNING"
         headers = [(k, v) for k, v in spec["headers"] if k.lower() not in HOP_HEADERS]
+        # Presigned S3 UploadPart expects a fixed body length, not chunked encoding.
+        if not any(k.lower() == "content-length" for k, _ in headers):
+            headers.append(("Content-Length", str(path.stat().st_size)))
         # Redirects must not be followed; each signed URL is the authority.
         async with httpx.AsyncClient(transport=self.transport, follow_redirects=False,
                                      timeout=httpx.Timeout(60.0, connect=15.0),
