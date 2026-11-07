@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import secrets
 import time
@@ -15,6 +16,8 @@ from pydantic import BaseModel, Field
 
 from .cache import CacheStore, MD5_PATTERN
 from .worker import R2Worker
+
+LOG = logging.getLogger('r2relay.vps')
 
 
 class R2Request(BaseModel):
@@ -39,6 +42,11 @@ class State:
         self.transfers: dict[str, tuple[str, Prepare, float]] = {}
         self.executions: dict[str, dict] = {}
         self.tasks: set[asyncio.Task] = set()
+        self.metrics = {
+            "prepare_hit": 0, "prepare_miss": 0, "staged_bytes": 0,
+            "r2_executions_finished": 0, "r2_attempts": 0,
+            "r2_success": 0, "r2_failed": 0, "cache_unavailable": 0,
+        }
         self.max_executions = int(os.environ.get("R2_RELAY_MAX_EXECUTIONS", "512"))
         self.max_concurrent = int(os.environ.get("R2_RELAY_MAX_CONCURRENT", "16"))
         self.execution_ttl = int(os.environ.get("R2_RELAY_EXECUTION_TTL", "900"))
@@ -72,6 +80,12 @@ class State:
                 record["relay_error"] = {"type": type(exc).__name__, "message": str(exc)}
             finally:
                 record["finished_at"] = time.time()
+                self.metrics["r2_executions_finished"] += 1
+                self.metrics["r2_attempts"] += record.get("attempts", 0)
+                if record["status"] == "SUCCEEDED":
+                    self.metrics["r2_success"] += 1
+                else:
+                    self.metrics["r2_failed"] += 1
 
     def start(self, execution_id: str):
         record = self.executions[execution_id]
@@ -145,8 +159,14 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
             "status": "QUEUED", "attempts": 0, "request": p.model_dump(), "created_at": time.time()
         }
         if state.store.get(p.md5) is not None:
+            state.metrics["prepare_hit"] += 1
+            LOG.info("prepare HIT md5=%s size=%s execution=%s url=%s",
+                     p.md5, p.size, execution_id, p.r2_request.url)
             state.start(execution_id)
             return {"status": "HIT", "execution_id": execution_id}
+        state.metrics["prepare_miss"] += 1
+        LOG.info("prepare MISS md5=%s size=%s execution=%s url=%s",
+                 p.md5, p.size, execution_id, p.r2_request.url)
         transfer_id = secrets.token_urlsafe(20)
         state.transfers[transfer_id] = (execution_id, p, time.time())
         return {"status": "MISS", "transfer_id": transfer_id, "execution_id": execution_id}
@@ -167,6 +187,9 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except OSError as exc:
+            state.metrics["cache_unavailable"] += 1
+            LOG.warning("cache failure md5=%s execution=%s error=%s",
+                        p.md5, execution_id, exc)
             # No R2 worker has been started. HTTP 507 explicitly authorizes
             # local direct fallback without a competing upload.
             record = state.executions.get(execution_id)
@@ -179,9 +202,26 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
             raise HTTPException(status_code=507, detail="VPS cache unavailable") from exc
         finally:
             state.transfers.pop(transfer_id, None)
+        state.metrics["staged_bytes"] += entry.size
+        LOG.info("staged md5=%s size=%s execution=%s",
+                 p.md5, entry.size, execution_id)
         state.start(execution_id)
         return {"status": "STAGED", "md5": entry.md5, "size": entry.size,
                 "execution_id": execution_id}
+
+    @app.get("/v1/metrics")
+    async def metrics(authorization: str | None = Header(default=None)):
+        authorize(authorization)
+        state.prune()
+        return {
+            **state.metrics,
+            "cache_entry_count": len(state.store.entries),
+            "execution_record_count": len(state.executions),
+            "active_execution_count": sum(
+                1 for item in state.executions.values()
+                if item["status"] in ("QUEUED", "RUNNING", "RETRY_WAIT")
+            ),
+        }
 
     @app.get("/v1/executions/{execution_id}")
     async def execution(execution_id: str, authorization: str | None = Header(default=None)):
