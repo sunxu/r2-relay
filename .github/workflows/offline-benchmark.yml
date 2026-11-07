@@ -12,6 +12,7 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,3 +24,5 @@ jobs:
         run: python -m pytest -q benchmarks/test_offline_benchmark.py
       - name: Offline benchmark
         run: python benchmarks/offline_benchmark.py --parts 8 --part-mib 1 --parallel 4
+      - name: Full offline 100x10MiB load (mock transport; no real bandwidth)
+        run: python benchmarks/offline_benchmark.py --parts 100 --part-mib 10 --parallel 8
