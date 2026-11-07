@@ -1,4 +1,4 @@
-"""HTTP cache negotiation endpoints. R2 upload worker is a separate M1 task."""
+"""Authenticated VPS cache negotiation and R2 execution API."""
 from __future__ import annotations
 
 import asyncio
@@ -8,10 +8,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .cache import CacheStore, MD5_PATTERN
+from .worker import R2Worker
 
 
 class R2Request(BaseModel):
@@ -29,14 +31,29 @@ class Prepare(BaseModel):
 
 
 class State:
-    def __init__(self, store: CacheStore, token: str):
+    def __init__(self, store: CacheStore, token: str, worker: R2Worker):
         self.store = store
         self.token = token
-        self.transfers: dict[str, Prepare] = {}
+        self.worker = worker
+        self.transfers: dict[str, tuple[str, Prepare]] = {}
         self.executions: dict[str, dict] = {}
+        self.tasks: set[asyncio.Task] = set()
+
+    def start(self, execution_id: str):
+        record = self.executions[execution_id]
+        entry = self.store.get(record["request"]["md5"])
+        if entry is None:
+            record["status"] = "FAILED"
+            record["relay_error"] = {"type": "CacheUnavailable", "message": "part expired or missing"}
+            return
+        task = asyncio.create_task(self.worker.execute(record, entry.path))
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
 
 
-def create_app(store: CacheStore | None = None, token: str | None = None) -> FastAPI:
+def create_app(store: CacheStore | None = None, token: str | None = None,
+               r2_transport: httpx.AsyncBaseTransport | None = None,
+               retry_delays: tuple[float, ...] = (2, 4, 8)) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         task = asyncio.create_task(_cleanup_loop(app.state.relay.store))
@@ -48,10 +65,16 @@ def create_app(store: CacheStore | None = None, token: str | None = None) -> Fas
                 await task
             except asyncio.CancelledError:
                 pass
+            active = list(app.state.relay.tasks)
+            for running in active:
+                running.cancel()
+            if active:
+                await asyncio.gather(*active, return_exceptions=True)
 
     app = FastAPI(title="R2 Relay VPS", lifespan=lifespan)
     state = State(store or CacheStore(Path(os.environ.get("R2_RELAY_CACHE_DIR", "/var/lib/r2-relay/cache"))),
-                  token if token is not None else os.environ.get("R2_RELAY_TOKEN", ""))
+                  token if token is not None else os.environ.get("R2_RELAY_TOKEN", ""),
+                  R2Worker(transport=r2_transport, delays=retry_delays))
     if not state.token:
         raise RuntimeError("R2_RELAY_TOKEN must be configured")
     app.state.relay = state
@@ -71,19 +94,23 @@ def create_app(store: CacheStore | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=400, detail="invalid schema or md5")
         u = urlsplit(p.r2_request.url)
         query = parse_qs(u.query)
-        if (p.r2_request.method != "PUT" or u.scheme != "https"
+        if (p.r2_request.method != "PUT" or u.scheme != "https" or u.port not in (None, 443)
                 or not u.hostname or not u.hostname.endswith(".r2.cloudflarestorage.com")
                 or u.hostname == ".r2.cloudflarestorage.com"
                 or "uploadId" not in query or "partNumber" not in query):
             raise HTTPException(status_code=400, detail="invalid R2 UploadPart target")
+        signed_host = [v for k, v in p.r2_request.headers if k.lower() == "host"]
+        if signed_host and any(v.lower() != u.hostname.lower() for v in signed_host):
+            raise HTTPException(status_code=400, detail="signed host mismatch")
         execution_id = secrets.token_urlsafe(20)
-        state.executions[execution_id] = {"status": "QUEUED", "request": p.model_dump()}
+        state.executions[execution_id] = {
+            "status": "QUEUED", "attempts": 0, "request": p.model_dump()
+        }
         if state.store.get(p.md5) is not None:
-            # The next M1 iteration supplies actual R2 workers. Never report 200 here.
+            state.start(execution_id)
             return {"status": "HIT", "execution_id": execution_id}
         transfer_id = secrets.token_urlsafe(20)
-        state.transfers[transfer_id] = p
-        state.executions[execution_id]["transfer_id"] = transfer_id
+        state.transfers[transfer_id] = (execution_id, p)
         return {"status": "MISS", "transfer_id": transfer_id, "execution_id": execution_id}
 
     @app.put("/v1/parts/data/{transfer_id}")
@@ -91,9 +118,10 @@ def create_app(store: CacheStore | None = None, token: str | None = None) -> Fas
                           authorization: str | None = Header(default=None),
                           x_content_md5_hex: str | None = Header(default=None)):
         authorize(authorization)
-        p = state.transfers.get(transfer_id)
-        if p is None:
+        item = state.transfers.get(transfer_id)
+        if item is None:
             raise HTTPException(status_code=404, detail="unknown transfer")
+        execution_id, p = item
         if x_content_md5_hex != p.md5:
             raise HTTPException(status_code=400, detail="md5 metadata mismatch")
         try:
@@ -102,7 +130,9 @@ def create_app(store: CacheStore | None = None, token: str | None = None) -> Fas
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         finally:
             state.transfers.pop(transfer_id, None)
-        return {"status": "STAGED", "md5": entry.md5, "size": entry.size}
+        state.start(execution_id)
+        return {"status": "STAGED", "md5": entry.md5, "size": entry.size,
+                "execution_id": execution_id}
 
     @app.get("/v1/executions/{execution_id}")
     async def execution(execution_id: str, authorization: str | None = Header(default=None)):
@@ -110,7 +140,7 @@ def create_app(store: CacheStore | None = None, token: str | None = None) -> Fas
         result = state.executions.get(execution_id)
         if result is None:
             raise HTTPException(status_code=404, detail="unknown execution")
-        return {"status": result["status"], "execution_id": execution_id}
+        return {k: v for k, v in result.items() if k != "request"} | {"execution_id": execution_id}
 
     return app
 
