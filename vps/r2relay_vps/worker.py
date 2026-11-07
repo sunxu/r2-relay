@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import random
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ import httpx
 
 RETRYABLE = {429, 500, 502, 503, 504}
 MAX_RESPONSE_BODY = 8 * 1024 * 1024
+LOG = logging.getLogger("r2relay.worker")
 HOP_HEADERS = {"connection", "proxy-connection", "keep-alive", "transfer-encoding",
                "te", "trailer", "upgrade", "proxy-authenticate", "proxy-authorization"}
 
@@ -43,6 +45,8 @@ class R2Worker:
                                      trust_env=False) as client:
             for attempt in range(1, len(self.delays) + 2):
                 record["attempts"] = attempt
+                LOG.info("R2 PUT start attempt=%s md5=%s url=%s",
+                         attempt, record["request"]["md5"], spec["url"])
                 try:
                     if not path.is_file():
                         raise FileNotFoundError("cached part has expired or disappeared")
@@ -67,6 +71,9 @@ class R2Worker:
                             "body_base64": base64.b64encode(body).decode("ascii"),
                             "body_truncated": False,
                         }
+                        LOG.info("R2 PUT result attempt=%s status=%s etag=%s url=%s",
+                                 attempt, response.status_code,
+                                 response.headers.get("etag", ""), spec["url"])
                         if 200 <= response.status_code < 300:
                             record["status"] = "SUCCEEDED"
                             return
@@ -74,6 +81,8 @@ class R2Worker:
                             record["status"] = "FAILED"
                             return
                 except (httpx.TransportError, OSError) as exc:
+                    LOG.warning("R2 PUT exception attempt=%s url=%s error=%s",
+                                attempt, spec["url"], exc)
                     record["relay_error"] = {
                         "type": type(exc).__name__,
                         "message": str(exc),
