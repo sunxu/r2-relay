@@ -46,29 +46,33 @@ class R2Worker:
                 try:
                     if not path.is_file():
                         raise FileNotFoundError("cached part has expired or disappeared")
-                    response = await client.request(
+                    async with client.stream(
                         "PUT", spec["url"], headers=headers, content=file_chunks(path)
-                    )
-                    # Read and record only bounded diagnostic body bytes.
-                    if len(response.content) > MAX_RESPONSE_BODY:
-                        record["relay_error"] = {"type": "ResponseTooLarge", "message": "R2 response exceeds 8 MiB"}
-                        record.pop("upstream_response", None)
-                        record["status"] = "FAILED"
-                        return
-                    body = response.content
-                    record["upstream_response"] = {
-                        "status_code": response.status_code,
-                        "headers": [[k, v] for k, v in response.headers.multi_items()
-                                    if k.lower() not in HOP_HEADERS],
-                        "body_base64": base64.b64encode(body).decode("ascii"),
-                        "body_truncated": False,
-                    }
-                    if 200 <= response.status_code < 300:
-                        record["status"] = "SUCCEEDED"
-                        return
-                    if response.status_code not in RETRYABLE:
-                        record["status"] = "FAILED"
-                        return
+                    ) as response:
+                        body = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            if len(body) + len(chunk) > MAX_RESPONSE_BODY:
+                                record["relay_error"] = {
+                                    "type": "ResponseTooLarge",
+                                    "message": "R2 response exceeds 8 MiB",
+                                }
+                                record.pop("upstream_response", None)
+                                record["status"] = "FAILED"
+                                return
+                            body.extend(chunk)
+                        record["upstream_response"] = {
+                            "status_code": response.status_code,
+                            "headers": [[k, v] for k, v in response.headers.multi_items()
+                                        if k.lower() not in HOP_HEADERS],
+                            "body_base64": base64.b64encode(body).decode("ascii"),
+                            "body_truncated": False,
+                        }
+                        if 200 <= response.status_code < 300:
+                            record["status"] = "SUCCEEDED"
+                            return
+                        if response.status_code not in RETRYABLE:
+                            record["status"] = "FAILED"
+                            return
                 except (httpx.TransportError, OSError) as exc:
                     record["relay_error"] = {
                         "type": type(exc).__name__,
