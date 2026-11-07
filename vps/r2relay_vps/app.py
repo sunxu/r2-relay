@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -35,9 +36,42 @@ class State:
         self.store = store
         self.token = token
         self.worker = worker
-        self.transfers: dict[str, tuple[str, Prepare]] = {}
+        self.transfers: dict[str, tuple[str, Prepare, float]] = {}
         self.executions: dict[str, dict] = {}
         self.tasks: set[asyncio.Task] = set()
+        self.max_executions = int(os.environ.get("R2_RELAY_MAX_EXECUTIONS", "512"))
+        self.max_concurrent = int(os.environ.get("R2_RELAY_MAX_CONCURRENT", "16"))
+        self.execution_ttl = int(os.environ.get("R2_RELAY_EXECUTION_TTL", "900"))
+        self.semaphore = asyncio.Semaphore(self.max_concurrent)
+
+    def prune(self):
+        now = time.time()
+        expired = [key for key, record in self.executions.items()
+                   if record["status"] in ("FAILED", "SUCCEEDED")
+                   and now - record.get("finished_at", now) >= self.execution_ttl]
+        for key in expired:
+            self.executions.pop(key, None)
+        stale = [key for key, (_execution_id, _p, created) in self.transfers.items()
+                 if now - created >= self.execution_ttl]
+        for key in stale:
+            execution_id, _p, _created = self.transfers.pop(key)
+            record = self.executions.get(execution_id)
+            if record and record["status"] == "QUEUED":
+                record["status"] = "FAILED"
+                record["finished_at"] = now
+                record["relay_error"] = {"type": "TransferExpired", "message": "no body uploaded before TTL"}
+
+    async def run(self, record: dict, path: Path):
+        async with self.semaphore:
+            try:
+                await self.worker.execute(record, path)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                record["status"] = "FAILED"
+                record["relay_error"] = {"type": type(exc).__name__, "message": str(exc)}
+            finally:
+                record["finished_at"] = time.time()
 
     def start(self, execution_id: str):
         record = self.executions[execution_id]
@@ -45,8 +79,9 @@ class State:
         if entry is None:
             record["status"] = "FAILED"
             record["relay_error"] = {"type": "CacheUnavailable", "message": "part expired or missing"}
+            record["finished_at"] = time.time()
             return
-        task = asyncio.create_task(self.worker.execute(record, entry.path))
+        task = asyncio.create_task(self.run(record, entry.path))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
@@ -56,7 +91,7 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
                retry_delays: tuple[float, ...] = (2, 4, 8)) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        task = asyncio.create_task(_cleanup_loop(app.state.relay.store))
+        task = asyncio.create_task(_cleanup_loop(app.state.relay))
         try:
             yield
         finally:
@@ -102,15 +137,18 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
         signed_host = [v for k, v in p.r2_request.headers if k.lower() == "host"]
         if signed_host and any(v.lower() != u.hostname.lower() for v in signed_host):
             raise HTTPException(status_code=400, detail="signed host mismatch")
+        state.prune()
+        if len(state.executions) >= state.max_executions or len(state.transfers) >= state.max_executions:
+            raise HTTPException(status_code=503, detail="VPS execution capacity reached")
         execution_id = secrets.token_urlsafe(20)
         state.executions[execution_id] = {
-            "status": "QUEUED", "attempts": 0, "request": p.model_dump()
+            "status": "QUEUED", "attempts": 0, "request": p.model_dump(), "created_at": time.time()
         }
         if state.store.get(p.md5) is not None:
             state.start(execution_id)
             return {"status": "HIT", "execution_id": execution_id}
         transfer_id = secrets.token_urlsafe(20)
-        state.transfers[transfer_id] = (execution_id, p)
+        state.transfers[transfer_id] = (execution_id, p, time.time())
         return {"status": "MISS", "transfer_id": transfer_id, "execution_id": execution_id}
 
     @app.put("/v1/parts/data/{transfer_id}")
@@ -121,7 +159,7 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
         item = state.transfers.get(transfer_id)
         if item is None:
             raise HTTPException(status_code=404, detail="unknown transfer")
-        execution_id, p = item
+        execution_id, p, _created = item
         if x_content_md5_hex != p.md5:
             raise HTTPException(status_code=400, detail="md5 metadata mismatch")
         try:
@@ -145,7 +183,8 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
     return app
 
 
-async def _cleanup_loop(store: CacheStore) -> None:
+async def _cleanup_loop(state: State) -> None:
     while True:
         await asyncio.sleep(1)
-        store.cleanup()
+        state.store.cleanup()
+        state.prune()
