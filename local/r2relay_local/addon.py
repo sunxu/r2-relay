@@ -45,11 +45,11 @@ class R2RelayAddon:
         req = flow.request
         if not is_upload_part(req.method, req.pretty_url):
             return
-        self._release(flow)
         if getattr(req, "stream", False):
             return
         body = req.raw_content
         if body is None or len(body) > self.max_part_bytes:
+            self._release(flow)
             # mitmproxy continues forwarding the original request to R2.
             return
         try:
@@ -60,6 +60,7 @@ class R2RelayAddon:
             )
         except RelayOutcomeUnknown as exc:
             LOG.error("R2 outcome unknown; refusing a competing direct PUT: %s", exc)
+            self._release(flow)
             flow.response = http.Response.make(
                 status_code=502,
                 content=b"R2 Relay: upload outcome unknown; retry through original client",
@@ -68,7 +69,9 @@ class R2RelayAddon:
             return
         except RelayUnavailable as exc:
             LOG.warning("VPS unavailable; forwarding original request directly to R2: %s", exc)
+            self._release(flow)
             return
+        self._release(flow)
         # Set response only for confirmed real upstream HTTP result.
         # mitmproxy owns framing, so drop hop-by-hop / stale length headers.
         response_headers = [(k, v) for k, v in result.headers
