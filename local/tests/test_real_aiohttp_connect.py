@@ -11,6 +11,7 @@ import subprocess
 import time
 
 import aiohttp
+from aiohttp import web
 import pytest
 
 
@@ -78,6 +79,48 @@ async def test_aiohttp_connect_full_request_and_ca(tmp_path):
             assert data["length"] == len(body)
             assert data["md5"] == hashlib.md5(body, usedforsecurity=False).hexdigest()
             assert "uploadId=test-123" in data["url"]
+
+            # Non-R2 HTTPS must remain an original CONNECT tunnel, not hit the
+            # R2 addon. Trust a separate self-signed localhost cert explicitly.
+            cert = tmp_path / "localhost.crt"
+            key = tmp_path / "localhost.key"
+            subprocess.run(
+                ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                 "-keyout", str(key), "-out", str(cert), "-days", "1",
+                 "-subj", "/CN=localhost",
+                 "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            server_ssl = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            server_ssl.load_cert_chain(str(cert), str(key))
+            app = web.Application()
+
+            async def non_r2(request):
+                received = await request.read()
+                return web.Response(body=b"direct-tunnel:" + received)
+
+            app.router.add_put("/other", non_r2)
+            runner = web.AppRunner(app)
+            await runner.setup()
+            server_port = unused_port()
+            site = web.TCPSite(runner, "127.0.0.1", server_port, ssl_context=server_ssl)
+            await site.start()
+            try:
+                combined_context = ssl.create_default_context()
+                combined_context.load_verify_locations(cafile=str(ca_file))
+                combined_context.load_verify_locations(cafile=str(cert))
+                async with aiohttp.ClientSession(timeout=timeout) as client:
+                    async with client.put(
+                        f"https://localhost:{server_port}/other",
+                        data=b"untouched", ssl=combined_context,
+                        proxy=f"http://127.0.0.1:{port}",
+                    ) as response:
+                        assert response.status == 200
+                        assert await response.read() == b"direct-tunnel:untouched"
+                # Non-R2 never reached the capture addon.
+                assert json.loads(capture_file.read_text())["url"] == data["url"]
+            finally:
+                await runner.cleanup()
         finally:
             process.terminate()
             try:
