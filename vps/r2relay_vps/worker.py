@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 RETRYABLE = {429, 500, 502, 503, 504}
-MAX_RESPONSE_BODY = 65536
+MAX_RESPONSE_BODY = 8 * 1024 * 1024
 HOP_HEADERS = {"connection", "proxy-connection", "keep-alive", "transfer-encoding",
                "te", "trailer", "upgrade", "proxy-authenticate", "proxy-authorization"}
 
@@ -50,13 +50,18 @@ class R2Worker:
                         "PUT", spec["url"], headers=headers, content=file_chunks(path)
                     )
                     # Read and record only bounded diagnostic body bytes.
-                    body = response.content[:MAX_RESPONSE_BODY]
+                    if len(response.content) > MAX_RESPONSE_BODY:
+                        record["relay_error"] = {"type": "ResponseTooLarge", "message": "R2 response exceeds 8 MiB"}
+                        record.pop("upstream_response", None)
+                        record["status"] = "FAILED"
+                        return
+                    body = response.content
                     record["upstream_response"] = {
                         "status_code": response.status_code,
                         "headers": [[k, v] for k, v in response.headers.multi_items()
                                     if k.lower() not in HOP_HEADERS],
                         "body_base64": base64.b64encode(body).decode("ascii"),
-                        "body_truncated": len(response.content) > MAX_RESPONSE_BODY,
+                        "body_truncated": False,
                     }
                     if 200 <= response.status_code < 300:
                         record["status"] = "SUCCEEDED"
