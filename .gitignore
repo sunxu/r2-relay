@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+dist/
+build/
+
+# Local credentials, runtime CA and private keys
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+mitmproxy-ca*
+.local-secrets/
+
+# Runtime caches/logs
+*.log
+cache/
+tmp/
+benchmarks/results/
