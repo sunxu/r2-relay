@@ -125,7 +125,7 @@ class RelayClient:
                              "Content-Type": "application/octet-stream"},
                     content=body,
                 )
-            except RelayUnavailable as exc:
+            except (RelayUnavailable, RelayOutcomeUnknown) as exc:
                 # The VPS might have staged the full part and begun R2 PUT.
                 raise RelayOutcomeUnknown("VPS data transfer acknowledgement was lost") from exc
         elif status != "HIT":
