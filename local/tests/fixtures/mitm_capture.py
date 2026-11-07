@@ -1,28 +1,28 @@
-"""Isolated mitmproxy fixture: proves full HTTPS request buffering, not real R2."""
+"""Isolated real mitmproxy integration: actual R2RelayAddon with stub VPS response."""
 import hashlib
 import json
 import os
 from pathlib import Path
 
-from mitmproxy import http
+from r2relay_local.addon import R2RelayAddon
+from r2relay_local.relay import UpstreamResult
 
 
-class ProofAddon:
-    def request(self, flow: http.HTTPFlow):
-        body = flow.request.raw_content
-        digest = hashlib.md5(body, usedforsecurity=False).hexdigest() if body is not None else None
+class StubVpsRelay:
+    async def upload(self, url, headers, body):
+        md5 = hashlib.md5(body, usedforsecurity=False).hexdigest()
         Path(os.environ["MITM_CAPTURE_RESULT"]).write_text(
             json.dumps({
-                "url": flow.request.pretty_url,
-                "method": flow.request.method,
-                "length": len(body) if body is not None else None,
-                "md5": digest,
+                "url": url, "method": "PUT", "length": len(body), "md5": md5,
+                "headers": headers,
             }),
             encoding="utf-8",
         )
-        flow.response = http.Response.make(
-            200, b"", {"ETag": '"mitm-real-connect-proof"', "X-Captured-Md5": digest or ""}
+        return UpstreamResult(
+            status=200,
+            headers=[("ETag", '"mitm-real-connect-proof"'), ("X-Captured-Md5", md5)],
+            body=b"",
         )
 
 
-addons = [ProofAddon()]
+addons = [R2RelayAddon(StubVpsRelay())]
