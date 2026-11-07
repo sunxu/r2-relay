@@ -44,6 +44,10 @@ class RelayUnavailable(Exception):
     """A VPS transport/protocol failure; caller may bypass to original R2."""
 
 
+class RelayStorageUnavailable(RelayUnavailable):
+    """A definitive VPS cache write refusal, before any R2 worker starts."""
+
+
 class RelayOutcomeUnknown(Exception):
     """VPS may already be uploading to R2; do not start a competing direct PUT."""
 
@@ -80,6 +84,8 @@ class RelayClient:
                 headers={"Authorization": f"Bearer {self.token}", **kwargs.pop("headers", {})},
                 **kwargs,
             )
+            if result.status_code == 507:
+                raise RelayStorageUnavailable("VPS rejected cache write before R2")
             if result.status_code >= 500:
                 raise RelayUnavailable(f"VPS HTTP {result.status_code}")
             if result.status_code >= 400:
@@ -127,6 +133,9 @@ class RelayClient:
                              "Content-Type": "application/octet-stream"},
                     content=body,
                 )
+            except RelayStorageUnavailable:
+                # 507 is explicitly returned before any R2 worker can start.
+                raise
             except (RelayUnavailable, RelayOutcomeUnknown) as exc:
                 # The VPS might have staged the full part and begun R2 PUT.
                 raise RelayOutcomeUnknown("VPS data transfer acknowledgement was lost") from exc

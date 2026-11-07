@@ -166,6 +166,17 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
             entry = await state.store.put(p.md5, request.stream(), p.size)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except OSError as exc:
+            # No R2 worker has been started. HTTP 507 explicitly authorizes
+            # local direct fallback without a competing upload.
+            record = state.executions.get(execution_id)
+            if record is not None:
+                record["status"] = "FAILED"
+                record["finished_at"] = time.time()
+                record["relay_error"] = {
+                    "type": "CacheStorageUnavailable", "message": str(exc)
+                }
+            raise HTTPException(status_code=507, detail="VPS cache unavailable") from exc
         finally:
             state.transfers.pop(transfer_id, None)
         state.start(execution_id)
