@@ -56,7 +56,9 @@ class R2RelayAddon:
         flow.response = http.Response.make(
             status_code=result.status,
             content=result.body,
-            headers=response_headers,
+            headers=[(k.encode("utf-8", "surrogateescape"),
+                      v.encode("utf-8", "surrogateescape"))
+                     for k, v in response_headers],
         )
 
 
