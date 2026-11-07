@@ -35,7 +35,7 @@ async def test_aiohttp_connect_full_request_and_ca(tmp_path):
         mitmdump, "--mode", "regular", "--listen-host", "127.0.0.1",
         "--listen-port", str(port), "--set", f"confdir={confdir}",
         "--set", "upstream_cert=false",
-        "--allow-hosts", r"(^|\\.)r2\\.cloudflarestorage\\.com(:443)?$",
+        "--allow-hosts", r".*\.r2\.cloudflarestorage\.com(:443)?$",
         "-s", str(script),
     ]
     with log.open("w") as output:
