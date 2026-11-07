@@ -1,0 +1,59 @@
+name: Governance bootstrap
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/governance-bootstrap.yml"
+      - ".github/governance/**"
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync labels, milestones and existing issue metadata
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync('.github/governance/config.json','utf8'));
+            const {owner, repo} = context.repo;
+            const existingLabels = await github.paginate(github.rest.issues.listLabelsForRepo,{owner,repo,per_page:100});
+            const labels = new Set(existingLabels.map(x=>x.name));
+            for (const item of cfg.labels) {
+              if (!labels.has(item.name)) {
+                await github.rest.issues.createLabel({owner,repo,name:item.name,color:item.color,description:item.description});
+                core.info('created label: '+item.name);
+              } else {
+                await github.rest.issues.updateLabel({owner,repo,name:item.name,new_name:item.name,color:item.color,description:item.description});
+              }
+            }
+            const milestones = await github.paginate(github.rest.issues.listMilestones,{owner,repo,state:'all',per_page:100});
+            const mapping = {};
+            for (const item of cfg.milestones) {
+              let found = milestones.find(x=>x.title===item.title);
+              if (!found) {
+                const res=await github.rest.issues.createMilestone({owner,repo,title:item.title,description:item.description});
+                found=res.data;
+                core.info('created milestone: '+item.title);
+              }
+              mapping[item.key]=found.number;
+            }
+            const issues = await github.paginate(github.rest.issues.listForRepo,{owner,repo,state:'open',per_page:100});
+            let updated=0;
+            for (const issue of issues) {
+              if (issue.pull_request) continue;
+              const m=(issue.body||'').match(/<!-- governance: milestone=(M[1-4]); labels=([a-zA-Z0-9:,\-]+) -->/);
+              if (!m) continue;
+              const wanted=m[2].split(',').filter(Boolean);
+              for(const label of wanted) {
+                if(!cfg.labels.some(x=>x.name===label)) throw new Error('unknown label '+label+' in issue #'+issue.number);
+              }
+              const merged=[...new Set([...(issue.labels||[]).map(x=>typeof x==='string'?x:x.name),...wanted])];
+              await github.rest.issues.update({owner,repo,issue_number:issue.number,labels:merged,milestone:mapping[m[1]]});
+              updated++;
+            }
+            core.info('Updated '+updated+' issues, '+cfg.labels.length+' labels and '+cfg.milestones.length+' milestones');

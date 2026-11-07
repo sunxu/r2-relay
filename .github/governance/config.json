@@ -1,0 +1,96 @@
+{
+  "labels": [
+    {
+      "name": "type:feature",
+      "color": "1D76DB",
+      "description": "功能开发"
+    },
+    {
+      "name": "type:bug",
+      "color": "D73A4A",
+      "description": "缺陷修复"
+    },
+    {
+      "name": "type:research",
+      "color": "5319E7",
+      "description": "方案研究"
+    },
+    {
+      "name": "type:docs",
+      "color": "0075CA",
+      "description": "文档和运行手册"
+    },
+    {
+      "name": "type:test",
+      "color": "0E8A16",
+      "description": "测试与性能验收"
+    },
+    {
+      "name": "priority:P0",
+      "color": "B60205",
+      "description": "阻断主线的必须交付项"
+    },
+    {
+      "name": "priority:P1",
+      "color": "FBCA04",
+      "description": "重要但不阻断最小可用版本"
+    },
+    {
+      "name": "priority:P2",
+      "color": "C2E0C6",
+      "description": "优化和次要事项"
+    },
+    {
+      "name": "status:blocked",
+      "color": "B60205",
+      "description": "存在阻塞依赖"
+    },
+    {
+      "name": "status:needs-review",
+      "color": "D4C5F9",
+      "description": "等待审核"
+    },
+    {
+      "name": "area:local",
+      "color": "BFD4F2",
+      "description": "本地代理"
+    },
+    {
+      "name": "area:vps",
+      "color": "BFD4F2",
+      "description": "VPS 服务"
+    },
+    {
+      "name": "area:protocol",
+      "color": "BFD4F2",
+      "description": "协议和跨组件集成"
+    },
+    {
+      "name": "area:test",
+      "color": "BFD4F2",
+      "description": "测试与验收"
+    }
+  ],
+  "milestones": [
+    {
+      "key": "M1",
+      "title": "M1 - VPS Core",
+      "description": "MD5 磁盘缓存、HTTP API、R2 Worker、超时重试"
+    },
+    {
+      "key": "M2",
+      "title": "M2 - Local Proxy",
+      "description": "显式 HTTPS 代理、CONNECT/TLS、请求体 MD5、VPS 协商和回退"
+    },
+    {
+      "key": "M3",
+      "title": "M3 - Integration",
+      "description": "故障注入、R2 预签名兼容、非目标透传、缓存恢复"
+    },
+    {
+      "key": "M4",
+      "title": "M4 - Release v1.0",
+      "description": "100×10MB 吞吐测试、部署说明、验收收尾"
+    }
+  ]
+}
