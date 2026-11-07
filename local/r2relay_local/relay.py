@@ -43,6 +43,10 @@ class RelayUnavailable(Exception):
     """A VPS transport/protocol failure; caller may bypass to original R2."""
 
 
+class RelayOutcomeUnknown(Exception):
+    """VPS may already be uploading to R2; do not start a competing direct PUT."""
+
+
 class RelayClient:
     def __init__(
         self, endpoint: str, token: str, *,
@@ -131,7 +135,7 @@ class RelayClient:
                 upstream = data.get("upstream_response")
                 if upstream:
                     if upstream.get("body_truncated"):
-                        raise RelayUnavailable("VPS truncated R2 response")
+                        raise RelayOutcomeUnknown("VPS truncated R2 response")
                     try:
                         return UpstreamResult(
                             status=int(upstream["status_code"]),
@@ -143,8 +147,8 @@ class RelayClient:
                         raise RelayUnavailable("VPS malformed R2 result") from exc
                 # No R2 status existed. Do not claim the error came from R2.
                 reason = data.get("relay_error", {})
-                raise RelayUnavailable(f"VPS execution without R2 response: {reason}")
+                raise RelayOutcomeUnknown(f"VPS execution ended without R2 response: {reason}")
             if current not in ("QUEUED", "RUNNING", "RETRY_WAIT"):
                 raise RelayUnavailable(f"VPS invalid execution status {current!r}")
             await asyncio.sleep(self.poll_interval)
-        raise RelayUnavailable("VPS execution timeout")
+        raise RelayOutcomeUnknown("VPS execution timeout; R2 result is unknown")
