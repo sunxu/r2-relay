@@ -59,9 +59,8 @@ async def test_real_connect_to_real_https_vps_and_mock_r2(tmp_path):
     vps_log, proxy_log = tmp_path / "vps.log", tmp_path / "proxy.log"
     calls, cache = tmp_path / "r2-calls.jsonl", tmp_path / "cache"
     proxy_conf = tmp_path / "proxy-conf"
-    root = Path(__file__).resolve().parents[2]
-    repo_root = root.parent
-    entry = repo_root / "local" / "addon_entry.py"
+    local_dir = Path(__file__).resolve().parents[1]
+    entry = local_dir / "addon_entry.py"
     fixture = Path(__file__).parent / "fixtures" / "mock_vps_entry.py"
     # The VPS entrypoint can import installed Python packages without PYTHONPATH tricks.
     vps_env = dict(

@@ -42,6 +42,7 @@ async def test_r2_502_stays_r2_502_no_direct_fallback():
     ))
     addon = R2RelayAddon(relay)
     f = flow(length=5)
+    addon.requestheaders(f)
     await addon.request(f)
     assert len(relay.calls) == 1
     assert relay.calls[0][2] == b"hello"
