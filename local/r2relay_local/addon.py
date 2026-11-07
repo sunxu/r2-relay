@@ -48,7 +48,8 @@ class R2RelayAddon:
         if getattr(req, "stream", False):
             return
         body = req.raw_content
-        if body is None or len(body) > self.max_part_bytes:
+        reserved = self.reservations.get(id(flow), 0)
+        if body is None or len(body) > self.max_part_bytes or len(body) > reserved:
             self._release(flow)
             # mitmproxy continues forwarding the original request to R2.
             return
@@ -88,6 +89,9 @@ class R2RelayAddon:
 
     def error(self, flow: http.HTTPFlow) -> None:
         self._release(flow)
+
+    async def done(self) -> None:
+        await self.relay.close()
 
 
 def build_addon() -> R2RelayAddon:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import os
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
 
@@ -62,6 +63,7 @@ class RelayClient:
         self._owns_client = client is None
         self.client = client or httpx.AsyncClient(
             http2=True, timeout=request_timeout, trust_env=False,
+            verify=os.environ.get("R2_RELAY_VPS_CA_FILE") or True,
             follow_redirects=False,
         )
         self.execution_timeout = execution_timeout
