@@ -35,9 +35,7 @@ python3.11 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e './local[test]' -e './vps[test]'
 # 设置 R2_RELAY_VPS_URL、R2_RELAY_TOKEN，必要时 R2_RELAY_VPS_CA_FILE
-mitmdump --mode regular --listen-host 127.0.0.1 --listen-port 18585 \
-  --allow-hosts '.*\.r2\.cloudflarestorage\.com(:443)?$' \
-  --set ssl_insecure=false -s local/addon_entry.py
+python -m r2relay_local
 ```
 
 原 aiohttp 程序自行将原有 CA 与 mitmproxy CA 合并，并通过 `proxy="http://127.0.0.1:18585"` 连接。代理 CA 私钥、VPS token、R2 预签名 URL 属于敏感运行数据，不得提交 GitHub。按现有确认，受控运行日志可显示完整字段。

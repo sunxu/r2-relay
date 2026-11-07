@@ -1,18 +1,38 @@
-# 离线模拟与验收边界
+# 离线开发验收记录
 
-状态：待最新 CI 证据更新。**离线测试不证明真实 R2 和 VPS 生产可用。**
+状态：主要离线模拟完成，生产验收待真实 VPS/R2 环境。所有通过结论限定在 GitHub Actions/Linux Runner 与模拟 R2 场景。
 
-## 组件与可复现命令
-1. `cd vps && pytest -q`：磁盘缓存、TTL、进程重建、鉴权、任务/并发限制、R2 PUT 502/403、响应大小。
-2. `cd local && pytest -q`：请求分类、MD5、内存预算、签名 URL 字节序、回退/未知结果。
-3. `local/tests/test_real_aiohttp_connect.py`：真实 aiohttp→mitmdump CONNECT/TLS、合并原 CA+代理 CA、非 R2 直通。
-4. `local/tests/test_real_fullstack.py`：真实 aiohttp→mitmdump addon→HTTPS VPS 进程→模拟 R2，覆盖首次 MISS、同 MD5 第二次 HIT、502→200、各自真实格式 ETag 及原始字节哈希。
+## 已验证的项目
 
-## 不能从模拟推断的事实
-- VPS 8443 公开访问延迟、HTTP/2 带宽、R2 网络故障与 502 具体模式。
-- Cloudflare R2 对不同签名头、checksum、URL 过期与真实 Multipart Complete 的端到端行为。
-- 本地真实 100 Mbps、VPS 1000 Mbps 的链路实际利用率。
-- 用户生产 aiohttp 请求实际会否存在非标准 Transfer-Encoding、Content-Length 失配或特殊代理配置。
+- VPS: MD5 缓存写入/重建、固定 1800 秒到期、权限与 507 磁盘失败、执行状态和容量限制、最多额外 3 次重试、真实格式的状态/ETag 响应。
+- Local: R2 目标分类、请求体完整 MD5、预算预留、非目标 HTTPS 隧道、建连失败回退和已提交后的结果未知隔离。
+- 网络栈：真实 aiohttp 客户端通过真实 mitmdump 进程 CONNECT/TLS、合并 CA，访问回环 HTTPS VPS，再通过 VPS MockTransport 模拟 R2；验证首次 MISS、重复 MD5 HIT、502→200、每次 R2 PUT 的请求体长度及 MD5。
+- 可观测性：`/v1/metrics` Bearer Token 鉴权、HIT/MISS、接收字节和 R2 请求统计。
+- 离线命令：`python -m pytest -q vps/tests local/tests`；可选基准 `python benchmarks/offline_benchmark.py --parts 100 --part-mib 10 --parallel 8`。
 
-## 发布门槛
-真实环境恢复后另行授权执行：测试 Bucket、预签名 URL 签名、分片 ETag、VPS 8443 TLS、持续并发高负载、缓存 1800 秒过期与故障注入。生产上线及 PR 合并需单独审核。
+## 100 × 10 MiB 离线模拟证据
+
+GitHub Actions [运行 42395100244](https://github.com/sunxu/r2-relay/actions/runs/42395100244)（成功）：
+
+| 指标 | 模拟结果 |
+|---|---:|
+| 分片数 | 100 |
+| 每片大小 | 10 MiB = 10,485,760 B |
+| 并发 | 8 |
+| 首次写入 VPS 缓存正文 | 1,048,576,000 B |
+| 再次命中相同 MD5 时传输正文 | **0 B** |
+| VPS 缓存文件 | 100 |
+| 模拟 R2 PUT 总数 | 200 |
+| 首次模拟耗时 | 11.514 s |
+| 重复命中模拟耗时 | 4.845 s |
+
+**这些耗时是在 GitHub Runner 内存和磁盘/ASGI 模拟环境下取得，不代表真实 100 Mbps 本地上行、1000 Mbps VPS 出口或 Cloudflare R2 延迟。** 未使用真实 R2 签名、真实 VPS 8443 或实际分片合并。
+
+## 未完成（需环境）
+
+- 独立测试 Bucket、实际预签名 URL/签名头/ETag/CompleteMultipartUpload 兼容。
+- VPS 公网 HTTPS 8443、Caddy HTTP/2 与 100 Mbps 带宽测量。
+- 在真实链路注入网络断开、502/超时以及多层请求重试。
+- 在真实原始 aiohttp 客户端上执行长时间稳定性和取消压力测试。
+
+生产上线及 PR 合并仍需审核。本文件不声称真实性能或生产就绪。
