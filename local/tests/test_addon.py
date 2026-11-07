@@ -56,6 +56,7 @@ async def test_vps_unavailable_leaves_original_flow_for_direct_r2():
     relay = StubRelay(error=RelayUnavailable("offline"))
     addon = R2RelayAddon(relay)
     f = flow(length=5)
+    addon.requestheaders(f)
     await addon.request(f)
     assert len(relay.calls) == 1
     assert f.response is None
