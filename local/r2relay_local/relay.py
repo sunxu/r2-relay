@@ -83,8 +83,13 @@ class RelayClient:
             if result.status_code >= 400:
                 raise RelayUnavailable(f"VPS protocol HTTP {result.status_code}")
             return result
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            # Connection was not established: safe to bypass the VPS.
+            raise RelayUnavailable(f"VPS connect: {type(exc).__name__}") from exc
         except (httpx.TransportError, httpx.TimeoutException) as exc:
-            raise RelayUnavailable(f"VPS transport: {type(exc).__name__}") from exc
+            # After a connection is established, a lost acknowledgement is
+            # ambiguous. The VPS might have started the R2 UploadPart already.
+            raise RelayOutcomeUnknown(f"VPS request outcome unknown: {type(exc).__name__}") from exc
 
     async def upload(
         self, url: str, headers: list[tuple[str, str]], body: bytes
