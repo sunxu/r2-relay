@@ -6,7 +6,7 @@ import os
 
 from mitmproxy import http
 
-from .relay import RelayClient, RelayUnavailable, is_upload_part
+from .relay import RelayClient, RelayUnavailable, RelayOutcomeUnknown, is_upload_part
 
 LOG = logging.getLogger("r2relay.local")
 
@@ -15,6 +15,13 @@ class R2RelayAddon:
     def __init__(self, relay: RelayClient, *, max_part_bytes: int = 32 * 1024 * 1024):
         self.relay = relay
         self.max_part_bytes = max_part_bytes
+        self.global_budget_bytes = int(os.environ.get("R2_RELAY_BUFFER_BUDGET", str(512 * 1024 * 1024)))
+        self.reserved_bytes = 0
+        self.reservations: dict[int, int] = {}
+
+    def _release(self, flow: http.HTTPFlow) -> None:
+        held = self.reservations.pop(id(flow), 0)
+        self.reserved_bytes = max(0, self.reserved_bytes - held)
 
     def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Avoid buffering huge/unknown-size request bodies at the MITM layer."""
@@ -26,13 +33,20 @@ class R2RelayAddon:
             length = int(raw_length) if raw_length is not None else -1
         except ValueError:
             length = -1
-        if length < 0 or length > self.max_part_bytes:
+        if (length < 0 or length > self.max_part_bytes
+                or self.reserved_bytes + length > self.global_budget_bytes):
             req.stream = True
-            LOG.info("bypass buffered relay for oversized/unknown-length UploadPart")
+            LOG.info("bypass buffered relay: unknown/oversized body or memory budget exhausted")
+            return
+        self.reserved_bytes += length
+        self.reservations[id(flow)] = length
 
     async def request(self, flow: http.HTTPFlow) -> None:
         req = flow.request
         if not is_upload_part(req.method, req.pretty_url):
+            return
+        self._release(flow)
+        if getattr(req, "stream", False):
             return
         body = req.raw_content
         if body is None or len(body) > self.max_part_bytes:
@@ -44,6 +58,14 @@ class R2RelayAddon:
                 [(k, v) for k, v in req.headers.items(multi=True)],
                 body,
             )
+        except RelayOutcomeUnknown as exc:
+            LOG.error("R2 outcome unknown; refusing a competing direct PUT: %s", exc)
+            flow.response = http.Response.make(
+                status_code=502,
+                content=b"R2 Relay: upload outcome unknown; retry through original client",
+                headers={"Content-Type": "text/plain"},
+            )
+            return
         except RelayUnavailable as exc:
             LOG.warning("VPS unavailable; forwarding original request directly to R2: %s", exc)
             return
@@ -60,6 +82,9 @@ class R2RelayAddon:
                       v.encode("utf-8", "surrogateescape"))
                      for k, v in response_headers],
         )
+
+    def error(self, flow: http.HTTPFlow) -> None:
+        self._release(flow)
 
 
 def build_addon() -> R2RelayAddon:
