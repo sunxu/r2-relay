@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shutil
 import tempfile
 import time
 from dataclasses import dataclass
@@ -92,6 +93,10 @@ class CacheStore:
         if existing is not None:
             return existing
         path.parent.mkdir(parents=True, exist_ok=True)
+        min_free = int(os.environ.get("R2_RELAY_MIN_FREE_BYTES", str(128 * 1024 * 1024)))
+        available = shutil.disk_usage(path.parent).free
+        if available < expected_size + min_free:
+            raise OSError("VPS cache disk space below configured reserve")
         fd, name = tempfile.mkstemp(prefix=f"{md5}-", suffix=".tmp", dir=path.parent)
         tmp = Path(name)
         size = 0
