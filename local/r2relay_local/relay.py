@@ -113,19 +113,26 @@ class RelayClient:
                 transfer = decision["transfer_id"]
             except KeyError as exc:
                 raise RelayUnavailable("VPS missing transfer_id") from exc
-            await self._request(
-                "PUT", f"/v1/parts/data/{transfer}",
-                headers={"X-Content-MD5-Hex": content_md5,
-                         "Content-Type": "application/octet-stream"},
-                content=body,
-            )
+            try:
+                await self._request(
+                    "PUT", f"/v1/parts/data/{transfer}",
+                    headers={"X-Content-MD5-Hex": content_md5,
+                             "Content-Type": "application/octet-stream"},
+                    content=body,
+                )
+            except RelayUnavailable as exc:
+                # The VPS might have staged the full part and begun R2 PUT.
+                raise RelayOutcomeUnknown("VPS data transfer acknowledgement was lost") from exc
         elif status != "HIT":
             raise RelayUnavailable(f"VPS invalid cache status {status!r}")
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.execution_timeout
         while loop.time() < deadline:
-            result = await self._request("GET", f"/v1/executions/{execution_id}")
+            try:
+                result = await self._request("GET", f"/v1/executions/{execution_id}")
+            except RelayUnavailable as exc:
+                raise RelayOutcomeUnknown("VPS task exists but result query failed") from exc
             try:
                 data = result.json()
                 current = data["status"]
