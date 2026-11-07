@@ -1,0 +1,23 @@
+name: 缺陷报告
+description: 记录故障和可复现证据
+title: "[Bug] "
+labels: []
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: 实际行为与重现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志/HTTP 状态/复现环境
+    validations:
+      required: false

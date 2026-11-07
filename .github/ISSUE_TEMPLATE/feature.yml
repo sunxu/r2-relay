@@ -1,0 +1,26 @@
+name: 功能开发
+description: 跟踪与 RLY 需求编号关联的可验收任务
+title: "[Feature] "
+labels: []
+body:
+  - type: input
+    id: requirement
+    attributes:
+      label: 需求 ID
+      description: 例如 RLY-006
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 开发范围
+      description: 说明模块和交付物
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      description: 指向 ACCEPTANCE.md 的测试 ID，并给出新增用例
+    validations:
+      required: true
