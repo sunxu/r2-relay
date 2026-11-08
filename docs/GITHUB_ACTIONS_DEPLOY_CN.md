@@ -177,3 +177,7 @@ VPS receiver 会拒绝超限归档、路径穿越、符号链接、硬链接、�
 ## 状态边界
 
 GitHub Actions Workflow 和部署代码合并，不等于 VPS 已完成 bootstrap，也不等于 GitHub Secrets 已配置。第一次生产部署必须等这两项完成后再由 ChatGPT 触发。
+
+## Deployment failure diagnostics
+
+Every receiver response includes `receiver_build_id`, allowing the empty-archive smoke test to prove which root-owned receiver version is installed without accepting a deployment archive. Runtime preparation failures identify the exact fixed step (`venv_create`, `pip_requirements`, `pip_project`, or `runtime_import`) and exit code. Raw subprocess stdout/stderr is deliberately not returned in the SSH receipt, avoiding accidental disclosure of package-index credentials or environment data.

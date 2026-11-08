@@ -42,6 +42,29 @@ def make_archive(path: Path, *, marker=SHA, extra=None, unit=None):
             archive.addfile(extra)
 
 
+
+def test_receiver_build_id_is_in_every_emitted_receipt(capsys):
+    receiver.emit("TEST", marker="ok")
+    import json
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["receiver_build_id"] == receiver.RECEIVER_BUILD_ID
+    assert payload["marker"] == "ok"
+
+
+def test_runtime_user_failure_identifies_step_without_leaking_stderr(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(
+        receiver.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="private-index-credential"),
+    )
+    try:
+        receiver.run_as_r2relay(["/venv/bin/pip", "install"], step="pip_project")
+    except receiver.DeployError as exc:
+        assert str(exc) == "runtime_user_command_failed:pip_project:exit_1"
+        assert "private-index-credential" not in str(exc)
+    else:
+        raise AssertionError("failed runtime command was accepted")
+
 def test_forced_command_accepts_only_exact_full_sha():
     assert receiver.parse_original_command("deploy " + SHA) == SHA
     for command in (
@@ -246,7 +269,7 @@ def test_prepare_release_builds_from_writable_copy_and_keeps_release_read_only(t
     monkeypatch.setattr(receiver, "chown_release", lambda _root, _gid: None)
     local_build_sources = []
 
-    def fake_run_as_r2relay(argv, timeout=120):
+    def fake_run_as_r2relay(argv, timeout=120, *, step="runtime_user_command"):
         if len(argv) > 2 and argv[1] == "install" and Path(argv[-1]).name == "vps":
             build_source = Path(argv[-1])
             local_build_sources.append(build_source)
@@ -272,7 +295,7 @@ def test_existing_release_can_be_validated_for_rollback_reuse(tmp_path, monkeypa
     release = tmp_path / SHA
     python_target = Path(sys.executable).resolve()
     make_existing_release(release, python_target, os.getgid())
-    monkeypatch.setattr(receiver, "run_as_r2relay", lambda argv, timeout=120: None)
+    monkeypatch.setattr(receiver, "run_as_r2relay", lambda argv, timeout=120, **kwargs: None)
     receiver.validate_existing_release(
         release, os.getgid(), owner_uid=os.getuid(), python_executable=python_target
     )
@@ -284,7 +307,7 @@ def test_existing_release_rejects_unexpected_symlink_and_writable_file(tmp_path,
     release = tmp_path / SHA
     python_target = Path(sys.executable).resolve()
     make_existing_release(release, python_target, os.getgid())
-    monkeypatch.setattr(receiver, "run_as_r2relay", lambda argv, timeout=120: None)
+    monkeypatch.setattr(receiver, "run_as_r2relay", lambda argv, timeout=120, **kwargs: None)
 
     evil = release / "vps/r2relay_vps/evil"
     evil.symlink_to("/etc/passwd")
@@ -315,7 +338,7 @@ def test_existing_release_rejects_python_symlink_outside_base_interpreter(tmp_pa
 
     release = tmp_path / SHA
     make_existing_release(release, Path("/bin/sh"), os.getgid())
-    monkeypatch.setattr(receiver, "run_as_r2relay", lambda argv, timeout=120: None)
+    monkeypatch.setattr(receiver, "run_as_r2relay", lambda argv, timeout=120, **kwargs: None)
     try:
         receiver.validate_existing_release(
             release, os.getgid(), owner_uid=os.getuid(), python_executable=Path(sys.executable).resolve()
@@ -365,7 +388,7 @@ def test_automatic_rollback_restores_unit_and_previous_release(tmp_path, monkeyp
     monkeypatch.setattr(receiver, "CURRENT", current)
     monkeypatch.setattr(receiver, "RELEASES", release_root)
     monkeypatch.setattr(receiver, "UNIT", unit)
-    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: None)
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120, **kwargs: None)
     monkeypatch.setattr(receiver, "health_check", lambda attempts=25: True)
     monkeypatch.setattr(receiver.os, "chown", lambda *args, **kwargs: None)
 
@@ -390,7 +413,7 @@ def test_first_deploy_rollback_removes_new_pointer(tmp_path, monkeypatch):
     monkeypatch.setattr(receiver, "CURRENT", current)
     monkeypatch.setattr(receiver, "RELEASES", release_root)
     monkeypatch.setattr(receiver, "UNIT", unit)
-    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: None)
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120, **kwargs: None)
     monkeypatch.setattr(receiver, "health_check", lambda attempts=25: True)
     monkeypatch.setattr(receiver.os, "chown", lambda *args, **kwargs: None)
 

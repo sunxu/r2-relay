@@ -37,6 +37,7 @@ MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_UNPACKED_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 6000
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v2-pip-stage-diagnostics"
 REQUIRED = {
     "vps/pyproject.toml",
     "vps/r2relay_vps/app.py",
@@ -119,7 +120,7 @@ class DeployError(Exception):
 
 
 def emit(status: str, **fields) -> None:
-    print(json.dumps({"status": status, **fields}, sort_keys=True), flush=True)
+    print(json.dumps({"status": status, "receiver_build_id": RECEIVER_BUILD_ID, **fields}, sort_keys=True), flush=True)
 
 
 def parse_original_command(command: str | None) -> str:
@@ -338,7 +339,9 @@ def chown_build_tree(root: Path, uid: int, gid: int) -> None:
         os.chmod(base, 0o700)
 
 
-def run_as_r2relay(argv: list[str], timeout: int = 120) -> None:
+def run_as_r2relay(
+    argv: list[str], timeout: int = 120, *, step: str = "runtime_user_command",
+) -> None:
     result = subprocess.run(
         ["/usr/sbin/runuser", "-u", "r2relay", "--", *argv],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -354,7 +357,7 @@ def run_as_r2relay(argv: list[str], timeout: int = 120) -> None:
         },
     )
     if result.returncode != 0:
-        raise DeployError("runtime_user_command_failed:" + Path(argv[0]).name)
+        raise DeployError(f"runtime_user_command_failed:{step}:exit_{result.returncode}")
 
 
 def prepare_release(stage: Path, uid: int, gid: int) -> None:
@@ -365,12 +368,12 @@ def prepare_release(stage: Path, uid: int, gid: int) -> None:
     venv = stage / ".venv"
     venv.mkdir(mode=0o750)
     os.chown(venv, uid, gid)
-    run_as_r2relay(["/usr/bin/python3.11", "-m", "venv", str(venv)], timeout=120)
+    run_as_r2relay(["/usr/bin/python3.11", "-m", "venv", str(venv)], timeout=120, step="venv_create")
     pip = str(venv / "bin/pip")
     run_as_r2relay([
         pip, "install", "--no-input", "--disable-pip-version-check",
         "--no-cache-dir", "-r", str(stage / "deploy/requirements-vps.lock"),
-    ], timeout=600)
+    ], timeout=600, step="pip_requirements")
     # setuptools writes build/ into the project source tree. Keep the actual
     # release root-owned and read-only by building from a disposable writable
     # copy; repository-controlled build hooks still execute only as r2relay.
@@ -384,13 +387,13 @@ def prepare_release(stage: Path, uid: int, gid: int) -> None:
         run_as_r2relay([
             pip, "install", "--no-input", "--disable-pip-version-check",
             "--no-deps", "--no-build-isolation", str(build_source),
-        ], timeout=300)
+        ], timeout=300, step="pip_project")
     finally:
         shutil.rmtree(build_root, ignore_errors=True)
     run_as_r2relay([
         str(venv / "bin/python"), "-c",
         "import fastapi, uvicorn, r2relay_vps.app; print('runtime-import-ok')",
-    ], timeout=30)
+    ], timeout=30, step="runtime_import")
     chown_release(stage, gid)
 
 
