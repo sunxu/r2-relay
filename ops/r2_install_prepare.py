@@ -104,6 +104,10 @@ def prepare(dry_run=True, stage=STAGE, dest=DEST):
                 with path.open("xb") as output:
                     shutil.copyfileobj(stream, output, length=1048576)
                 os.chmod(path, 0o644)
+        # systemd rootd UMask=0077 overrides mkdir(mode=0755).
+        # Make source directories explicitly readable by the runtime user.
+        for directory, _, _ in os.walk(dest):
+            os.chmod(directory, 0o755)
         venv = dest / ".venv"
         venv.mkdir(mode=0o700)
         owner = pwd.getpwnam("r2relay")
