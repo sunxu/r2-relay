@@ -73,7 +73,7 @@ def test_mcp_registration():
 def test_no_package_postinstall_or_disabling_validation():
     s=(ROOT/"ops/r2_https_ip_control.py").read_text()
     assert '"/usr/bin/dpkg-deb", "-x"' in s
-    assert '"apt-get", "download", "caddy"' in s
+    assert '"/usr/bin/apt-get", "download", "caddy"' in s
     assert '"install", "caddy"' not in s
     assert "verify=False" not in s
     assert "check_hostname = True" in s
