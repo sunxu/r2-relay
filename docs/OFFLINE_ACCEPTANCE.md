@@ -1,6 +1,6 @@
 # 离线开发验收记录
 
-状态：主要离线模拟完成，生产验收待真实 VPS/R2 环境。所有通过结论限定在 GitHub Actions/Linux Runner 与模拟 R2 场景。
+状态：RC1 离线验证已通过并经 [PR #15](https://github.com/sunxu/r2-relay/pull/15) 合并到 `main`（`18e068a923238bccb83b2e8a77fe25ac4f7abb32`）；**生产验收仍为 `NOT_TESTED`**。所有通过结论限定在 GitHub Runner 模拟 R2 场景。
 
 ## 已验证的项目
 
@@ -35,4 +35,10 @@ GitHub Actions [运行 42395100244](https://github.com/sunxu/r2-relay/actions/ru
 - 在真实链路注入网络断开、502/超时以及多层请求重试。
 - 在真实原始 aiohttp 客户端上执行长时间稳定性和取消压力测试。
 
-生产上线及 PR 合并仍需审核。本文件不声称真实性能或生产就绪。
+离线 RC1 合并已获批准并完成。**生产上线仍需单独批准**，本文件不声称真实性能或生产就绪。后续真实环境验收见 Issues [#16](https://github.com/sunxu/r2-relay/issues/16)、[#17](https://github.com/sunxu/r2-relay/issues/17)。
+
+## GitHub Runner 实际进程全栈验收（已通过）
+
+- [Runner full-stack run #42443068248](https://github.com/sunxu/r2-relay/actions/runs/42443068248)：真实 aiohttp、mitmdump、Caddy TLS/HTTP2 `8443`、VPS Uvicorn 和独立 HTTP Mock R2；模拟 502/429 重试、403 透传、缓存 HIT/MISS、VPS 重启后缓存恢复。
+- JSON SAFE 报告由 Actions Artifact 保存，标注公网 VPS、真实 R2 SigV4 和带宽 `NOT_TESTED`。
+- [RUNNER_FULLSTACK_CN.md](RUNNER_FULLSTACK_CN.md) 给出详细测试方案。以上不等于真实 Cloudflare R2 兼容性。

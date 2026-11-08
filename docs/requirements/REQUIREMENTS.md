@@ -1,7 +1,7 @@
 # R2 Relay 需求规格
 
 版本：v1.0（2026-11-08）  
-状态：Owner 已确认的设计基线；尚未实现。
+状态：Owner 已确认的需求基线；RC1 离线实现已合并 `main`（PR #15，Merge Commit `18e068a923238bccb83b2e8a77fe25ac4f7abb32`）；真实 VPS/R2 生产验收仍待完成。**RLY 编号、要求与既定设计约束未改变。**
 
 ## 目标与流量
 原始 Python/aiohttp 程序经显式 HTTP 代理上传 Cloudflare R2 Multipart Upload 的分片。代理读取完整 HTTPS PUT 请求体计算 MD5，与 VPS 进行缓存协商：首次上传分片字节到 VPS，命中后不再传输字节。VPS 将缓存分片上传到原预签名 R2 URL，把 R2 实际响应返回原调用方。目标负载：100 个约 10 MB 分片；本地上行 100 Mbps，VPS 线路 1000 Mbps；性能目标是在可靠条件下尽量跑满本地上行。
