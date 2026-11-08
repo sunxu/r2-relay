@@ -102,15 +102,15 @@ def update_authorized_keys(old_keys: bytes, encoded: str, comment: str) -> tuple
             raise BootstrapError("key_already_exists_with_different_options")
         upgraded_lines = [expected_line if line.strip() == legacy_line else line
                           for line in old_lines]
-        return ("\\n".join(upgraded_lines) + "\\n").encode("utf-8"), True
+        return ("\n".join(upgraded_lines) + "\n").encode("utf-8"), True
     if key_exists:
         if configured_lines != [expected_line]:
             raise BootstrapError("unexpected_deploy_account_authorized_key")
         return old_keys, True
     if configured_lines:
         raise BootstrapError("unexpected_deploy_account_authorized_key")
-    new_keys = (old_keys.decode("utf-8").rstrip("\\n")
-                + ("\\n" if old_keys else "") + expected_line + "\\n").encode("utf-8")
+    new_keys = (old_keys.decode("utf-8").rstrip("\n")
+                + ("\n" if old_keys else "") + expected_line + "\n").encode("utf-8")
     return new_keys, False
 
 
