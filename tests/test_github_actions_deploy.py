@@ -5,6 +5,7 @@ from pathlib import Path
 import struct
 import subprocess
 import shutil
+import sys
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -321,8 +322,9 @@ def test_bootstrap_reports_only_password_lock_state(tmp_path):
 def test_sudoers_policy_is_valid_when_visudo_is_available(tmp_path):
     visudo = shutil.which("visudo")
     sudo = shutil.which("sudo")
-    if not visudo or not sudo:
+    if sys.platform == "darwin":
         return
+    assert visudo and sudo, "Linux CI must provide visudo and sudo"
     policy = tmp_path / "r2-relay-deploy"
     policy.write_text(bootstrap.SUDOERS_TEXT, encoding="utf-8")
     policy.chmod(0o440)
