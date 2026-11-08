@@ -180,7 +180,7 @@ GitHub Actions Workflow 和部署代码合并，不等于 VPS 已完成 bootstra
 
 ## Deployment failure diagnostics
 
-Every receiver response includes `receiver_build_id`, allowing the empty-archive smoke test to prove which root-owned receiver version is installed without accepting a deployment archive. Runtime preparation failures identify the exact fixed step (`venv_create`, `pip_requirements`, `pip_project`, or `runtime_import`) and exit code. Raw subprocess stdout/stderr is deliberately not returned in the SSH receipt, avoiding accidental disclosure of package-index credentials or environment data.
+Every receiver response includes `receiver_build_id`. The release group-read permission fix is identified by `r2-relay-deploy-receiver-v3-release-group-read-permissions`, allowing the empty-archive smoke test to prove the corrected root-owned receiver is installed without accepting a deployment archive. Runtime preparation failures identify the exact fixed step (`venv_create`, `pip_requirements`, `pip_project`, or `runtime_import`) and exit code. Raw subprocess stdout/stderr is deliberately not returned in the SSH receipt, avoiding accidental disclosure of package-index credentials or environment data.
 
 ## Release source permissions
 
