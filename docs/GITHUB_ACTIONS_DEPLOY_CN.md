@@ -93,7 +93,7 @@ ChatGPT 在 Issue #41 留下 `/deploy <SHA>` 评论。该评论就是触发事�
 - 评论作者 `sunxu`；
 - 完全匹配的 `/deploy <40位小写 SHA>`；
 - 目标 Commit 必须是 `main` 的祖先；
-- 该 Commit 的 Check Runs 必须全部完成，且结论为 success / skipped / neutral，至少有一个 success。
+- 目标 Commit 必须存在最新的 `deploy-tests` Check Run，且状态为 `completed`、结论严格为 `success`。该工作流在 PR 上运行，也会在每次 main Push 后运行，确保合并后的目标 Commit 本身有可验证的部署专项结果。
 
 ## 部署行为和保护范围
 
