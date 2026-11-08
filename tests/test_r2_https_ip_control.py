@@ -24,6 +24,7 @@ def test_no_domains_and_443_binding():
     assert "User=r2caddy" in m.SYSTEMD and "NoNewPrivileges=true" in m.SYSTEMD
     assert "ProtectSystem=strict" in m.SYSTEMD
     assert "ReadWritePaths=/var/lib/r2-caddy" in m.SYSTEMD
+    assert "tls internal" not in m.CADDYFILE
 
 def test_preflight_no_mutation(monkeypatch):
     m=load("https2","ops/r2_https_ip_control.py")
@@ -77,6 +78,8 @@ def test_no_package_postinstall_or_disabling_validation():
     assert '"/usr/bin/apt-get", "download", "caddy"' in s
     assert '"install", "caddy"' not in s
     assert "verify=False" not in s
+    assert '"-CA",str(CA),"-CAkey",str(CA_KEY)' in s
+    assert '"subjectAltName=IP:104.224.168.192,IP:2607:8700:5500:a47f::2' in s
     assert "check_hostname = True" in s
     assert "server_hostname=ip" in s
     assert '"/usr/bin/systemctl","start",SERVICE' in s
