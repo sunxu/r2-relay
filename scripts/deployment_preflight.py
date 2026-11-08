@@ -28,7 +28,7 @@ def read_env(path):
         name = name.strip()
         if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name) or name in values:
             raise ValueError("invalid or duplicate environment name")
-        if any(ch in value for ch in ("\\n", "\\r", "\\x00", "$(", "\`")):
+        if any(ch in value for ch in ("\n", "\r", "\x00", "$(", "`")):
             raise ValueError("unsafe environment syntax")
         value = value.strip().strip('"').strip("'")
         values[name] = value
@@ -68,9 +68,9 @@ def validate(root=ROOT, mode="template", vps_env=None, local_env=None):
         check("https://{$R2_RELAY_HOST}:8443" in caddy, "Caddy HTTPS 8443 required")
         check("tls {$R2_RELAY_TLS_CERT} {$R2_RELAY_TLS_KEY}" in caddy,
               "Caddy external certificate required")
-        check(bool(re.search(r"reverse_proxy\\s+127\\.0\\.0\\.1:18085", caddy)),
+        check(bool(re.search(r"reverse_proxy\s+127\.0\.0\.1:18085", caddy)),
               "Caddy upstream must be loopback 18085")
-        check(not re.search(r"(?m)^\\s*(?:http://|:443\\b|:80\\b)", caddy),
+        check(not re.search(r"(?m)^\s*(?:http://|:443\b|:80\b)", caddy),
               "Caddy must not claim 80 or 443")
     except (OSError, configparser.Error, KeyError):
         errors.append("systemd/Caddy template missing or malformed")
