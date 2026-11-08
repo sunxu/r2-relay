@@ -196,6 +196,83 @@ def test_current_symlink_is_atomic_and_fixed_target(tmp_path, monkeypatch):
     assert not current.exists()
 
 
+def make_existing_release(path: Path, python_target: Path, gid: int):
+    for directory in (
+        path, path / ".venv", path / ".venv/bin",
+        path / "vps", path / "vps/r2relay_vps",
+    ):
+        directory.mkdir(mode=0o750, parents=True, exist_ok=True)
+        directory.chmod(0o750)
+    for name in ("python", "python3", "python3.11"):
+        (path / ".venv/bin" / name).symlink_to(python_target)
+    uvicorn = path / ".venv/bin/uvicorn"
+    uvicorn.write_text("#!/bin/sh\\n")
+    uvicorn.chmod(0o750)
+    app = path / "vps/r2relay_vps/app.py"
+    app.write_text("app = True\\n")
+    app.chmod(0o640)
+
+
+def test_existing_release_can_be_validated_for_rollback_reuse(tmp_path, monkeypatch):
+    import os
+
+    release = tmp_path / SHA
+    python_target = Path(sys.executable).resolve()
+    make_existing_release(release, python_target, os.getgid())
+    monkeypatch.setattr(receiver, "run_as_r2relay", lambda argv, timeout=120: None)
+    receiver.validate_existing_release(
+        release, os.getgid(), owner_uid=os.getuid(), python_executable=python_target
+    )
+
+
+def test_existing_release_rejects_unexpected_symlink_and_writable_file(tmp_path, monkeypatch):
+    import os
+
+    release = tmp_path / SHA
+    python_target = Path(sys.executable).resolve()
+    make_existing_release(release, python_target, os.getgid())
+    monkeypatch.setattr(receiver, "run_as_r2relay", lambda argv, timeout=120: None)
+
+    evil = release / "vps/r2relay_vps/evil"
+    evil.symlink_to("/etc/passwd")
+    try:
+        receiver.validate_existing_release(
+            release, os.getgid(), owner_uid=os.getuid(), python_executable=python_target
+        )
+    except receiver.DeployError as exc:
+        assert str(exc) == "existing_release_symlink_unexpected"
+    else:
+        raise AssertionError("unexpected release symlink accepted")
+    evil.unlink()
+
+    app = release / "vps/r2relay_vps/app.py"
+    app.chmod(0o660)
+    try:
+        receiver.validate_existing_release(
+            release, os.getgid(), owner_uid=os.getuid(), python_executable=python_target
+        )
+    except receiver.DeployError as exc:
+        assert str(exc) == "existing_release_file_permissions_invalid"
+    else:
+        raise AssertionError("writable existing release file accepted")
+
+
+def test_existing_release_rejects_python_symlink_outside_base_interpreter(tmp_path, monkeypatch):
+    import os
+
+    release = tmp_path / SHA
+    make_existing_release(release, Path("/bin/sh"), os.getgid())
+    monkeypatch.setattr(receiver, "run_as_r2relay", lambda argv, timeout=120: None)
+    try:
+        receiver.validate_existing_release(
+            release, os.getgid(), owner_uid=os.getuid(), python_executable=Path(sys.executable).resolve()
+        )
+    except receiver.DeployError as exc:
+        assert str(exc) == "existing_release_python_link_invalid"
+    else:
+        raise AssertionError("unexpected venv Python target accepted")
+
+
 def test_bootstrap_accepts_only_valid_ed25519_public_key():
     blob = struct.pack(">I", 11) + b"ssh-ed25519" + struct.pack(">I", 32) + b"x" * 32
     key = base64.b64encode(blob).decode()
