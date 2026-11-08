@@ -249,27 +249,17 @@ def test_production_workflow_is_owner_gated_and_requires_deployment_checks():
     assert "github.event.comment.user.login == 'sunxu'" in workflow
     assert 're.fullmatch(r"/deploy ([0-9a-f]{40})"' in workflow
     assert "git merge-base --is-ancestor" in workflow
-    assert 'select(.name == "deploy-tests")' in workflow
+    assert 'select(.name == "deploy-tests"' in workflow
+    assert '.app.slug == "github-actions"' in workflow
     assert '[ "$conclusion" = "success" ]' in workflow
     assert "StrictHostKeyChecking=yes" in workflow
     assert "VPS_HOST: 104.224.168.192" in workflow
     assert "VPS_USER: r2relay-deploy" in workflow
     assert "VPS_USER: root" not in workflow
     assert "jq -s --arg sha" in workflow
-    assert '.app.slug == "github-actions"' in workflow
-    assert "IFS=
-    workflow = (ROOT / ".github/workflows/deploy-tests.yml").read_text(encoding="utf-8")
-    assert "push:" in workflow
-    assert "branches: [main]" in workflow
-    assert "pull_request:" in workflow
-\\\\t'" not in workflow
-    assert "IFS=
-    workflow = (ROOT / ".github/workflows/deploy-tests.yml").read_text(encoding="utf-8")
-    assert "push:" in workflow
-    assert "branches: [main]" in workflow
-    assert "pull_request:" in workflow
-\\t'" in workflow
-    assert "result.get(\\"commit\\") != expected_sha" in workflow
+    assert r"IFS=$'\\t'" not in workflow
+    assert r"IFS=$'\t'" in workflow
+    assert 'result.get("commit") != expected_sha' in workflow
     assert "SSH_OR_RECEIVER_TRANSPORT_FAILED" in workflow
     assert "workflow_dispatch:" not in workflow
     assert "push:" not in workflow
@@ -278,7 +268,7 @@ def test_production_workflow_is_owner_gated_and_requires_deployment_checks():
 def test_bootstrap_uses_a_dedicated_account_and_one_sudo_command():
     assert bootstrap.DEPLOY_USER == "r2relay-deploy"
     assert bootstrap.FORCED_COMMAND.startswith("/usr/bin/sudo -n ")
-    assert "env_keep += \\"SSH_ORIGINAL_COMMAND\\"" in bootstrap.SUDOERS_TEXT
+    assert 'env_keep += "SSH_ORIGINAL_COMMAND"' in bootstrap.SUDOERS_TEXT
     assert "NOPASSWD: " + bootstrap.SUDO_COMMAND in bootstrap.SUDOERS_TEXT
     assert "ALL=(ALL)" not in bootstrap.SUDOERS_TEXT
     line = bootstrap.authorized_key_line("AAAA", "test")
