@@ -163,9 +163,16 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
         authorize(authorization)
         if p.schema_version != 1 or not MD5_PATTERN.fullmatch(p.md5):
             raise HTTPException(status_code=400, detail="invalid schema or md5")
-        u = urlsplit(p.r2_request.url)
-        query = parse_qs(u.query)
-        if (p.r2_request.method != "PUT" or u.scheme != "https" or u.port not in (None, 443)
+        max_part_bytes = int(os.environ.get("R2_RELAY_MAX_PART_BYTES", str(32 * 1024 * 1024)))
+        if p.size > max_part_bytes:
+            raise HTTPException(status_code=413, detail="part exceeds configured maximum")
+        try:
+            u = urlsplit(p.r2_request.url)
+            query = parse_qs(u.query)
+            valid_port = u.port in (None, 443)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid R2 UploadPart URL") from exc
+        if (p.r2_request.method != "PUT" or u.scheme != "https" or not valid_port
                 or not u.hostname or not u.hostname.endswith(".r2.cloudflarestorage.com")
                 or u.hostname == ".r2.cloudflarestorage.com"
                 or "uploadId" not in query or "partNumber" not in query):
