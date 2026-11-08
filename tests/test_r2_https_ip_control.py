@@ -14,11 +14,11 @@ def test_no_domains_and_443_binding():
     m=load("https1","ops/r2_https_ip_control.py")
     assert m.IP4=="104.224.168.192"
     assert m.IP6=="2607:8700:5500:a47f::2"
-    assert "https://104.224.168.192:8443" in m.CADDYFILE
-    assert "https://[2607:8700:5500:a47f::2]:8443" in m.CADDYFILE
-    assert "tls internal" in m.CADDYFILE
+    assert ":8443 {" in m.CADDYFILE
+    assert "tls /etc/r2-caddy/tls/server.crt /etc/r2-caddy/tls/server.key" in m.CADDYFILE
+    assert "IP:104.224.168.192,IP:2607:8700:5500:a47f::2" in (ROOT/"ops/r2_https_ip_control.py").read_text()
     assert "reverse_proxy 127.0.0.1:18085" in m.CADDYFILE
-    assert "auto_https disable_redirects" in m.CADDYFILE
+    assert "auto_https off" in m.CADDYFILE
     assert ":443 {" not in m.CADDYFILE and ":80 {" not in m.CADDYFILE
     assert "/etc/r2-caddy/Caddyfile" in m.SYSTEMD
     assert "User=r2caddy" in m.SYSTEMD and "NoNewPrivileges=true" in m.SYSTEMD
