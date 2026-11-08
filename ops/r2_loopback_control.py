@@ -88,7 +88,7 @@ def active_release(r2_gid, root_uid=0):
     regular(unit_source, 0o640, uid=root_uid, gid=r2_gid)
     uvicorn = release / ".venv/bin/uvicorn"
     try:
-        uvicorn_info = uvicorn.stat()
+        uvicorn_info = uvicorn.lstat()
     except OSError:
         raise ValueError("uvicorn_missing") from None
     if (not stat.S_ISREG(uvicorn_info.st_mode) or uvicorn_info.st_uid != root_uid
