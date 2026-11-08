@@ -77,6 +77,32 @@ def test_archive_rejects_wrong_commit_marker(tmp_path):
         raise AssertionError("wrong commit marker accepted")
 
 
+def test_archive_rejects_duplicate_member_names(tmp_path):
+    archive = tmp_path / "duplicate.tar"
+    make_archive(archive)
+    with tarfile.open(archive, "a:") as tf:
+        item = tarfile.TarInfo("vps/r2relay_vps/app.py")
+        item.size = 1
+        tf.addfile(item, io.BytesIO(b"x"))
+    try:
+        receiver.validate_archive(archive, SHA)
+    except receiver.DeployError as exc:
+        assert str(exc) == "archive_path_invalid"
+    else:
+        raise AssertionError("duplicate archive path accepted")
+
+
+def test_archive_rejects_absolute_member_names(tmp_path):
+    archive = tmp_path / "absolute.tar"
+    make_archive(archive, extra=tarfile.TarInfo("/tmp/escape"))
+    try:
+        receiver.validate_archive(archive, SHA)
+    except receiver.DeployError as exc:
+        assert str(exc) == "archive_absolute_path"
+    else:
+        raise AssertionError("absolute archive path accepted")
+
+
 def test_archive_rejects_path_traversal(tmp_path):
     archive = tmp_path / "traversal.tar"
     extra = tarfile.TarInfo("../escape")
@@ -288,6 +314,29 @@ def test_bootstrap_reports_only_password_lock_state(tmp_path):
         assert str(exc) == "shadow_account_missing"
     else:
         raise AssertionError("missing shadow account accepted")
+
+
+def test_deployment_lock_requires_root_owned_private_regular_file(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import stat
+
+    lock_path = tmp_path / "deploy.lock"
+    monkeypatch.setattr(receiver, "LOCK", lock_path)
+    monkeypatch.setattr(receiver.os, "fstat", lambda _fd: SimpleNamespace(
+        st_mode=stat.S_IFREG | 0o600, st_uid=0, st_nlink=1
+    ))
+    fd = receiver.open_deploy_lock()
+    receiver.os.close(fd)
+
+    monkeypatch.setattr(receiver.os, "fstat", lambda _fd: SimpleNamespace(
+        st_mode=stat.S_IFREG | 0o644, st_uid=0, st_nlink=1
+    ))
+    try:
+        receiver.open_deploy_lock()
+    except receiver.DeployError as exc:
+        assert str(exc) == "deployment_lock_file_unsafe"
+    else:
+        raise AssertionError("permissive lock file accepted")
 
 
 def test_deployment_tests_run_on_main_push():
