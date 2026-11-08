@@ -226,6 +226,45 @@ def make_existing_release(path: Path, python_target: Path, gid: int):
     app.chmod(0o640)
 
 
+def test_prepare_release_builds_from_writable_copy_and_keeps_release_read_only(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    stage = tmp_path / "stage"
+    source = stage / "vps"
+    package = source / "r2relay_vps"
+    package.mkdir(parents=True)
+    (source / "pyproject.toml").write_text("[build-system]\\nrequires = ['setuptools']\\nbuild-backend = 'setuptools.build_meta'\\n")
+    (package / "app.py").write_text("app = True\\n")
+    (stage / "deploy").mkdir()
+    (stage / "deploy/requirements-vps.lock").write_text("fastapi==0.162.2\\n")
+    for directory in (source, package):
+        directory.chmod(0o550)
+    for file in (source / "pyproject.toml", package / "app.py"):
+        file.chmod(0o440)
+
+    monkeypatch.setattr(receiver, "chown_release", lambda _root, _gid: None)
+    local_build_sources = []
+
+    def fake_run_as_r2relay(argv, timeout=120):
+        if len(argv) > 2 and argv[1] == "install" and Path(argv[-1]).name == "vps":
+            build_source = Path(argv[-1])
+            local_build_sources.append(build_source)
+            assert build_source != source
+            assert (build_source / "pyproject.toml").is_file()
+            assert build_source.stat().st_uid == os.getuid()
+            assert stat.S_IMODE(build_source.stat().st_mode) & 0o200
+            assert stat.S_IMODE((build_source / "pyproject.toml").stat().st_mode) & 0o200
+
+    monkeypatch.setattr(receiver, "run_as_r2relay", fake_run_as_r2relay)
+    receiver.prepare_release(stage, os.getuid(), os.getgid())
+
+    assert len(local_build_sources) == 1
+    assert not local_build_sources[0].exists()
+    assert not (source / "build").exists()
+    assert stat.S_IMODE(source.stat().st_mode) == 0o550
+    assert stat.S_IMODE((source / "pyproject.toml").stat().st_mode) == 0o440
+
 def test_existing_release_can_be_validated_for_rollback_reuse(tmp_path, monkeypatch):
     import os
 
