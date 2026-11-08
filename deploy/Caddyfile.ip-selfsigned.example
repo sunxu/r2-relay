@@ -1,0 +1,11 @@
+{
+  # Existing sing-box owns 443. No 80 -> 443 redirects.
+  auto_https disable_redirects
+}
+
+# R2_RELAY_IP must be an IP literal matching the client's URL.
+# Caddy generates a private CA and a leaf certificate with IP SAN.
+https://{$R2_RELAY_IP}:8443 {
+  tls internal
+  reverse_proxy 127.0.0.1:18085
+}
