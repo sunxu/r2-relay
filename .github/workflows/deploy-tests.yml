@@ -1,0 +1,30 @@
+name: VPS deployment controller tests
+
+on:
+  pull_request:
+    paths:
+      - "ops/r2relay_deploy_receiver.py"
+      - "ops/bootstrap_github_actions_deploy.py"
+      - "tests/test_github_actions_deploy.py"
+      - "deploy/**"
+      - ".github/workflows/deploy-production.yml"
+      - ".github/workflows/deploy-tests.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test runner
+        run: python -m pip install "pytest>=8,<10"
+      - name: Test deployment safety
+        run: python -m pytest -q tests/test_github_actions_deploy.py
+      - name: Compile deployment code
+        run: python -m py_compile ops/r2relay_deploy_receiver.py ops/bootstrap_github_actions_deploy.py
