@@ -21,14 +21,14 @@ GitHub Actions 收到该 Issue 评论后，验证发起人、Issue、Commit 是�
 | `VPS_DEPLOY_SSH_KEY` | 专用 Ed25519 私钥全文 |
 | `VPS_SSH_KNOWN_HOSTS` | VPS SSH host key 的已验证 known_hosts 行 |
 
-VPS 地址和端口固定为 `104.224.168.192:22`，不接受 Issue 评论修改目标主机。
+VPS 地址和端口固定为 `104.224.168.192:22`，SSH 登录账号固定为 `r2relay-deploy`，不接受 Issue 评论修改目标主机或登录账号。
 
 ### 生成专用密钥
 
 在可信 Mac 上执行：
 
 ```bash
-ssh-keygen -t ed25519 -a 64 \
+ssh-keygen -t ed25519 -a 64 -N "" \
   -f ~/.ssh/r2-relay-github-actions \
   -C r2-relay-github-actions
 ```
@@ -70,13 +70,16 @@ ssh root@104.224.168.192 \
 ```
 
 Bootstrap 会：
-- 把 root receiver 安装到 `/usr/local/libexec/r2relay_deploy_receiver.py`；
-- 仅向 `/root/.ssh/authorized_keys` 追加这把专用公钥；
-- 为该 key 强制执行固定 receiver，并启用 OpenSSH `restrict`（禁用 PTY、端口转发、Agent 转发和 X11 转发）；
-- 备份原 authorized_keys 和旧 receiver；
+- 创建独立系统账号 `r2relay-deploy`，Home 为 `/var/lib/r2relay-deploy`，不使用 Root SSH 身份；
+- 把 Root receiver 安装到 `/usr/local/libexec/r2relay_deploy_receiver.py`；
+- 仅向部署账号的 `~/.ssh/authorized_keys` 追加专用公钥；
+- 对该 key 设置固定 Forced Command：`sudo -n /usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py`；
+- 在 `/etc/sudoers.d/r2-relay-deploy` 中只允许执行这一条固定命令，并仅保留 receiver 所需的 `SSH_ORIGINAL_COMMAND` 环境变量；
+- 使用 `visudo -cf` 验证 sudoers；备份原有 authorized_keys、sudoers 和 receiver；
+- 启用 OpenSSH `restrict`，禁用 PTY、端口转发、Agent 转发和 X11 转发；
 - 不修改 sshd 配置，不重启 sshd，不修改 Caddy、443、8443、Token 或缓存。
 
-这把部署密钥即使泄露，也不能获得交互式 Root Shell；它只能向固定 receiver 发送受限的 R2 Relay 发布归档。现有 Root 管理密钥不受影响。
+部署密钥不能获得 Root Shell，也不能执行其他 sudo 命令。它只能通过固定 Root receiver 完成受限发布。现有 Root 管理密钥不受影响。
 
 ## ChatGPT 触发部署
 
@@ -116,10 +119,11 @@ VPS receiver 会拒绝超限归档、路径穿越、符号链接、硬链接、�
 - `/etc/r2-relay/vps.env` 是 root 拥有且权限不宽于 0600 的普通文件；
 - `/var/lib/r2-relay/cache` 是 `r2relay:r2relay` 所有的目录；
 - 当前 `r2-relay-vps.service` 与仓库已知旧模板完全一致且处于 active；
+- 必须从实际 systemd unit 核实 `EnvironmentFile` 的真实路径；该文件必须存在、root 拥有且权限不宽于 0600，不能创建空文件或占位 Token；
 - VPS 有 Python 3.11、venv、pip 和访问 PyPI 的网络；
 - GitHub Secrets 已设置，SSH host key 已核验。
 
-任一条件不满足时，receiver fail-closed，不会切换版本。
+任一条件不满足时，receiver fail-closed，不会切换版本。当前只读 VPS 检查曾报告 `/etc/r2-relay/vps.env` 不存在，而 API 进程仍为 active；在核实实际运行进程的环境来源并安全恢复真实配置前，禁止 bootstrap 和首次部署。不要把真实 Token 发到 Issue、PR 或 ChatGPT。
 
 ## 手工回滚
 
