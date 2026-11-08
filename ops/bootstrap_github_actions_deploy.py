@@ -134,6 +134,8 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
         pass
     if account is not None and (account.pw_dir != str(DEPLOY_HOME) or account.pw_shell != "/bin/sh"):
         raise BootstrapError("deploy_account_conflicts_with_existing_user")
+    if account is not None and set(os.getgrouplist(DEPLOY_USER, account.pw_gid)) != {account.pw_gid}:
+        raise BootstrapError("deploy_account_has_unexpected_supplementary_groups")
     if DEPLOY_HOME.is_symlink() or (DEPLOY_HOME.exists() and not DEPLOY_HOME.is_dir()):
         raise BootstrapError("deploy_home_unsafe")
     if SSH_DIR.is_symlink() or (SSH_DIR.exists() and not SSH_DIR.is_dir()):
@@ -154,8 +156,16 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
         raise BootstrapError("receiver_destination_not_root_owned")
     if RECEIVER_DEST.parent.is_symlink():
         raise BootstrapError("receiver_parent_symlink")
-    if Path("/etc/sudoers.d").is_symlink() or not Path("/etc/sudoers.d").is_dir():
+    sudoers_dir = Path("/etc/sudoers.d")
+    if sudoers_dir.is_symlink() or not sudoers_dir.is_dir():
         raise BootstrapError("sudoers_directory_unsafe")
+    sudoers_dir_stat = sudoers_dir.stat()
+    if sudoers_dir_stat.st_uid != 0 or sudoers_dir_stat.st_mode & 0o022:
+        raise BootstrapError("sudoers_directory_permissions_invalid")
+    if RECEIVER_DEST.parent.exists():
+        receiver_parent_stat = RECEIVER_DEST.parent.stat()
+        if not RECEIVER_DEST.parent.is_dir() or receiver_parent_stat.st_uid != 0 or receiver_parent_stat.st_mode & 0o022:
+            raise BootstrapError("receiver_parent_permissions_invalid")
 
     old_keys = AUTHORIZED_KEYS.read_bytes() if AUTHORIZED_KEYS.exists() else b""
     try:
@@ -164,7 +174,11 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
         raise BootstrapError("authorized_keys_encoding_invalid") from None
     key_exists = encoded in existing_key_data(old_lines)
     expected_line = authorized_key_line(encoded, comment)
-    if key_exists and not any(expected_line == line.strip() for line in old_lines):
+    configured_lines = [line.strip() for line in old_lines
+                        if line.strip() and not line.lstrip().startswith("#")]
+    if any(line != expected_line for line in configured_lines):
+        raise BootstrapError("unexpected_deploy_account_authorized_key")
+    if key_exists and expected_line not in configured_lines:
         raise BootstrapError("key_already_exists_with_different_options")
     new_keys = old_keys
     if not key_exists:
@@ -197,6 +211,9 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
                          "--user-group", DEPLOY_USER], "deploy_account_creation_failed")
         account = pwd.getpwnam(DEPLOY_USER)
         group = grp.getgrgid(account.pw_gid)
+        if set(os.getgrouplist(DEPLOY_USER, account.pw_gid)) != {account.pw_gid}:
+            raise BootstrapError("deploy_account_has_unexpected_supplementary_groups")
+        run_checked(["/usr/sbin/usermod", "--lock", DEPLOY_USER], "deploy_account_password_lock_failed")
         DEPLOY_HOME.mkdir(mode=0o750, parents=True, exist_ok=True)
         if DEPLOY_HOME.is_symlink():
             raise BootstrapError("deploy_home_symlink")
