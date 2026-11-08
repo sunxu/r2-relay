@@ -4,7 +4,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import logging
 import os
+import time
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
 
@@ -15,6 +17,7 @@ HOP_HEADERS = frozenset({
     "te", "trailer", "upgrade", "proxy-authenticate", "proxy-authorization",
 })
 EXECUTION_TERMINAL = frozenset({"SUCCEEDED", "FAILED"})
+LOG = logging.getLogger("r2relay.local.timing")
 
 
 def is_upload_part(method: str, url: str) -> bool:
@@ -114,6 +117,7 @@ class RelayClient:
     async def upload(
         self, url: str, headers: list[tuple[str, str]], body: bytes
     ) -> UpstreamResult:
+        started_at = time.perf_counter()
         content_md5 = hashlib.md5(body, usedforsecurity=False).hexdigest()
         prepare = {
             "schema_version": 1,
@@ -127,6 +131,9 @@ class RelayClient:
             },
         }
         reply = await self._request("POST", "/v1/parts/prepare", json=prepare)
+        prepared_at = time.perf_counter()
+        data_upload_ms: float | None = None
+        data_mbps: float | None = None
         try:
             decision = reply.json()
             status = decision["status"]
@@ -139,12 +146,16 @@ class RelayClient:
             except KeyError as exc:
                 raise RelayOutcomeUnknown("VPS missing transfer_id") from exc
             try:
+                data_started_at = time.perf_counter()
                 await self._request(
                     "PUT", f"/v1/parts/data/{transfer}",
                     headers={"X-Content-MD5-Hex": content_md5,
                              "Content-Type": "application/octet-stream"},
                     content=body,
                 )
+                data_upload_ms = (time.perf_counter() - data_started_at) * 1000
+                if data_upload_ms > 0:
+                    data_mbps = len(body) * 8 / (data_upload_ms * 1000)
             except RelayStorageUnavailable:
                 # 507 is explicitly returned before any R2 worker can start.
                 raise
@@ -154,11 +165,14 @@ class RelayClient:
         elif status != "HIT":
             raise RelayOutcomeUnknown(f"VPS invalid cache status {status!r}")
 
+        execution_started_at = time.perf_counter()
+        poll_count = 0
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.execution_timeout
         while loop.time() < deadline:
             try:
                 result = await self._request("GET", f"/v1/executions/{execution_id}")
+                poll_count += 1
             except RelayUnavailable as exc:
                 raise RelayOutcomeUnknown("VPS task exists but result query failed") from exc
             try:
@@ -172,7 +186,7 @@ class RelayClient:
                     if upstream.get("body_truncated"):
                         raise RelayOutcomeUnknown("VPS truncated R2 response")
                     try:
-                        return UpstreamResult(
+                        upstream_result = UpstreamResult(
                             status=int(upstream["status_code"]),
                             headers=[(str(k), str(v)) for k, v in upstream["headers"]
                                      if str(k).lower() not in HOP_HEADERS],
@@ -180,6 +194,19 @@ class RelayClient:
                         )
                     except (KeyError, ValueError, TypeError) as exc:
                         raise RelayOutcomeUnknown("VPS malformed R2 result") from exc
+                    finished_at = time.perf_counter()
+                    LOG.info(
+                        "relay_timing cache=%s size_bytes=%d prepare_ms=%.1f "
+                        "data_upload_ms=%s data_mbps=%s execution_wait_ms=%.1f "
+                        "total_relay_ms=%.1f polls=%d r2_status=%d",
+                        status, len(body), (prepared_at - started_at) * 1000,
+                        f"{data_upload_ms:.1f}" if data_upload_ms is not None else "na",
+                        f"{data_mbps:.2f}" if data_mbps is not None else "na",
+                        (finished_at - execution_started_at) * 1000,
+                        (finished_at - started_at) * 1000, poll_count,
+                        upstream_result.status,
+                    )
+                    return upstream_result
                 # No R2 status existed. Do not claim the error came from R2.
                 reason = data.get("relay_error", {})
                 raise RelayOutcomeUnknown(f"VPS execution ended without R2 response: {reason}")
