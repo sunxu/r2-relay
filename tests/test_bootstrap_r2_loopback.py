@@ -30,8 +30,8 @@ def test_no_ambiguous_sha():
 
 def test_backup_directory_is_unique_private_and_root_owned(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "BACKUP_ROOT", tmp_path / "backups")
-    first = module.create_backup_dir()
-    second = module.create_backup_dir()
+    first = module.create_backup_dir(expected_uid=os.geteuid(), expected_gid=os.getgid())
+    second = module.create_backup_dir(expected_uid=os.geteuid(), expected_gid=os.getgid())
     assert first != second
     assert stat.S_IMODE(first.stat().st_mode) == 0o700
     assert stat.S_IMODE(second.stat().st_mode) == 0o700
