@@ -57,27 +57,20 @@ jobs:
           git cat-file -e "${TARGET_SHA}^{commit}"
           git merge-base --is-ancestor "$TARGET_SHA" origin/main
 
-      - name: Require successful CI checks for target commit
+      - name: Require deployment safety checks for target commit
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
-          checks="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/check-runs" --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv')"
-          if [ -z "$checks" ]; then
-            echo "No GitHub check runs found for target commit."
+          check="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/check-runs?per_page=100" --jq '.check_runs | map(select(.name == "deploy-tests")) | sort_by(.started_at // .created_at) | last // empty | [.name, .status, (.conclusion // "")] | @tsv')"
+          if [ -z "$check" ]; then
+            echo "Required deploy-tests check is missing for target commit."
             exit 1
           fi
-          success_count=0
-          while IFS=$'\t' read -r name status conclusion; do
-            printf '%s\t%s\t%s\n' "$name" "$status" "$conclusion"
-            [ "$status" = "completed" ] || { echo "Check is not complete: $name"; exit 1; }
-            case "$conclusion" in
-              success) success_count=$((success_count + 1)) ;;
-              skipped|neutral) ;;
-              *) echo "Check did not pass: $name ($conclusion)"; exit 1 ;;
-            esac
-          done <<< "$checks"
-          [ "$success_count" -gt 0 ] || { echo "No successful CI check found."; exit 1; }
+          IFS=$'\\t' read -r name status conclusion <<< "$check"
+          printf '%s\\t%s\\t%s\\n' "$name" "$status" "$conclusion"
+          [ "$status" = "completed" ] || { echo "Required check is not complete: $name"; exit 1; }
+          [ "$conclusion" = "success" ] || { echo "Required check did not pass: $name ($conclusion)"; exit 1; }
 
       - name: Configure pinned SSH identity
         env:
