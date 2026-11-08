@@ -30,7 +30,11 @@ jobs:
           python scripts/deployment_preflight.py --report artifacts/deployment-preflight-safe.json
       - name: Validate systemd unit grammar
         run: |
-          systemd-analyze verify deploy/vps.service 2> artifacts/systemd-verify.txt || {
+          # Runtime /opt path does not exist on ephemeral Runner. The Python
+          # policy gate checks the ORIGINAL ExecStart; systemd-analyze parses
+          # an otherwise identical unit with a harmless local executable.
+          sed 's#^ExecStart=.*#ExecStart=/usr/bin/true#' deploy/vps.service > artifacts/r2-relay-vps.service
+          systemd-analyze verify artifacts/r2-relay-vps.service 2> artifacts/systemd-verify.txt || {
             cat artifacts/systemd-verify.txt
             exit 1
           }
@@ -42,8 +46,8 @@ jobs:
             -subj '/CN=localhost' -addext 'subjectAltName=DNS:localhost' \
             >/dev/null 2>&1
           sed -e 's#{$R2_RELAY_HOST}#localhost#g' \
-              -e "s#{$R2_RELAY_TLS_CERT}#${PWD}/artifacts/certs/test.crt#g" \
-              -e "s#{$R2_RELAY_TLS_KEY}#${PWD}/artifacts/certs/test.key#g" \
+              -e 's#{$R2_RELAY_TLS_CERT}#/work/certs/test.crt#g' \
+              -e 's#{$R2_RELAY_TLS_KEY}#/work/certs/test.key#g' \
               deploy/Caddyfile.example > artifacts/Caddyfile.test
           docker run --rm --network none \
             -v "${PWD}/artifacts:/work:ro" \
