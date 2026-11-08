@@ -1,0 +1,21 @@
+[Unit]
+Description=R2 Relay restricted root operation daemon
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /usr/local/libexec/r2-rootd.py
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=r2-rootd
+RuntimeDirectoryMode=0750
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+PrivateDevices=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
