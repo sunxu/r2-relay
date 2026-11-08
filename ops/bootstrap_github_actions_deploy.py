@@ -32,7 +32,7 @@ SUDO_COMMAND = "/usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py"
 FORCED_COMMAND = "/usr/bin/sudo -n " + SUDO_COMMAND
 SUDOERS_TEXT = (
     'Defaults:r2relay-deploy env_keep += "SSH_ORIGINAL_COMMAND"\n'
-    'r2relay-deploy ALL=(root) NOPASSWD: /usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py\n'
+    'r2relay-deploy ALL=(root) NOPASSWD: /usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py ""\n'
 )
 KEY_RE = re.compile(r"^ssh-ed25519 ([A-Za-z0-9+/]+={0,2})(?: (.*))?$")
 
@@ -108,6 +108,19 @@ def snapshot(path: Path):
     return (path.read_bytes(), stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid)
 
 
+def password_is_locked(username: str, shadow_path: Path = Path("/etc/shadow")) -> bool:
+    """Return only the lock state; never expose or log password hashes."""
+    try:
+        for line in shadow_path.read_text(encoding="utf-8").splitlines():
+            fields = line.split(":")
+            if fields and fields[0] == username:
+                password_field = fields[1] if len(fields) > 1 else ""
+                return password_field.startswith(("!", "*"))
+    except OSError:
+        raise BootstrapError("shadow_lock_state_unavailable") from None
+    raise BootstrapError("shadow_account_missing")
+
+
 def restore_snapshot(path: Path, value) -> None:
     if value is None:
         path.unlink(missing_ok=True)
@@ -136,6 +149,10 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
         raise BootstrapError("deploy_account_conflicts_with_existing_user")
     if account is not None and set(os.getgrouplist(DEPLOY_USER, account.pw_gid)) != {account.pw_gid}:
         raise BootstrapError("deploy_account_has_unexpected_supplementary_groups")
+    if account is not None and not password_is_locked(DEPLOY_USER):
+        raise BootstrapError("existing_deploy_account_password_not_locked")
+    if account is None and (DEPLOY_HOME.exists() or SSH_DIR.exists() or AUTHORIZED_KEYS.exists()):
+        raise BootstrapError("deploy_home_preexisting_without_account")
     if DEPLOY_HOME.is_symlink() or (DEPLOY_HOME.exists() and not DEPLOY_HOME.is_dir()):
         raise BootstrapError("deploy_home_unsafe")
     if SSH_DIR.is_symlink() or (SSH_DIR.exists() and not SSH_DIR.is_dir()):
@@ -213,7 +230,8 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
         group = grp.getgrgid(account.pw_gid)
         if set(os.getgrouplist(DEPLOY_USER, account.pw_gid)) != {account.pw_gid}:
             raise BootstrapError("deploy_account_has_unexpected_supplementary_groups")
-        run_checked(["/usr/sbin/usermod", "--lock", DEPLOY_USER], "deploy_account_password_lock_failed")
+        if created_account:
+            run_checked(["/usr/sbin/usermod", "--lock", DEPLOY_USER], "deploy_account_password_lock_failed")
         DEPLOY_HOME.mkdir(mode=0o750, parents=True, exist_ok=True)
         if DEPLOY_HOME.is_symlink():
             raise BootstrapError("deploy_home_symlink")
