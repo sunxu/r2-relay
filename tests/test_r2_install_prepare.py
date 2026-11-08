@@ -47,3 +47,10 @@ def test_no_shell_or_service_start():
     assert "systemctl" not in source
     assert "/opt/r2-relay" in source
     assert "user=\"r2relay\"" in source
+
+def test_rc1_vps_direct_dependencies_pinned():
+    source=file.read_text()
+    assert "fastapi==0.162.2" in source
+    assert "uvicorn==0.54.0" in source
+    assert "httpx[http2]==0.28.1" in source
+    assert '"--no-deps"' in source

@@ -122,8 +122,13 @@ def prepare(dry_run=True, stage=STAGE, dest=DEST):
         for base, dirs, files in os.walk(build_src):
             for name in dirs + files:
                 os.chown(Path(base)/name, owner.pw_uid, owner.pw_gid)
+        # RC1 direct VPS dependency versions, without heavyweight mitmproxy.
         if run_as_user([str(venv/"bin/python"), "-m", "pip", "install",
-                        "--no-input", str(build_src)], timeout=480):
+                        "--no-input", "fastapi==0.162.2", "uvicorn==0.54.0",
+                        "httpx[http2]==0.28.1"], timeout=480):
+            return {"status": "PARTIAL_INSTALL", "step": "pip_runtime_deps"}
+        if run_as_user([str(venv/"bin/python"), "-m", "pip", "install",
+                        "--no-input", "--no-deps", str(build_src)], timeout=480):
             return {"status": "PARTIAL_INSTALL", "step": "pip"}
         return {"status": "INSTALLED_NOT_STARTED", "commit": COMMIT,
                 "path": str(dest), "service_started": False}
