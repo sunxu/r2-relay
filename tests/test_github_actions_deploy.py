@@ -370,6 +370,16 @@ def test_production_workflow_is_owner_gated_and_requires_deployment_checks():
     assert "push:" not in workflow
 
 
+def test_bootstrap_accepts_only_current_or_exact_legacy_sudoers_policy():
+    assert bootstrap.is_managed_sudoers_policy(bootstrap.SUDOERS_TEXT)
+    assert bootstrap.is_managed_sudoers_policy(bootstrap.LEGACY_SUDOERS_TEXT)
+    assert "/usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py" in bootstrap.LEGACY_SUDOERS_TEXT
+    assert not bootstrap.is_managed_sudoers_policy(
+        bootstrap.LEGACY_SUDOERS_TEXT + "r2relay-deploy ALL=(root) NOPASSWD: ALL\n"
+    )
+    assert not bootstrap.is_managed_sudoers_policy("")
+
+
 def test_bootstrap_uses_a_dedicated_account_and_one_sudo_command():
     assert bootstrap.DEPLOY_USER == "r2relay-deploy"
     assert bootstrap.FORCED_COMMAND.startswith("/usr/bin/sudo -n ")
