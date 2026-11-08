@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time trusted upgrade for R2 runtime smoke and systemd prepare."""
+"""One-time trusted upgrade for R2 Relay inspection and runtime-control tools."""
 from __future__ import annotations
 import argparse
 import grp
@@ -7,19 +7,26 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
+import stat
 import subprocess
 import tempfile
+import time
 from urllib.request import urlopen
 
 FILES = {
     "ops/r2_rootd.py": Path("/usr/local/libexec/r2-rootd.py"),
     "ops/r2_loopback_control.py": Path("/usr/local/libexec/r2_loopback_control.py"),
     "ops/generic_vps_mcp.py": Path("/opt/r2-mcp/generic_vps_mcp.py"),
+    # The legacy connector executes this fixed inspection module from the
+    # retained /opt/r2-relay tree. Keep it read-only and update it atomically.
+    "ops/deployment_inspect.py": Path("/opt/r2-relay/scripts/deployment_inspect.py"),
 }
-BACKUP_DIR = Path("/var/backups/vps-mcp/r2-loopback-control-upgrade")
+BACKUP_ROOT = Path("/var/backups/vps-mcp/r2-loopback-control-upgrade")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SERVICES = ("r2-rootd.service", "r2-mcp.service")
+
 
 def get_files(commit: str) -> dict:
     if not SHA.fullmatch(commit):
@@ -35,9 +42,11 @@ def get_files(commit: str) -> dict:
         outputs[repo_path] = data
     return outputs
 
+
 def invoke(argv):
     subprocess.run(argv, shell=False, check=True, timeout=30,
                    stdin=subprocess.DEVNULL)
+
 
 def atomically_install(dest: Path, data: bytes, group: int):
     fd, temp = tempfile.mkstemp(prefix=".mcp-upgrade-", dir=dest.parent)
@@ -53,6 +62,21 @@ def atomically_install(dest: Path, data: bytes, group: int):
         if os.path.exists(temp):
             os.unlink(temp)
 
+
+def create_backup_dir(expected_uid=0, expected_gid=0):
+    if BACKUP_ROOT.is_symlink():
+        raise ValueError("backup_root_symlink")
+    BACKUP_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root_stat = BACKUP_ROOT.lstat()
+    if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != expected_uid
+            or root_stat.st_gid != expected_gid or stat.S_IMODE(root_stat.st_mode) != 0o700):
+        raise ValueError("backup_root_permissions_invalid")
+    path = BACKUP_ROOT / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+                          + "-" + secrets.token_hex(4))
+    path.mkdir(mode=0o700)
+    return path
+
+
 def install(commit: str, *, apply: bool):
     if os.geteuid() != 0:
         raise ValueError("root_required")
@@ -60,20 +84,17 @@ def install(commit: str, *, apply: bool):
     for path in FILES.values():
         if path.is_symlink() or not path.parent.is_dir():
             raise ValueError("unsafe_destination")
-        if path.exists() and path.stat().st_uid != 0:
+        if path.exists() and path.lstat().st_uid != 0:
             raise ValueError("existing_file_not_root_owned")
     if not apply:
         return {"status": "UPGRADE_DRY_RUN_PASS", "files": list(FILES),
                 "services_restarted": False}
-    if BACKUP_DIR.exists():
-        raise ValueError("backup_already_exists")
-    BACKUP_DIR.mkdir(parents=True, mode=0o700)
-    os.chmod(BACKUP_DIR, 0o700)
+    backup_dir = create_backup_dir()
     existing = {}
     for source, dest in FILES.items():
         existing[source] = dest.exists()
         if dest.exists():
-            shutil.copy2(dest, BACKUP_DIR / dest.name)
+            shutil.copy2(dest, backup_dir / dest.name)
     group = grp.getgrnam("mcp-relay").gr_gid
     try:
         for repo_path, dest in FILES.items():
@@ -84,11 +105,11 @@ def install(commit: str, *, apply: bool):
             invoke(["/usr/bin/systemctl", "restart", service])
             invoke(["/usr/bin/systemctl", "is-active", "--quiet", service])
         return {"status": "UPGRADE_APPLIED", "commit": commit,
-                "backup_dir": str(BACKUP_DIR), "tunnel_restarted": False}
+                "backup_dir": str(backup_dir), "services_restarted": list(SERVICES)}
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         for source, dest in FILES.items():
             if existing[source]:
-                shutil.copy2(BACKUP_DIR / dest.name, dest)
+                shutil.copy2(backup_dir / dest.name, dest)
             else:
                 dest.unlink(missing_ok=True)
         for service in SERVICES:
@@ -97,6 +118,7 @@ def install(commit: str, *, apply: bool):
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 pass
         raise
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -110,6 +132,7 @@ def main():
         print(json.dumps({"status": "FAILED", "error": type(e).__name__}))
         return 1
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
