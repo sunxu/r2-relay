@@ -30,6 +30,7 @@ SUDOERS = Path("/etc/sudoers.d/r2-relay-deploy")
 BACKUPS = Path("/var/backups/r2-relay/deploy-bootstrap")
 SUDO_COMMAND = "/usr/local/libexec/r2relay_deploy_receiver.py"
 FORCED_COMMAND = "/usr/bin/sudo -n " + SUDO_COMMAND
+LEGACY_FORCED_COMMAND = "/usr/bin/sudo -n /usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py"
 SUDOERS_TEXT = (
     'Defaults:r2relay-deploy env_keep += "SSH_ORIGINAL_COMMAND"\n'
     'r2relay-deploy ALL=(root) NOPASSWD: /usr/local/libexec/r2relay_deploy_receiver.py ""\n'
@@ -81,6 +82,36 @@ def existing_key_data(lines: list[str]) -> set[str]:
 
 def authorized_key_line(encoded: str, comment: str) -> str:
     return f'command="{FORCED_COMMAND}",restrict ssh-ed25519 {encoded} {comment}'
+
+
+
+def update_authorized_keys(old_keys: bytes, encoded: str, comment: str) -> tuple[bytes, bool]:
+    try:
+        old_lines = old_keys.decode("utf-8").splitlines()
+    except UnicodeError:
+        raise BootstrapError("authorized_keys_encoding_invalid") from None
+    key_exists = encoded in existing_key_data(old_lines)
+    expected_line = authorized_key_line(encoded, comment)
+    legacy_line = f'command="{LEGACY_FORCED_COMMAND}",restrict ssh-ed25519 {encoded} {comment}'
+    configured_lines = [line.strip() for line in old_lines
+                        if line.strip() and not line.lstrip().startswith("#")]
+    if any(line not in {expected_line, legacy_line} for line in configured_lines):
+        raise BootstrapError("unexpected_deploy_account_authorized_key")
+    if key_exists and expected_line not in configured_lines:
+        if legacy_line not in configured_lines:
+            raise BootstrapError("key_already_exists_with_different_options")
+        upgraded_lines = [expected_line if line.strip() == legacy_line else line
+                          for line in old_lines]
+        return ("\\n".join(upgraded_lines) + "\\n").encode("utf-8"), True
+    if key_exists:
+        if configured_lines != [expected_line]:
+            raise BootstrapError("unexpected_deploy_account_authorized_key")
+        return old_keys, True
+    if configured_lines:
+        raise BootstrapError("unexpected_deploy_account_authorized_key")
+    new_keys = (old_keys.decode("utf-8").rstrip("\\n")
+                + ("\\n" if old_keys else "") + expected_line + "\\n").encode("utf-8")
+    return new_keys, False
 
 
 def atomic_write(path: Path, content: bytes, mode: int, uid: int = 0, gid: int = 0) -> None:
@@ -193,21 +224,7 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
             raise BootstrapError("receiver_parent_permissions_invalid")
 
     old_keys = AUTHORIZED_KEYS.read_bytes() if AUTHORIZED_KEYS.exists() else b""
-    try:
-        old_lines = old_keys.decode("utf-8").splitlines()
-    except UnicodeError:
-        raise BootstrapError("authorized_keys_encoding_invalid") from None
-    key_exists = encoded in existing_key_data(old_lines)
-    expected_line = authorized_key_line(encoded, comment)
-    configured_lines = [line.strip() for line in old_lines
-                        if line.strip() and not line.lstrip().startswith("#")]
-    if any(line != expected_line for line in configured_lines):
-        raise BootstrapError("unexpected_deploy_account_authorized_key")
-    if key_exists and expected_line not in configured_lines:
-        raise BootstrapError("key_already_exists_with_different_options")
-    new_keys = old_keys
-    if not key_exists:
-        new_keys = (old_keys.decode("utf-8").rstrip("\n") + ("\n" if old_keys else "") + expected_line + "\n").encode()
+    new_keys, key_exists = update_authorized_keys(old_keys, encoded, comment)
 
     if not apply:
         return {"status": "DRY_RUN_PASS", "fingerprint": fingerprint,
