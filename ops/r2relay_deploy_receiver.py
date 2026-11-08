@@ -37,7 +37,7 @@ MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_UNPACKED_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 6000
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
-RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v3-release-group-read-permissions"
+RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v4-venv-lib64-symlink"
 REQUIRED = {
     "vps/pyproject.toml",
     "vps/r2relay_vps/app.py",
@@ -298,6 +298,21 @@ def run_fixed(argv: list[str], timeout: int = 120) -> None:
         raise DeployError("command_failed:" + Path(argv[0]).name)
 
 
+def is_expected_venv_lib64_symlink(root: Path, path: Path) -> bool:
+    """Allow only Python venv's local .venv/lib64 -> lib directory link."""
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError:
+        return False
+    target = root / ".venv/lib"
+    return (
+        relative == ".venv/lib64"
+        and path.is_symlink()
+        and os.readlink(path) == "lib"
+        and target.is_dir()
+        and not target.is_symlink()
+    )
+
 def chown_release(root: Path, gid: int) -> None:
     for current, dirs, files in os.walk(root, topdown=False, followlinks=False):
         base = Path(current)
@@ -311,6 +326,8 @@ def chown_release(root: Path, gid: int) -> None:
         for name in dirs:
             path = base / name
             if path.is_symlink():
+                if is_expected_venv_lib64_symlink(root, path):
+                    continue
                 raise DeployError("release_symlink_unexpected")
             os.chown(path, 0, gid, follow_symlinks=False)
             os.chmod(path, 0o750)
@@ -425,7 +442,10 @@ def validate_existing_release(
     for current, dirs, files in os.walk(release, topdown=True, followlinks=False):
         base = Path(current)
         for name in dirs:
-            check_directory(base / name)
+            path = base / name
+            if is_expected_venv_lib64_symlink(release, path):
+                continue
+            check_directory(path)
         for name in files:
             path = base / name
             relative = path.relative_to(release).as_posix()

@@ -47,7 +47,7 @@ def test_receiver_build_id_is_in_every_emitted_receipt(capsys):
     receiver.emit("TEST", marker="ok")
     import json
     payload = json.loads(capsys.readouterr().out)
-    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v3-release-group-read-permissions"
+    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v4-venv-lib64-symlink"
     assert payload["marker"] == "ok"
 
 
@@ -234,13 +234,14 @@ def test_current_symlink_is_atomic_and_fixed_target(tmp_path, monkeypatch):
 
 def make_existing_release(path: Path, python_target: Path, gid: int):
     for directory in (
-        path, path / ".venv", path / ".venv/bin",
+        path, path / ".venv", path / ".venv/bin", path / ".venv/lib",
         path / "vps", path / "vps/r2relay_vps",
     ):
         directory.mkdir(mode=0o750, parents=True, exist_ok=True)
         directory.chmod(0o750)
     for name in ("python", "python3", "python3.11"):
         (path / ".venv/bin" / name).symlink_to(python_target)
+    (path / ".venv/lib64").symlink_to("lib")
     uvicorn = path / ".venv/bin/uvicorn"
     uvicorn.write_text("#!/bin/sh\n")
     uvicorn.chmod(0o750)
@@ -248,6 +249,53 @@ def make_existing_release(path: Path, python_target: Path, gid: int):
     app.write_text("app = True\n")
     app.chmod(0o640)
 
+
+def test_chown_release_allows_only_local_venv_lib64_symlink(tmp_path, monkeypatch):
+    import os
+
+    root = tmp_path / "release"
+    lib = root / ".venv/lib"
+    lib.mkdir(parents=True)
+    lib64 = root / ".venv/lib64"
+    lib64.symlink_to("lib")
+    monkeypatch.setattr(receiver.os, "chown", lambda *args, **kwargs: None)
+
+    receiver.chown_release(root, 4242)
+    assert lib64.is_symlink()
+    assert os.readlink(lib64) == "lib"
+    assert lib64.resolve() == lib.resolve()
+
+    evil = root / "unexpected"
+    evil.symlink_to(lib, target_is_directory=True)
+    try:
+        receiver.chown_release(root, 4242)
+    except receiver.DeployError as exc:
+        assert str(exc) == "release_symlink_unexpected"
+    else:
+        raise AssertionError("unexpected directory symlink accepted")
+
+
+def test_existing_release_accepts_only_local_venv_lib64_symlink(tmp_path, monkeypatch):
+    import os
+
+    release = tmp_path / SHA
+    python_target = Path(sys.executable).resolve()
+    make_existing_release(release, python_target, os.getgid())
+    monkeypatch.setattr(receiver, "run_as_r2relay", lambda argv, timeout=120, **kwargs: None)
+    receiver.validate_existing_release(
+        release, os.getgid(), owner_uid=os.getuid(), python_executable=python_target
+    )
+
+    evil = release / ".venv/evil-dir"
+    evil.symlink_to(release / ".venv/lib", target_is_directory=True)
+    try:
+        receiver.validate_existing_release(
+            release, os.getgid(), owner_uid=os.getuid(), python_executable=python_target
+        )
+    except receiver.DeployError as exc:
+        assert str(exc) == "existing_release_directory_invalid"
+    else:
+        raise AssertionError("unexpected venv directory symlink accepted")
 
 def test_chown_release_keeps_group_readable_immutable_source_modes(tmp_path, monkeypatch):
     import os
