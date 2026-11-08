@@ -38,7 +38,7 @@ async def test_worker_records_original_gzip_wire_body(tmp_path):
     wire = gzip.compress(original)
     app = create_app(CacheStore(tmp_path), token="test",
                      r2_transport=httpx.MockTransport(lambda _: httpx.Response(
-                         403, headers={"Content-Encoding": "gzip"}, content=wire
+                         403, headers={"Content-Encoding": "gzip"}, stream=httpx.ByteStream(wire)
                      )), retry_delays=(0, 0, 0))
     body = b"hello"
     md5 = hashlib.md5(body).hexdigest()
