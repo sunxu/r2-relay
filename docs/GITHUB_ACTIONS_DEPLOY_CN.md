@@ -100,7 +100,7 @@ printf '' | ssh -T \
   -o IdentitiesOnly=yes \
   -o StrictHostKeyChecking=yes \
   -o ClearAllForwardings=yes \
-  root@104.224.168.192 \
+  r2relay-deploy@104.224.168.192 \
   "deploy $MERGE_SHA"
 SSH_STATUS=$?
 set -e
