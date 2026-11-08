@@ -86,16 +86,33 @@ class CacheStore:
         return count
 
     async def put(self, md5: str, chunks: AsyncIterator[bytes], expected_size: int) -> CacheEntry:
+        """Publish only the first complete writer; never reset a live entry's TTL.
+
+        All writers consume and validate the declared request body. We deliberately
+        do not hash bytes on the VPS: the local client supplies the MD5 cache key.
+        A hard-link publish is atomic and fails if another first writer won.
+        """
         if expected_size < 0:
             raise ValueError("invalid size")
         path = self._path(md5)
+
+        async def consume() -> None:
+            size = 0
+            async for chunk in chunks:
+                size += len(chunk)
+                if size > expected_size:
+                    raise ValueError("body exceeds declared length")
+            if size != expected_size:
+                raise ValueError("body length mismatch")
+
         existing = self.get(md5)
         if existing is not None:
+            await consume()
             return existing
+
         path.parent.mkdir(parents=True, exist_ok=True)
         min_free = int(os.environ.get("R2_RELAY_MIN_FREE_BYTES", str(128 * 1024 * 1024)))
-        available = shutil.disk_usage(path.parent).free
-        if available < expected_size + min_free:
+        if shutil.disk_usage(path.parent).free < expected_size + min_free:
             raise OSError("VPS cache disk space below configured reserve")
         fd, name = tempfile.mkstemp(prefix=f"{md5}-", suffix=".tmp", dir=path.parent)
         tmp = Path(name)
@@ -111,13 +128,22 @@ class CacheStore:
                     raise ValueError("body length mismatch")
                 await asyncio.to_thread(out.flush)
                 await asyncio.to_thread(os.fsync, out.fileno())
-            created = self.clock()
-            # An existing complete cache is not refreshed by a repeated write.
+            # A different writer may have committed during our streaming write.
             existing = self.get(md5)
             if existing is not None:
                 return existing
+
+            created = self.clock()
             os.utime(tmp, (created, created))
-            os.replace(tmp, path)
+            try:
+                # Unlike os.replace(), os.link() cannot overwrite a first writer.
+                os.link(tmp, path)
+            except FileExistsError:
+                existing = self.get(md5)
+                if existing is None:
+                    # An out-of-band file is not trusted as a valid index entry.
+                    raise OSError("cache destination exists without a live index entry")
+                return existing
             directory_fd = os.open(path.parent, os.O_RDONLY)
             try:
                 os.fsync(directory_fd)
