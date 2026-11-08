@@ -3,6 +3,8 @@ import importlib.util
 import io
 from pathlib import Path
 import struct
+import subprocess
+import shutil
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -314,6 +316,26 @@ def test_bootstrap_reports_only_password_lock_state(tmp_path):
         assert str(exc) == "shadow_account_missing"
     else:
         raise AssertionError("missing shadow account accepted")
+
+
+def test_sudoers_policy_is_valid_when_visudo_is_available(tmp_path):
+    visudo = shutil.which("visudo")
+    sudo = shutil.which("sudo")
+    if not visudo or not sudo:
+        return
+    policy = tmp_path / "r2-relay-deploy"
+    policy.write_text(bootstrap.SUDOERS_TEXT, encoding="utf-8")
+    policy.chmod(0o440)
+    owner = subprocess.run(
+        [sudo, "chown", "root:root", str(policy)],
+        capture_output=True, text=True, check=False,
+    )
+    assert owner.returncode == 0, owner.stderr
+    result = subprocess.run(
+        [sudo, visudo, "-cf", str(policy)],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_deployment_lock_requires_root_owned_private_regular_file(tmp_path, monkeypatch):
