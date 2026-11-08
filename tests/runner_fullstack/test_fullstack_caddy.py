@@ -13,6 +13,7 @@ import sys
 from urllib.parse import urlencode
 
 import aiohttp
+import httpx
 import pytest
 
 
@@ -138,10 +139,55 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
                     if expected_status == 200:
                         assert response.headers["ETag"] == f'"{digest}"'
                     await response.read()
+        # Hit/miss accounting goes through real Caddy TLS and HTTP/2.
+        async with httpx.AsyncClient(http2=True, verify=str(cert), trust_env=False) as http:
+            response = await http.get(
+                f"https://localhost:{caddy_port}/v1/metrics",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert response.status_code == 200
+            assert response.http_version == "HTTP/2"
+            metrics = response.json()
+            assert metrics["prepare_miss"] == 1
+            assert metrics["prepare_hit"] == 4
+            assert metrics["staged_bytes"] == len(content)
+            assert metrics["r2_attempts"] == 7
+
+        # Cold VPS restart retains only disk cache, not in-flight task state.
+        # Test restoration by restarting the actual Uvicorn process.
+        stop(procs[1])
+        procs[1] = subprocess.Popen(
+            cmds[1][1], cwd=root, env=vps_env, stdout=outputs[1],
+            stderr=subprocess.STDOUT,
+        )
+        await ready(vps_port, procs[1], logfiles["vps"])
+        witness = hmac.new(
+            hmac_key.encode(),
+            f"afterrestart|7|{digest}".encode(), "sha256"
+        ).hexdigest()
+        url = ("https://acct.r2.cloudflarestorage.com/bucket/object?"
+               + urlencode({"uploadId": "afterrestart", "partNumber": "7",
+                            "X-Test-Witness": witness}))
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90)) as client:
+            async with client.put(
+                url, data=content, ssl=trust,
+                proxy=f"http://127.0.0.1:{proxy_port}",
+            ) as response:
+                assert response.status == 200
+                assert response.headers["ETag"] == f'"{digest}"'
+                await response.read()
+        async with httpx.AsyncClient(http2=True, verify=str(cert), trust_env=False) as http:
+            restored = (await http.get(
+                f"https://localhost:{caddy_port}/v1/metrics",
+                headers={"Authorization": f"Bearer {token}"},
+            )).json()
+            assert restored["prepare_hit"] == 1
+            assert restored["prepare_miss"] == 0
+
         rows = [json.loads(x) for x in calls.read_text().splitlines()]
         assert [r["upload_id"] for r in rows] == [
             "first", "second", "fail502", "fail502", "fail429",
-            "fail429", "forbidden"
+            "fail429", "forbidden", "afterrestart"
         ]
         assert len(list((tmp_path / "cache").glob("*/*.part"))) == 1
         assert all(r["body_md5"] == digest for r in rows)
@@ -152,6 +198,10 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
             "components": ["aiohttp", "mitmproxy", "caddy_tls_8443",
                            "vps_asgi_tcp", "mock_r2_tcp"],
             "simulated_put_count": len(rows),
+            "vps_restart_cache_recovered": True,
+            "caddy_http2_verified": True,
+            "cache_miss_before_restart": metrics["prepare_miss"],
+            "cache_hit_before_restart": metrics["prepare_hit"],
             "statuses": statuses,
             "r2_real": "NOT_TESTED",
             "vps_public_network": "NOT_TESTED",
