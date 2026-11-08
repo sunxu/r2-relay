@@ -47,7 +47,7 @@ def test_receiver_build_id_is_in_every_emitted_receipt(capsys):
     receiver.emit("TEST", marker="ok")
     import json
     payload = json.loads(capsys.readouterr().out)
-    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v3-release-group-read-permissions"
+    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v4-venv-lib64-symlink"
     assert payload["marker"] == "ok"
 
 
@@ -251,6 +251,8 @@ def make_existing_release(path: Path, python_target: Path, gid: int):
 
 
 def test_chown_release_allows_only_local_venv_lib64_symlink(tmp_path, monkeypatch):
+    import os
+
     root = tmp_path / "release"
     lib = root / ".venv/lib"
     lib.mkdir(parents=True)
