@@ -23,17 +23,22 @@ CONF_DIR = Path("/etc/r2-caddy")
 CONFIG = CONF_DIR / "Caddyfile"
 UNIT = Path("/etc/systemd/system/caddy.service")
 DATA = Path("/var/lib/r2-caddy")
-CA = DATA / "data/caddy/pki/authorities/local/root.crt"
+TLS_DIR = CONF_DIR / "tls"
+CA_DIR = Path("/etc/r2-relay/tls-ca")
+CA = CA_DIR / "root.crt"
+CA_KEY = CA_DIR / "root.key"
+CERT = TLS_DIR / "server.crt"
+CERT_KEY = TLS_DIR / "server.key"
 SERVICE = "caddy.service"
 API = "r2-relay-vps.service"
 IDENTITY = "r2caddy"
 
 CADDYFILE = """{
-    auto_https disable_redirects
+    auto_https off
     admin off
 }
-https://104.224.168.192:8443, https://[2607:8700:5500:a47f::2]:8443 {
-    tls internal
+:8443 {
+    tls /etc/r2-caddy/tls/server.crt /etc/r2-caddy/tls/server.key
     reverse_proxy 127.0.0.1:18085
 }
 """
@@ -108,7 +113,7 @@ def preflight():
         raise ValueError("port_8443_occupied")
     if CONF_DIR.exists() or CONF_DIR.is_symlink() or UNIT.exists() or UNIT.is_symlink() or CONFIG.exists() or CONFIG.is_symlink():
         raise ValueError("caddy_existing_configuration")
-    if BINARY.exists() or BINARY.is_symlink() or DATA.exists() or DATA.is_symlink():
+    if BINARY.exists() or BINARY.is_symlink() or DATA.exists() or DATA.is_symlink() or CA_DIR.exists() or CA_DIR.is_symlink():
         raise ValueError("caddy_existing_files")
     if service_state(SERVICE) not in ("inactive", "failed"):
         raise ValueError("caddy_service_already_present")
@@ -146,6 +151,45 @@ def write_exclusive(path, content, mode):
         f.write(content)
     os.chmod(path,mode)
 
+def generate_certificate(group):
+    """Root-only private CA; one leaf covering both IPs, no SNI dependence."""
+    req=["/usr/bin/openssl","req"]
+    run(req+["-x509","-newkey","rsa:3072","-nodes","-sha256",
+             "-days","3650","-subj","/CN=R2 Relay Private CA",
+             "-addext","basicConstraints=critical,CA:TRUE",
+             "-addext","keyUsage=critical,keyCertSign,cRLSign",
+             "-keyout",str(CA_KEY),"-out",str(CA)])
+    csr=CA_DIR/"server.csr"
+    ext=CA_DIR/"server.ext"
+    run(req+["-new","-newkey","rsa:3072","-nodes","-sha256",
+             "-subj","/CN=104.224.168.192",
+             "-keyout",str(CERT_KEY),"-out",str(csr)])
+    write_exclusive(ext,
+        "subjectAltName=IP:104.224.168.192,IP:2607:8700:5500:a47f::2\n"
+        "basicConstraints=critical,CA:FALSE\n"
+        "keyUsage=critical,digitalSignature,keyEncipherment\n"
+        "extendedKeyUsage=serverAuth\n",0o600)
+    run(["/usr/bin/openssl","x509","-req","-in",str(csr),
+         "-CA",str(CA),"-CAkey",str(CA_KEY),"-CAcreateserial",
+         "-out",str(CERT),"-days","365","-sha256","-extfile",str(ext)])
+    csr.unlink()
+    ext.unlink()
+    os.chmod(CA_KEY,0o600)
+    os.chmod(CA,0o644)
+    os.chown(CERT_KEY,0,group)
+    os.chmod(CERT_KEY,0o640)
+    os.chmod(CERT,0o644)
+    validate_leaf()
+
+def validate_leaf():
+    cert_info=ssl._ssl._test_decode_cert(str(CERT))
+    names={str(ipaddress.ip_address(value)) for kind,value
+           in cert_info.get("subjectAltName",()) if kind=="IP Address"}
+    if names!={str(ipaddress.ip_address(IP4)),str(ipaddress.ip_address(IP6))}:
+        raise ValueError("certificate_ip_san_mismatch")
+    run(["/usr/bin/openssl","verify","-CAfile",str(CA),str(CERT)],timeout=12)
+
+
 def prepare():
     initial=preflight()
     before_443=listeners(443)
@@ -167,6 +211,14 @@ def prepare():
         CONF_DIR.mkdir(mode=0o755)
         created.append(CONF_DIR)
         os.chmod(CONF_DIR,0o755)
+        TLS_DIR.mkdir(mode=0o750)
+        created.append(TLS_DIR)
+        os.chown(TLS_DIR,0,group)
+        os.chmod(TLS_DIR,0o750)
+        CA_DIR.mkdir(mode=0o700)
+        created.append(CA_DIR)
+        os.chmod(CA_DIR,0o700)
+        generate_certificate(group)
         write_exclusive(CONFIG,CADDYFILE,0o644)
         created.append(CONFIG)
         write_exclusive(UNIT,SYSTEMD,0o644)
@@ -180,13 +232,13 @@ def prepare():
             raise ValueError("unexpected_listener")
         return {"status":"HTTPS_PREPARED_NOT_STARTED",
                 "service_started":False,"auto_enabled":False,
-                "private_ca_ready":False,"port_8443_listening":False,
+                "private_ca_ready":True,"port_8443_listening":False,
                 "port_443_preserved":True,
                 "ipv4":IP4,"ipv6":IP6}
     except Exception:
         for path in reversed(created):
             try:
-                if path == DATA:
+                if path in (DATA, CA_DIR, TLS_DIR):
                     shutil.rmtree(path)
                 elif path == CONF_DIR:
                     path.rmdir()
@@ -206,6 +258,16 @@ def check_prepared():
     conf_state = CONF_DIR.lstat()
     if not stat.S_ISDIR(conf_state.st_mode) or conf_state.st_uid != 0 or stat.S_IMODE(conf_state.st_mode) != 0o755:
         raise ValueError("caddy_config_directory_permissions")
+    key_state=CERT_KEY.lstat()
+    ca_state=CA_KEY.lstat()
+    if (not stat.S_ISREG(key_state.st_mode) or key_state.st_uid!=0
+            or key_state.st_gid!=grp.getgrnam(IDENTITY).gr_gid
+            or stat.S_IMODE(key_state.st_mode)!=0o640):
+        raise ValueError("leaf_key_permissions")
+    if (not stat.S_ISREG(ca_state.st_mode) or ca_state.st_uid!=0
+            or stat.S_IMODE(ca_state.st_mode)!=0o600):
+        raise ValueError("ca_key_permissions")
+    validate_leaf()
     if UNIT.read_text()!=SYSTEMD or CONFIG.read_text()!=CADDYFILE:
         raise ValueError("prepared_config_mismatch")
     state = DATA.lstat()
