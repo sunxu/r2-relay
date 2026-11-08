@@ -1,5 +1,9 @@
 # R2 Relay：由 ChatGPT 控制的 GitHub Actions VPS 部署
 
+## Python package build isolation
+
+The release tree is intentionally owned by `root:r2relay` with source directories `0750` and files `0640` (executable files `0750`). The service account must not write into the deployed source tree. Since setuptools may create `build/` beneath the local project during `pip install`, the receiver copies `vps/` into a disposable `/var/tmp/r2-relay-build-*` directory, makes only that copy writable by `r2relay`, and installs from the copy. The temporary build tree is removed on success or failure. Repository-controlled build hooks continue to run as the unprivileged `r2relay` account; the immutable release source remains root-owned.
+
 ## 目标
 
 代码 Push / PR 合并只运行 CI，不自动部署生产。ChatGPT 选择完整 Commit SHA，并在本仓库的固定部署控制 Issue #41 留下精确命令：
