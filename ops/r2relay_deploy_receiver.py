@@ -360,6 +360,61 @@ def prepare_release(stage: Path, uid: int, gid: int) -> None:
     chown_release(stage, gid)
 
 
+def validate_existing_release(release: Path, uid: int, gid: int, owner_uid: int = 0) -> None:
+    """Validate a previously built release before allowing rollback/reuse."""
+    def check_directory(path: Path) -> None:
+        if path.is_symlink() or not path.is_dir():
+            raise DeployError("existing_release_directory_invalid")
+        info = path.lstat()
+        if info.st_uid != owner_uid or info.st_gid != gid or info.st_mode & 0o022:
+            raise DeployError("existing_release_directory_permissions_invalid")
+
+    check_directory(release)
+    venv = release / ".venv"
+    check_directory(venv)
+    bindir = venv / "bin"
+    check_directory(bindir)
+    check_directory(release / "vps")
+    check_directory(release / "vps/r2relay_vps")
+
+    allowed_python_links = {
+        ".venv/bin/python",
+        ".venv/bin/python3",
+        ".venv/bin/python3.11",
+    }
+    for current, dirs, files in os.walk(release, topdown=True, followlinks=False):
+        base = Path(current)
+        for name in dirs:
+            check_directory(base / name)
+        for name in files:
+            path = base / name
+            relative = path.relative_to(release).as_posix()
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                if relative not in allowed_python_links:
+                    raise DeployError("existing_release_symlink_unexpected")
+                try:
+                    if path.resolve(strict=True) != Path("/usr/bin/python3.11"):
+                        raise DeployError("existing_release_python_link_invalid")
+                except OSError:
+                    raise DeployError("existing_release_python_link_invalid") from None
+                continue
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid
+                    or info.st_gid != gid or info.st_mode & 0o022):
+                raise DeployError("existing_release_file_permissions_invalid")
+
+    python = bindir / "python"
+    uvicorn = bindir / "uvicorn"
+    app = release / "vps/r2relay_vps/app.py"
+    for path in (python, uvicorn, app):
+        if not path.exists() or not path.is_file():
+            raise DeployError("existing_release_runtime_file_missing")
+    run_as_r2relay([
+        str(python), "-c",
+        "import fastapi, uvicorn, r2relay_vps.app; print('runtime-import-ok')",
+    ], timeout=30)
+
+
 def write_atomic(path: Path, content: str, mode: int = 0o644) -> None:
     fd, name = tempfile.mkstemp(prefix=".r2-deploy-", dir=path.parent)
     try:
@@ -455,14 +510,18 @@ def deploy(sha: str, archive_path: Path) -> dict:
         uid, gid, previous_target = validate_host_state()
         previous_was_symlink = CURRENT.is_symlink()
         release = RELEASES / sha
+        reuse_existing_release = False
         try:
             release.lstat()
         except FileNotFoundError:
             pass
         else:
+            if release.is_symlink() or not release.is_dir():
+                raise DeployError("release_path_unsafe")
+            validate_existing_release(release, uid, gid)
             if previous_was_symlink and Path(previous_target) == release.resolve(strict=True):
                 return {"status": "ALREADY_DEPLOYED", "commit": sha}
-            raise DeployError("release_already_exists")
+            reuse_existing_release = True
         if RELEASES.is_symlink():
             raise DeployError("release_root_symlink")
         if RELEASES.exists():
@@ -477,17 +536,18 @@ def deploy(sha: str, archive_path: Path) -> dict:
         os.chmod(RELEASES, 0o750)
 
         members, archive_info = validate_archive(archive_path, sha)
-        stage = Path(tempfile.mkdtemp(prefix=".staging-" + sha + "-", dir=RELEASES))
-        extract_archive(archive_path, stage, members)
-        try:
-            # Move source to its immutable final path before creating the venv:
-            # console-script shebangs embed the absolute venv path.
-            os.rename(stage, release)
-            prepare_release(release, uid, gid)
-        except Exception:
-            shutil.rmtree(stage, ignore_errors=True)
-            shutil.rmtree(release, ignore_errors=True)
-            raise
+        if not reuse_existing_release:
+            stage = Path(tempfile.mkdtemp(prefix=".staging-" + sha + "-", dir=RELEASES))
+            extract_archive(archive_path, stage, members)
+            try:
+                # Move source to its immutable final path before creating the venv:
+                # console-script shebangs embed the absolute venv path.
+                os.rename(stage, release)
+                prepare_release(release, uid, gid)
+            except Exception:
+                shutil.rmtree(stage, ignore_errors=True)
+                shutil.rmtree(release, ignore_errors=True)
+                raise
 
         if BACKUPS.is_symlink():
             raise DeployError("backup_root_symlink")
