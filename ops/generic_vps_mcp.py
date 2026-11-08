@@ -131,7 +131,8 @@ def git_stage(project, commit):
 
 
 def _r2_install_request(action: str):
-    if action not in ("r2_install_dry_run", "r2_install_apply"):
+    if action not in ("r2_install_dry_run", "r2_install_apply",
+                       "r2_runtime_smoke", "r2_service_prepare"):
         return {"error": "action_denied"}
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -174,3 +175,13 @@ def register(mcp):
         """固定 Commit 的 R2 Relay 安装准备；默认只校验，apply 会写入 /opt/r2-relay，但不启动服务。"""
         return _r2_install_request(
             "r2_install_apply" if apply else "r2_install_dry_run")
+
+    @mcp.tool()
+    def vps_r2_runtime_smoke() -> dict:
+        """非特权、无真实 R2 网络的本机 ASGI 健康和鉴权烟测。"""
+        return _r2_install_request("r2_runtime_smoke")
+
+    @mcp.tool()
+    def vps_r2_service_prepare() -> dict:
+        """仅创建固定 systemd unit 和本机随机令牌（不回显），不启动或启用服务。"""
+        return _r2_install_request("r2_service_prepare")

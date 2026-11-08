@@ -12,7 +12,8 @@ import syslog
 
 SOCKET = "/run/r2-rootd/control.sock"
 ACTIONS = frozenset(("probe", "install_prereqs", "prepare_dirs", "relay_status",
-                     "r2_install_dry_run", "r2_install_apply"))
+                     "r2_install_dry_run", "r2_install_apply",
+                     "r2_runtime_smoke", "r2_service_prepare"))
 MAX_REQUEST = 2048
 
 def run(argv, timeout=180):
@@ -56,6 +57,13 @@ def execute(action):
         if action == "r2_install_apply":
             args.append("--apply")
         return run(args, timeout=660)
+    if action == "r2_runtime_smoke":
+        return run(["/usr/sbin/runuser", "-u", "r2relay", "--",
+                    "/opt/r2-relay/.venv/bin/python",
+                    "/usr/local/libexec/r2_runtime_smoke.py"], timeout=60)
+    if action == "r2_service_prepare":
+        return run(["/usr/bin/python3",
+                    "/usr/local/libexec/r2_service_prepare.py"], timeout=35)
     raise ValueError("action_not_allowed")
 
 def process_request(payload, uid, authorized_uid):
