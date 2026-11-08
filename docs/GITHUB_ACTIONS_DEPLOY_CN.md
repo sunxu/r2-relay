@@ -46,31 +46,33 @@ ssh-keygen -t ed25519 -a 64 -N "" \
 > **职责边界：这是一项由 Owner 执行的一次性初始化，不纳入 GitHub Actions 自动化范围。** Owner 可以通过现有可信 Root SSH 管理通道执行下面的 Bootstrap；完成后，日常部署不再需要人工登录 VPS 或执行命令。无需新增 Bootstrap Workflow、VPS MCP Server 或独立管理项目。
 
 
-先把本仓库当前已审核版本中的以下两个文件传到 VPS 的临时目录：
+**必须使用 PR #42 合并后记录的精确 Merge Commit SHA，不要直接使用不断变化的 main HEAD。** ChatGPT 会在 PR 合并后给出该 SHA。先在可信 Mac 上检出该固定提交，并确认工作区：
+
+```bash
+git fetch origin main
+git checkout --detach <PR-42-MERGE-COMMIT-SHA>
+test "$(git rev-parse HEAD)" = "<PR-42-MERGE-COMMIT-SHA>"
+git status --short
+```
+
+把这个提交中的以下两个文件传到 VPS 临时目录：
 
 - `ops/bootstrap_github_actions_deploy.py`
 - `ops/r2relay_deploy_receiver.py`
 
-使用已有可信 Root SSH 管理通道执行 bootstrap。示例（在 Mac 仓库根目录）：
+使用已有可信 Root SSH 管理通道执行 Bootstrap（在 Mac 仓库根目录）：
 
 ```bash
-git checkout main
-git pull --ff-only
 scp ops/bootstrap_github_actions_deploy.py \
     ops/r2relay_deploy_receiver.py \
     root@104.224.168.192:/root/
-ssh root@104.224.168.192 \
-  "python3 /root/bootstrap_github_actions_deploy.py \
-   --public-key '$(cat ~/.ssh/r2-relay-github-actions.pub)' --apply"
-```
 
-上面的示例中，公钥必须在 Mac 本地展开后作为参数传入；如果 shell 无法展开远端命令中的本地路径，请先设置：
-
-```bash
 PUBKEY="$(cat ~/.ssh/r2-relay-github-actions.pub)"
 ssh root@104.224.168.192 \
   "python3 /root/bootstrap_github_actions_deploy.py --public-key '$PUBKEY' --apply"
 ```
+
+先前可用 `--apply` 的同一脚本也支持只读 `--public-key ...` dry-run；建议先运行 dry-run，确认输出 `DRY_RUN_PASS` 和公钥 fingerprint 与本机 `ssh-keygen -lf ~/.ssh/r2-relay-github-actions.pub` 一致，再运行 `--apply`。不要将私钥或 Token 复制到 VPS。
 
 Bootstrap 会：
 - 创建独立系统账号 `r2relay-deploy`，Home 为 `/var/lib/r2relay-deploy`，不使用 Root SSH 身份；
@@ -84,6 +86,29 @@ Bootstrap 会：
 - 不修改 sshd 配置，不重启 sshd，不修改 Caddy、443、8443、Token 或缓存。
 
 部署密钥不能获得 Root Shell，也不能执行其他 sudo 命令。它只能通过固定 Root receiver 完成受限发布。现有 Root 管理密钥不受影响。
+
+### Bootstrap 后的无部署连通性验证
+
+在 GitHub Secrets 配置完成前，可用专用私钥向受限入口发送一个**空归档**，验证 SSH 公钥认证、ForcedCommand、sudoers 和 Root receiver 全链路。该命令不会进入 `deploy()`，不会切换版本或重启服务：
+
+```bash
+MERGE_SHA="<PR-42-MERGE-COMMIT-SHA>"
+set +e
+printf '' | ssh -T \
+  -i ~/.ssh/r2-relay-github-actions \
+  -o BatchMode=yes \
+  -o IdentitiesOnly=yes \
+  -o StrictHostKeyChecking=yes \
+  -o ClearAllForwardings=yes \
+  root@104.224.168.192 \
+  "deploy $MERGE_SHA"
+SSH_STATUS=$?
+set -e
+printf 'ssh_exit=%s\\n' "$SSH_STATUS"
+```
+
+预期 receiver 返回 `{"reason":"empty_archive","status":"REJECTED_OR_FAILED"}` 且 SSH 退出码为 1（这是故意的拒绝结果）。若出现 SSH authentication、locked account、sudo 或 receiver 执行错误，则先停止，不要触发生产部署。
+
 
 ## ChatGPT 触发部署
 
