@@ -58,12 +58,12 @@ def regular(path, mode=None, *, uid=0, gid=None):
     return info
 
 
-def active_release(r2_gid):
+def active_release(r2_gid, root_uid=0):
     try:
         current_info = CURRENT.lstat()
     except OSError:
         raise ValueError("current_pointer_missing") from None
-    if not stat.S_ISLNK(current_info.st_mode) or current_info.st_uid != 0:
+    if not stat.S_ISLNK(current_info.st_mode) or current_info.st_uid != root_uid:
         raise ValueError("current_pointer_not_root_symlink")
     try:
         releases_root = RELEASES.resolve(strict=True)
@@ -77,21 +77,21 @@ def active_release(r2_gid):
     if not SHA.fullmatch(commit):
         raise ValueError("current_release_name_invalid")
     release_info = release.lstat()
-    if (release_info.st_uid != 0 or release_info.st_gid != r2_gid
+    if (release_info.st_uid != root_uid or release_info.st_gid != r2_gid
             or stat.S_IMODE(release_info.st_mode) != 0o750):
         raise ValueError("current_release_permissions_invalid")
     marker = release / ".deployment-commit"
-    regular(marker, 0o640, gid=r2_gid)
+    regular(marker, 0o640, uid=root_uid, gid=r2_gid)
     if marker.read_text(encoding="ascii").strip() != commit:
         raise ValueError("current_release_marker_mismatch")
     unit_source = release / "deploy/vps.service"
-    regular(unit_source, 0o640, gid=r2_gid)
+    regular(unit_source, 0o640, uid=root_uid, gid=r2_gid)
     uvicorn = release / ".venv/bin/uvicorn"
     try:
         uvicorn_info = uvicorn.stat()
     except OSError:
         raise ValueError("uvicorn_missing") from None
-    if (not stat.S_ISREG(uvicorn_info.st_mode) or uvicorn_info.st_uid != 0
+    if (not stat.S_ISREG(uvicorn_info.st_mode) or uvicorn_info.st_uid != root_uid
             or uvicorn_info.st_gid != r2_gid or not (uvicorn_info.st_mode & 0o110)):
         raise ValueError("uvicorn_permissions_invalid")
     return release, commit, unit_source, uvicorn
@@ -253,10 +253,7 @@ def start():
             if healthy:
                 break
             time.sleep(0.5)
-        if not healthy or systemd_state(CURRENT.resolve(strict=True))[0:0]:
-            # The empty slice is never true; state is checked explicitly below.
-            pass
-        if not healthy or systemd_properties().get("ActiveState") != "active":
+        if not healthy or systemd_state(CURRENT.resolve(strict=True)) != "active":
             raise ValueError("healthz_not_ready")
         addrs = bound_addresses(18085)
         if not addrs or any(addr != "127.0.0.1:18085" for addr in addrs):
