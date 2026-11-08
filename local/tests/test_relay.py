@@ -6,7 +6,8 @@ from urllib.parse import urlsplit
 import httpx
 import pytest
 
-from r2relay_local.relay import RelayClient, RelayUnavailable, is_upload_part
+from r2relay_local import relay as relay_module
+from r2relay_local.relay import RelayClient, RelayUnavailable, is_upload_part, http2_enabled
 
 URL = "https://abc.r2.cloudflarestorage.com/b/k?uploadId=abc&partNumber=1"
 
@@ -120,9 +121,50 @@ async def test_relay_stage_timing_is_sanitized(caplog, hit):
     assert "total_relay_ms=" in line
     assert "polls=1" in line
     assert "r2_status=403" in line
+    assert "vps_http_version=HTTP/1.1" in line
     assert ("data_upload_ms=na" in line) == hit
     assert ("data_mbps=na" in line) == hit
     for sensitive in ("private-token", "private-signature",
                       "private-execution-id", "private-transfer-id",
                       secret_url, "timing payload"):
         assert sensitive not in line
+
+
+@pytest.mark.parametrize(("value", "expected"), [
+    (None, True), ("1", True), ("0", False),
+])
+def test_http2_env_selection(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("R2_RELAY_HTTP2", raising=False)
+    else:
+        monkeypatch.setenv("R2_RELAY_HTTP2", value)
+    assert http2_enabled() is expected
+
+
+@pytest.mark.parametrize("value", ["", "2", "true", "false", "yes", " 0"])
+def test_http2_env_invalid_fails_closed(monkeypatch, value):
+    monkeypatch.setenv("R2_RELAY_HTTP2", value)
+    with pytest.raises(ValueError, match="R2_RELAY_HTTP2"):
+        http2_enabled()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("value", "expected"), [("0", False), ("1", True)])
+async def test_relay_client_sets_httpx_protocol_flag(monkeypatch, value, expected):
+    actual_client = httpx.AsyncClient
+    created = []
+
+    def construct_client(**kwargs):
+        created.append(kwargs)
+        return actual_client(**kwargs)
+
+    monkeypatch.setenv("R2_RELAY_HTTP2", value)
+    monkeypatch.setattr(relay_module.httpx, "AsyncClient", construct_client)
+    relay = RelayClient("https://vps.example:8443", "secret")
+    try:
+        assert len(created) == 1
+        assert created[0]["http2"] is expected
+        assert created[0]["trust_env"] is False
+        assert created[0]["follow_redirects"] is False
+    finally:
+        await relay.close()
