@@ -374,10 +374,13 @@ def test_bootstrap_uses_a_dedicated_account_and_one_sudo_command():
     assert bootstrap.DEPLOY_USER == "r2relay-deploy"
     assert bootstrap.FORCED_COMMAND.startswith("/usr/bin/sudo -n ")
     assert 'env_keep += "SSH_ORIGINAL_COMMAND"' in bootstrap.SUDOERS_TEXT
+    assert bootstrap.SUDO_COMMAND == "/usr/local/libexec/r2relay_deploy_receiver.py"
+    assert bootstrap.FORCED_COMMAND == "/usr/bin/sudo -n " + bootstrap.SUDO_COMMAND
     assert "NOPASSWD: " + bootstrap.SUDO_COMMAND + ' ""' in bootstrap.SUDOERS_TEXT
+    assert "/usr/bin/python3" not in bootstrap.SUDOERS_TEXT
     assert "ALL=(ALL)" not in bootstrap.SUDOERS_TEXT
     line = bootstrap.authorized_key_line("AAAA", "test")
-    assert line.startswith('command="/usr/bin/sudo -n ')
+    assert line.startswith('command="/usr/bin/sudo -n /usr/local/libexec/r2relay_deploy_receiver.py",restrict ')
     assert ',restrict ssh-ed25519 AAAA test' in line
 
 
