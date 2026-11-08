@@ -360,13 +360,16 @@ def prepare_release(stage: Path, uid: int, gid: int) -> None:
     chown_release(stage, gid)
 
 
-def validate_existing_release(release: Path, uid: int, gid: int, owner_uid: int = 0) -> None:
+def validate_existing_release(
+    release: Path, gid: int, owner_uid: int = 0,
+    python_executable: Path = Path("/usr/bin/python3.11"),
+) -> None:
     """Validate a previously built release before allowing rollback/reuse."""
     def check_directory(path: Path) -> None:
         if path.is_symlink() or not path.is_dir():
             raise DeployError("existing_release_directory_invalid")
         info = path.lstat()
-        if info.st_uid != owner_uid or info.st_gid != gid or info.st_mode & 0o022:
+        if info.st_uid != owner_uid or info.st_gid != gid or info.st_mode & 0o027:
             raise DeployError("existing_release_directory_permissions_invalid")
 
     check_directory(release)
@@ -394,13 +397,13 @@ def validate_existing_release(release: Path, uid: int, gid: int, owner_uid: int 
                 if relative not in allowed_python_links:
                     raise DeployError("existing_release_symlink_unexpected")
                 try:
-                    if path.resolve(strict=True) != Path("/usr/bin/python3.11"):
+                    if path.resolve(strict=True) != python_executable.resolve(strict=True):
                         raise DeployError("existing_release_python_link_invalid")
                 except OSError:
                     raise DeployError("existing_release_python_link_invalid") from None
                 continue
             if (not stat.S_ISREG(info.st_mode) or info.st_uid != owner_uid
-                    or info.st_gid != gid or info.st_mode & 0o022):
+                    or info.st_gid != gid or info.st_mode & 0o027):
                 raise DeployError("existing_release_file_permissions_invalid")
 
     python = bindir / "python"
@@ -409,6 +412,8 @@ def validate_existing_release(release: Path, uid: int, gid: int, owner_uid: int 
     for path in (python, uvicorn, app):
         if not path.exists() or not path.is_file():
             raise DeployError("existing_release_runtime_file_missing")
+    if not (uvicorn.stat().st_mode & 0o110):
+        raise DeployError("existing_release_uvicorn_not_executable")
     run_as_r2relay([
         str(python), "-c",
         "import fastapi, uvicorn, r2relay_vps.app; print('runtime-import-ok')",
@@ -518,7 +523,7 @@ def deploy(sha: str, archive_path: Path) -> dict:
         else:
             if release.is_symlink() or not release.is_dir():
                 raise DeployError("release_path_unsafe")
-            validate_existing_release(release, uid, gid)
+            validate_existing_release(release, gid)
             if previous_was_symlink and Path(previous_target) == release.resolve(strict=True):
                 return {"status": "ALREADY_DEPLOYED", "commit": sha}
             reuse_existing_release = True
