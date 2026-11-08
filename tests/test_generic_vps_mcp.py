@@ -80,4 +80,5 @@ def test_snapshot_and_registration(monkeypatch):
     mod.register(app)
     assert app.registered == ["vps_system_snapshot",
                              "vps_project_doc_read","vps_git_stage",
-                             "vps_r2_install_prepare"]
+                             "vps_r2_install_prepare",
+                             "vps_r2_runtime_smoke", "vps_r2_service_prepare"]

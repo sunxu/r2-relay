@@ -33,7 +33,8 @@ def test_mcp_install_tool_registration(monkeypatch):
     app=App()
     module.register(app)
     assert set(app.items)=={"vps_system_snapshot","vps_project_doc_read",
-                            "vps_git_stage","vps_r2_install_prepare"}
+                            "vps_git_stage","vps_r2_install_prepare",
+                            "vps_r2_runtime_smoke","vps_r2_service_prepare"}
     called=[]
     monkeypatch.setattr(module,"_r2_install_request",lambda a: called.append(a) or {"ok":True})
     assert app.items["vps_r2_install_prepare"]()=={"ok":True}
