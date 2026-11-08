@@ -109,6 +109,7 @@ ChatGPT 在 Issue #41 留下 `/deploy <SHA>` 评论。该评论就是触发事�
 - Caddy、443、8443、自签名证书、MCP 服务和 Tunnel 不修改。
 - 新版本通过 `http://127.0.0.1:18085/healthz` 检查后才报告成功。
 - 失败时恢复旧 systemd unit 和旧 current symlink，再重启旧版本。
+- 如果目标 SHA 已有 release，receiver 会先逐项检查目录/文件所有权、权限、符号链接和 Python runtime import；通过后直接复用，不重复安装，也不覆盖已有版本。这使自动回滚后的同 SHA 重试和已安装旧版本的手工回滚可用。
 - 旧 release 和备份保留，不自动清理。
 
 VPS receiver 会拒绝超限归档、路径穿越、符号链接、硬链接、设备文件、危险权限、Commit marker 不匹配以及非批准 systemd unit 模板。Python 依赖构建在 `r2relay` 非特权账户下执行，不以 Root 运行仓库构建代码。
@@ -128,7 +129,7 @@ VPS receiver 会拒绝超限归档、路径穿越、符号链接、硬链接、�
 
 ## 手工回滚
 
-回滚也是部署一个已知、CI 通过的旧 Commit：
+回滚也是部署一个已知、CI 通过的旧 Commit。若该 SHA 的版本目录仍存在且通过完整性检查，会直接切回该版本；不存在时才重新构建：
 
 ```text
 /deploy <previous-commit-sha>
