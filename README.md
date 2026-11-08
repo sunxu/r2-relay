@@ -17,7 +17,8 @@ Cloudflare R2 Multipart Upload 的 Python 本地 HTTPS 代理与 VPS MD5 内容�
 - [正式需求](docs/requirements/REQUIREMENTS.md) · [验收矩阵](docs/requirements/ACCEPTANCE.md)
 - [架构](docs/architecture/ARCHITECTURE.md) · [API](docs/architecture/API_PROTOCOL.md)
 - [离线验收记录](docs/OFFLINE_ACCEPTANCE.md) · [部署物料](docs/DEPLOYMENT.md)
-- [开发 Agent 规范](AGENTS.md) · [GitHub Runner 真进程全栈验收](docs/RUNNER_FULLSTACK_CN.md)
+- [开发 Agent 规范](AGENTS.md)
+- [部署前离线预检（不需 VPS/R2）](docs/DEPLOYMENT_PREFLIGHT_CN.md) · [GitHub Runner 真进程全栈验收](docs/RUNNER_FULLSTACK_CN.md)
 - [真实 VPS/R2 协议验收（待环境）](https://github.com/sunxu/r2-relay/issues/16) · [真实网络性能验收（待环境）](https://github.com/sunxu/r2-relay/issues/17)
 
 ## RC1 离线审计与演练

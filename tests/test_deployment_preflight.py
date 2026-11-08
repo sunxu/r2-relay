@@ -57,3 +57,27 @@ def test_live_file_permissions_and_no_secret_echo(tmp_path):
     assert secret not in str(failed)
     vps.chmod(0o600)
     assert module.validate(root, "live-files", vps, local)["status"] == "PASS"
+
+def test_wrong_runtime_token_fails_without_leaking(tmp_path):
+    root = copy_deploy(tmp_path)
+    vps = tmp_path / "vps.env"
+    local = tmp_path / "local.env"
+    vps.write_text((root / "deploy/vps.env.example").read_text().replace(
+        "REPLACE_WITH_LONG_RANDOM_SECRET", "secret-vps-" + "a" * 38))
+    local.write_text((root / "deploy/local.env.example").read_text().replace(
+        "REPLACE_WITH_LONG_RANDOM_SECRET", "secret-local-" + "b" * 38))
+    vps.chmod(0o600)
+    local.chmod(0o600)
+    result = module.validate(root, "live-files", vps, local)
+    assert result["status"] == "FAIL"
+    assert "secret-vps" not in str(result)
+    assert "secret-local" not in str(result)
+
+
+def test_duplicate_env_name_fails(tmp_path):
+    root = copy_deploy(tmp_path)
+    target = root / "deploy/vps.env.example"
+    target.write_text(target.read_text() + "\nR2_RELAY_TOKEN=duplicated\n")
+    result = module.validate(root)
+    assert result["status"] == "FAIL"
+    assert result["secrets_emitted"] is False

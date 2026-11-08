@@ -24,7 +24,7 @@ python3 scripts/deployment_preflight.py --mode live-files \
   --report /tmp/r2-preflight-safe.json
 ```
 
-这个模式检查两份本地配置文件权限（不得开放给组/其他用户）、Token 是否匹配且非占位值、URL 与容量配置。**不打印 Token 内容，也不读取 TLS 私钥正文**。不要把真实凭据放进仓库、Issues、CI secrets 以外的日志或 SAFE 报告。
+这个模式检查两份本地配置文件权限（不得开放给组/其他用户）、Token 是否匹配且非占位值、URL 与容量配置；它不校验运行账户、文件属主、真实 TLS 证书链或 systemd 是否已加载。**不打印 Token 内容，也不读取 TLS 私钥正文**。不要把真实凭据放进仓库、Issues、CI secrets 以外的日志或 SAFE 报告。
 
 前置检查的通过仅代表指定的静态策略匹配；仍然不能证明 VPS 上安装路径、用户、systemd 权限、Caddy TLS 证书、真实 R2 SigV4 或网络吞吐已验证。后续依 [Issue #16](https://github.com/sunxu/r2-relay/issues/16) 与 [Issue #17](https://github.com/sunxu/r2-relay/issues/17) 完成。
 
