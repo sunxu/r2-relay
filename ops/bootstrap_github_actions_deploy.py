@@ -34,6 +34,14 @@ SUDOERS_TEXT = (
     'Defaults:r2relay-deploy env_keep += "SSH_ORIGINAL_COMMAND"\n'
     'r2relay-deploy ALL=(root) NOPASSWD: /usr/local/libexec/r2relay_deploy_receiver.py ""\n'
 )
+LEGACY_SUDOERS_TEXT = (
+    'Defaults:r2relay-deploy env_keep += "SSH_ORIGINAL_COMMAND"\n'
+    'r2relay-deploy ALL=(root) NOPASSWD: /usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py ""\n'
+)
+
+
+def is_managed_sudoers_policy(content: str) -> bool:
+    return content in {SUDOERS_TEXT, LEGACY_SUDOERS_TEXT}
 KEY_RE = re.compile(r"^ssh-ed25519 ([A-Za-z0-9+/]+={0,2})(?: (.*))?$")
 
 
@@ -165,7 +173,7 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
         info = SUDOERS.stat()
         if not SUDOERS.is_file() or info.st_uid != 0 or info.st_mode & 0o022:
             raise BootstrapError("sudoers_permissions_invalid")
-        if SUDOERS.read_text(encoding="utf-8") != SUDOERS_TEXT:
+        if not is_managed_sudoers_policy(SUDOERS.read_text(encoding="utf-8")):
             raise BootstrapError("sudoers_file_conflict")
     if RECEIVER_DEST.is_symlink():
         raise BootstrapError("receiver_destination_symlink")
