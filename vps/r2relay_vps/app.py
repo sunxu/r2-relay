@@ -51,6 +51,12 @@ class State:
         self.max_concurrent = int(os.environ.get("R2_RELAY_MAX_CONCURRENT", "16"))
         self.execution_ttl = int(os.environ.get("R2_RELAY_EXECUTION_TTL", "900"))
         self.semaphore = asyncio.Semaphore(self.max_concurrent)
+        # Cap retained base64 response payloads independently of execution count.
+        self.max_retained_result_bytes = int(
+            os.environ.get("R2_RELAY_MAX_RETAINED_RESULT_BYTES", str(64 * 1024 * 1024))
+        )
+        self.retained_result_bytes = 0
+        self.retained_sizes: dict[int, int] = {}
 
     def prune(self):
         now = time.time()
@@ -58,7 +64,9 @@ class State:
                    if record["status"] in ("FAILED", "SUCCEEDED")
                    and now - record.get("finished_at", now) >= self.execution_ttl]
         for key in expired:
-            self.executions.pop(key, None)
+            item = self.executions.pop(key, None)
+            if item is not None:
+                self.retained_result_bytes -= self.retained_sizes.pop(id(item), 0)
         stale = [key for key, (_execution_id, _p, created) in self.transfers.items()
                  if now - created >= self.execution_ttl]
         for key in stale:
@@ -79,6 +87,20 @@ class State:
                 record["status"] = "FAILED"
                 record["relay_error"] = {"type": type(exc).__name__, "message": str(exc)}
             finally:
+                # A full response body can be up to 8 MiB. Without a separate
+                # retention budget, 512 terminal records could exhaust VPS RAM.
+                upstream = record.get("upstream_response")
+                retained = len(upstream.get("body_base64", "")) if upstream else 0
+                if retained and self.retained_result_bytes + retained > self.max_retained_result_bytes:
+                    record.pop("upstream_response", None)
+                    record["status"] = "FAILED"
+                    record["relay_error"] = {
+                        "type": "ResultMemoryBudgetExceeded",
+                        "message": "R2 result cannot be safely retained",
+                    }
+                else:
+                    self.retained_result_bytes += retained
+                    self.retained_sizes[id(record)] = retained
                 record["finished_at"] = time.time()
                 self.metrics["r2_executions_finished"] += 1
                 self.metrics["r2_attempts"] += record.get("attempts", 0)
@@ -216,6 +238,7 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
         return {
             **state.metrics,
             "cache_entry_count": len(state.store.entries),
+            "retained_result_bytes": state.retained_result_bytes,
             "execution_record_count": len(state.executions),
             "active_execution_count": sum(
                 1 for item in state.executions.values()
