@@ -63,13 +63,13 @@ def atomically_install(dest: Path, data: bytes, group: int):
             os.unlink(temp)
 
 
-def create_backup_dir():
+def create_backup_dir(expected_uid=0, expected_gid=0):
     if BACKUP_ROOT.is_symlink():
         raise ValueError("backup_root_symlink")
     BACKUP_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
     root_stat = BACKUP_ROOT.lstat()
-    if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != 0
-            or root_stat.st_mode & 0o077):
+    if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != expected_uid
+            or root_stat.st_gid != expected_gid or stat.S_IMODE(root_stat.st_mode) != 0o700):
         raise ValueError("backup_root_permissions_invalid")
     path = BACKUP_ROOT / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
                           + "-" + secrets.token_hex(4))
