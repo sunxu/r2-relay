@@ -237,3 +237,25 @@ def test_first_deploy_rollback_removes_new_pointer(tmp_path, monkeypatch):
     assert unit.read_text() == "legacy unit"
     assert not current.exists()
     assert not current.is_symlink()
+
+
+def test_production_workflow_is_owner_gated_and_requires_deployment_checks():
+    workflow = (ROOT / ".github/workflows/deploy-production.yml").read_text(encoding="utf-8")
+    assert "issue_comment:" in workflow
+    assert "github.event.issue.number == 41" in workflow
+    assert "github.event.issue.pull_request == null" in workflow
+    assert "github.event.comment.user.login == 'sunxu'" in workflow
+    assert 're.fullmatch(r"/deploy ([0-9a-f]{40})"' in workflow
+    assert "git merge-base --is-ancestor" in workflow
+    assert 'select(.name == "deploy-tests")' in workflow
+    assert "StrictHostKeyChecking=yes" in workflow
+    assert "VPS_HOST: 104.224.168.192" in workflow
+    assert "workflow_dispatch:" not in workflow
+    assert "push:" not in workflow
+
+
+def test_deployment_tests_run_on_main_push():
+    workflow = (ROOT / ".github/workflows/deploy-tests.yml").read_text(encoding="utf-8")
+    assert "push:" in workflow
+    assert "branches: [main]" in workflow
+    assert "pull_request:" in workflow
