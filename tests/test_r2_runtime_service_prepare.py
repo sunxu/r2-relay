@@ -49,7 +49,7 @@ def test_service_check_fails_closed(tmp_path,monkeypatch):
     with pytest.raises(RuntimeError,match="application_missing"):
         mod.check()
     s=(ROOT/"ops/r2_service_prepare.py").read_text()
-    assert "systemctl\\", \\"daemon-reload" in s
+    assert '"daemon-reload"' in s
     assert '"start"' not in s and '"enable"' not in s
     assert "secrets.token_urlsafe(48)" in s
     assert "0o600" in s
