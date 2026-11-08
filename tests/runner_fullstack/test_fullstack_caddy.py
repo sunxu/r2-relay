@@ -90,7 +90,7 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
                  str(fixture_dir), "--host", "127.0.0.1", "--port", str(vps_port)]),
         ("caddy", ["docker", "run", "--rm", "--network", "host",
                    "-v", f"{tmp_path}:/config:ro", "caddy:2",
-                   "run", "--config", "/config/Caddyfile"]),
+                   "caddy", "run", "--config", "/config/Caddyfile"]),
         ("proxy", ["mitmdump", "--mode", "regular", "--listen-host", "127.0.0.1",
                    "--listen-port", str(proxy_port), "--set",
                    f"confdir={tmp_path / 'mitmconf'}", "--set", "upstream_cert=false",
