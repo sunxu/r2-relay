@@ -37,3 +37,29 @@ def test_no_path_argument_or_shell(monkeypatch):
     assert len(commands) == len(mod.SERVICES) + 1
     assert all(cmd[0] in ("/usr/bin/ss", "/usr/bin/systemctl") for cmd in commands)
     assert all("Environment" not in " ".join(cmd) for cmd in commands)
+
+
+def test_path_inspection_distinguishes_missing_and_permission_denied(monkeypatch, tmp_path):
+    target = tmp_path / "vps.env"
+
+    def missing():
+        raise FileNotFoundError(2, "missing")
+
+    monkeypatch.setattr(type(target), "lstat", lambda self: missing())
+    assert mod.inspect_path(target) == {"exists": False, "error": "not_found"}
+
+    def denied():
+        raise PermissionError(13, "permission denied")
+
+    monkeypatch.setattr(type(target), "lstat", lambda self: denied())
+    assert mod.inspect_path(target) == {"exists": None, "error": "permission_denied"}
+
+
+def test_path_inspection_does_not_follow_symlinks(tmp_path):
+    target = tmp_path / "target"
+    target.write_text("private")
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    result = mod.inspect_path(link)
+    assert result["exists"] is True
+    assert result["type"] == "symlink"
