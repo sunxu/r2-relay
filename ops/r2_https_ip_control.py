@@ -11,6 +11,7 @@ import pwd
 import grp
 import shutil
 import stat
+import socket
 import subprocess
 import tempfile
 import ssl
@@ -148,6 +149,7 @@ def write_exclusive(path, content, mode):
 
 def prepare():
     initial=preflight()
+    before_443=listeners(443)
     created=[]
     try:
         install_binary()
@@ -172,7 +174,7 @@ def prepare():
         run(["/usr/sbin/runuser","-u",IDENTITY,"--",
              str(BINARY),"validate","--config",str(CONFIG),
              "--adapter","caddyfile"], timeout=25)
-        if listeners(443)!=listeners(443) or listeners(8443):
+        if listeners(443)!=before_443 or listeners(8443):
             raise ValueError("unexpected_listener")
         return {"status":"HTTPS_PREPARED_NOT_STARTED",
                 "service_started":False,"auto_enabled":False,
@@ -207,14 +209,18 @@ def check_prepared():
         raise ValueError("8443_not_free")
 
 def local_tls(ip):
-    address=f"https://[{ip}]:8443/healthz" if ":" in ip else f"https://{ip}:8443/healthz"
-    context=ssl.create_default_context(cafile=str(CA))
-    context.check_hostname=True
-    opener=urllib.request.build_opener(urllib.request.HTTPSHandler(context=context),
-                                      urllib.request.ProxyHandler({}))
-    with opener.open(address,timeout=8) as response:
-        if response.status!=200 or b'"status":"ok"' not in response.read(256):
-            raise ValueError("tls_health_check_failed")
+    """Connect to loopback, but verify the certificate against each public IP SAN."""
+    host = f"[{ip}]" if ":" in ip else ip
+    context = ssl.create_default_context(cafile=str(CA))
+    context.check_hostname = True
+    with socket.create_connection(("127.0.0.1", 8443), timeout=8) as raw:
+        with context.wrap_socket(raw, server_hostname=ip) as tls:
+            tls.settimeout(8)
+            tls.sendall(("GET /healthz HTTP/1.1\\r\\nHost: " + host +
+                         ":8443\\r\\nConnection: close\\r\\n\\r\\n").encode())
+            result = tls.recv(4096)
+            if not result.startswith(b"HTTP/1.1 200 "):
+                raise ValueError("tls_health_check_failed")
 
 def fingerprint():
     if not CA.exists() or CA.is_symlink():
@@ -242,11 +248,11 @@ def start():
         local_tls(IP6)
         if listeners(443)!=before_443:
             raise ValueError("443_changed_after_tls")
-        return {"status":"HTTPS_IP_DUALSTACK_LOCAL_PASS",
+        return {**fp,"status":"HTTPS_IP_SAN_LOCAL_PASS",
                 "ipv4":IP4,"ipv6":IP6, "listener_8443":listeners(8443),
                 "port_443_preserved":True,
                 "private_key_emitted":False,"real_r2_tested":False,
-                "external_connectivity_verified":False, **fp}
+                "external_connectivity_verified":False}
     except Exception:
         if invoked:
             run(["/usr/bin/systemctl","stop",SERVICE],timeout=25,ok=False)
@@ -269,7 +275,7 @@ def main():
              "private_key_emitted":False}
     print(json.dumps(out,sort_keys=True))
     return 0 if out["status"] in ("HTTPS_PREFLIGHT_PASS","HTTPS_PREPARED_NOT_STARTED",
-        "HTTPS_IP_DUALSTACK_LOCAL_PASS","CA_FINGERPRINT_READY") else 1
+        "HTTPS_IP_SAN_LOCAL_PASS","CA_FINGERPRINT_READY") else 1
 
 if __name__=="__main__":
     raise SystemExit(main())
