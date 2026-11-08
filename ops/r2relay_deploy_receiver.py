@@ -35,7 +35,7 @@ SERVICE = "r2-relay-vps.service"
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_UNPACKED_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 6000
-SHA_RE = re.compile(r"[0-9a-f]{40}\\Z")
+SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 REQUIRED = {
     "vps/pyproject.toml",
     "vps/r2relay_vps/app.py",
