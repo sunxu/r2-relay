@@ -1,6 +1,8 @@
 name: VPS deployment controller tests
 
 on:
+  push:
+    branches: [main]
   pull_request:
     paths:
       - "ops/r2relay_deploy_receiver.py"
