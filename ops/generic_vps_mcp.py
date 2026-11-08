@@ -1,6 +1,8 @@
 """通用 VPS MCP：只读状态、受限文档读取、固定仓库 Git Stage。"""
 from __future__ import annotations
 import fcntl
+import json
+import socket
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -127,6 +129,30 @@ def _stage(project, commit, *, base=WORKSPACE):
 def git_stage(project, commit):
     return _stage(project, commit)
 
+
+def _r2_install_request(action: str):
+    if action not in ("r2_install_dry_run", "r2_install_apply"):
+        return {"error": "action_denied"}
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(700)
+            connection.connect("/run/r2-rootd/control.sock")
+            connection.sendall(json.dumps({"action": action}).encode())
+            buffer = bytearray()
+            while True:
+                item = connection.recv(4096)
+                if not item:
+                    break
+                buffer.extend(item)
+                if len(buffer) > 16384:
+                    return {"error": "rootd_response_too_large"}
+        payload = json.loads(buffer)
+        if not isinstance(payload, dict):
+            return {"error": "rootd_response_invalid"}
+        return payload
+    except (OSError, UnicodeError, ValueError):
+        return {"error": "rootd_unavailable"}
+
 def register(mcp):
     @mcp.tool()
     def vps_system_snapshot() -> dict:
@@ -142,3 +168,9 @@ def register(mcp):
     def vps_git_stage(project: str, commit: str) -> dict:
         """仅下载预先审批的固定仓库 SHA，不执行或安装任何代码。"""
         return git_stage(project, commit)
+
+    @mcp.tool()
+    def vps_r2_install_prepare(apply: bool = False) -> dict:
+        """固定 Commit 的 R2 Relay 安装准备；默认只校验，apply 会写入 /opt/r2-relay，但不启动服务。"""
+        return _r2_install_request(
+            "r2_install_apply" if apply else "r2_install_dry_run")
