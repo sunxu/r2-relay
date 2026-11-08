@@ -1,0 +1,150 @@
+name: ChatGPT-controlled VPS production deployment
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  checks: read
+  issues: write
+
+concurrency:
+  group: r2-relay-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event.issue.number == 41 &&
+      github.event.issue.pull_request == null &&
+      github.event.comment.user.login == 'sunxu' &&
+      startsWith(github.event.comment.body, '/deploy ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VPS_HOST: 104.224.168.192
+      VPS_USER: root
+      VPS_PORT: '22'
+    steps:
+      - name: Checkout trusted deployment controller
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Parse deployment command
+        id: target
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          body = os.environ.get("COMMENT_BODY", "")
+          match = re.fullmatch(r"/deploy ([0-9a-f]{40})", body.strip())
+          if not match:
+              raise SystemExit("Rejected: expected exactly /deploy <40-char lowercase SHA>")
+          print("sha=" + match.group(1))
+          PY
+
+      - name: Verify target commit is on main
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          git merge-base --is-ancestor "$TARGET_SHA" origin/main
+
+      - name: Require successful CI checks for target commit
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          checks="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/check-runs" --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv')"
+          if [ -z "$checks" ]; then
+            echo "No GitHub check runs found for target commit."
+            exit 1
+          fi
+          success_count=0
+          while IFS=$'\t' read -r name status conclusion; do
+            printf '%s\t%s\t%s\n' "$name" "$status" "$conclusion"
+            [ "$status" = "completed" ] || { echo "Check is not complete: $name"; exit 1; }
+            case "$conclusion" in
+              success) success_count=$((success_count + 1)) ;;
+              skipped|neutral) ;;
+              *) echo "Check did not pass: $name ($conclusion)"; exit 1 ;;
+            esac
+          done <<< "$checks"
+          [ "$success_count" -gt 0 ] || { echo "No successful CI check found."; exit 1; }
+
+      - name: Configure pinned SSH identity
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_SSH_KEY" || { echo "Missing VPS_DEPLOY_SSH_KEY"; exit 1; }
+          test -n "$DEPLOY_KNOWN_HOSTS" || { echo "Missing VPS_SSH_KNOWN_HOSTS"; exit 1; }
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/r2-relay-deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/r2-relay-deploy" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/r2-relay-deploy" >/dev/null
+          ssh-keygen -F "$VPS_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null
+
+      - name: Build exact source archive
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git archive --format=tar "$TARGET_SHA" > "$RUNNER_TEMP/r2-relay-release.tar"
+          printf '%s\n' "$TARGET_SHA" > "$RUNNER_TEMP/.deployment-commit"
+          tar --append --file="$RUNNER_TEMP/r2-relay-release.tar" -C "$RUNNER_TEMP" .deployment-commit
+          test -s "$RUNNER_TEMP/r2-relay-release.tar"
+          test "$(wc -c < "$RUNNER_TEMP/r2-relay-release.tar")" -le 67108864
+
+      - name: Deploy through restricted forced-command SSH
+        id: deploy
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          response="$(
+            ssh -T \
+              -i "$HOME/.ssh/r2-relay-deploy" \
+              -p "$VPS_PORT" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              -o ClearAllForwardings=yes \
+              -o RequestTTY=no \
+              "$VPS_USER@$VPS_HOST" "deploy $TARGET_SHA" \
+              < "$RUNNER_TEMP/r2-relay-release.tar"
+          )"
+          printf '%s\n' "$response"
+          printf '%s\n' "$response" > "$RUNNER_TEMP/deploy-response.json"
+          python - "$RUNNER_TEMP/deploy-response.json" <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          if data.get("status") not in ("DEPLOYED", "ALREADY_DEPLOYED"):
+              raise SystemExit("VPS receiver did not confirm deployment success")
+          print("deployment_status=" + data["status"])
+          print("deployed_sha=" + data.get("commit", ""))
+          PY
+
+      - name: Publish deployment receipt
+        if: always()
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha || 'not-parsed' }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          body="**R2 Relay production deployment: $JOB_RESULT**"$'\n\n'"Requested Commit: `$TARGET_SHA`"$'\n'"Workflow run: $run_url"
+          if [ -f "$RUNNER_TEMP/deploy-response.json" ]; then
+            body+=$'\n\n'"VPS receipt: `$(cat "$RUNNER_TEMP/deploy-response.json")`"
+          fi
+          gh issue comment 41 --repo "$GITHUB_REPOSITORY" --body "$body"
