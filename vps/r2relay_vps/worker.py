@@ -26,6 +26,19 @@ async def file_chunks(path: Path):
             yield chunk
 
 
+async def raw_response_chunks(response: httpx.Response):
+    """Read original wire bytes from live streams and pre-read mock responses.
+
+    MockTransport may provide an already-consumed response content stream.
+    Reading .aiter_raw() again would raise StreamConsumed in that case.
+    """
+    if response.is_stream_consumed:
+        yield response.content
+    else:
+        async for chunk in response.aiter_raw():
+            yield chunk
+
+
 class R2Worker:
     def __init__(self, *, transport: httpx.AsyncBaseTransport | None = None,
                  delays: tuple[float, ...] = (2, 4, 8)):
@@ -54,7 +67,7 @@ class R2Worker:
                         "PUT", spec["url"], headers=headers, content=file_chunks(path)
                     ) as response:
                         body = bytearray()
-                        async for chunk in response.aiter_raw():
+                        async for chunk in raw_response_chunks(response):
                             if len(body) + len(chunk) > MAX_RESPONSE_BODY:
                                 record["relay_error"] = {
                                     "type": "ResponseTooLarge",
