@@ -86,7 +86,7 @@ Bootstrap 会：
 - 对该 key 设置固定 Forced Command：`sudo -n /usr/local/libexec/r2relay_deploy_receiver.py`；receiver 使用固定 `/usr/bin/python3` shebang，sudoers 对这个可执行文件路径设置 `NOPASSWD` 并以 `""` 限定零参数。不要把 `/usr/bin/python3` 本身列为 sudo 授权命令，否则可能扩大为任意 Root Python 执行。
 - 在 `/etc/sudoers.d/r2-relay-deploy` 中只允许不带任何额外参数地执行这一条固定命令，并仅保留 receiver 所需的 `SSH_ORIGINAL_COMMAND` 环境变量；
 - 若同名部署账号已存在，必须已经无密码登录能力且没有额外组；未锁定账号直接拒绝，不擅自改变其账户状态；若账号不存在但残留同名 Home 目录，也直接拒绝，避免误删既有数据；
-- 使用 `visudo -cf` 验证 sudoers；备份原有 authorized_keys、sudoers 和 receiver；
+- 使用 `visudo -cf` 验证 sudoers；备份原有 authorized_keys、sudoers 和 receiver。升级时只接受脚本已知的精确旧版 sudoers 文本或当前新版文本，其他自定义规则一律拒绝，不会覆盖未知授权；
 - 启用 OpenSSH `restrict`，禁用 PTY、端口转发、Agent 转发和 X11 转发；
 - 不修改 sshd 配置，不重启 sshd，不修改 Caddy、443、8443、Token 或缓存。
 
