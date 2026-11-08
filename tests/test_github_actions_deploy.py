@@ -47,7 +47,7 @@ def test_receiver_build_id_is_in_every_emitted_receipt(capsys):
     receiver.emit("TEST", marker="ok")
     import json
     payload = json.loads(capsys.readouterr().out)
-    assert payload["receiver_build_id"] == receiver.RECEIVER_BUILD_ID
+    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v3-release-group-read-permissions"
     assert payload["marker"] == "ok"
 
 
