@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -20,7 +21,7 @@ FILES = {
     "ops/generic_vps_mcp.py": Path("/opt/r2-mcp/generic_vps_mcp.py"),
     # The legacy connector executes this fixed inspection module from the
     # retained /opt/r2-relay tree. Keep it read-only and update it atomically.
-    "ops/deployment_inspect.py": Path("/opt/r2-relay/ops/deployment_inspect.py"),
+    "ops/deployment_inspect.py": Path("/opt/r2-relay/scripts/deployment_inspect.py"),
 }
 BACKUP_ROOT = Path("/var/backups/vps-mcp/r2-loopback-control-upgrade")
 SHA = re.compile(r"[0-9a-f]{40}\\Z")
@@ -67,7 +68,7 @@ def create_backup_dir():
         raise ValueError("backup_root_symlink")
     BACKUP_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
     root_stat = BACKUP_ROOT.lstat()
-    if (not root_stat.st_mode & 0o170000 == 0o040000 or root_stat.st_uid != 0
+    if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != 0
             or root_stat.st_mode & 0o077):
         raise ValueError("backup_root_permissions_invalid")
     path = BACKUP_ROOT / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
