@@ -434,13 +434,15 @@ def deploy(sha: str, archive_path: Path) -> dict:
 
         members, archive_info = validate_archive(archive_path, sha)
         stage = Path(tempfile.mkdtemp(prefix=".staging-" + sha + "-", dir=RELEASES))
-        shutil.rmtree(stage)
         extract_archive(archive_path, stage, members)
         try:
-            prepare_release(stage, uid, gid)
+            # Move source to its immutable final path before creating the venv:
+            # console-script shebangs embed the absolute venv path.
             os.rename(stage, release)
+            prepare_release(release, uid, gid)
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
+            shutil.rmtree(release, ignore_errors=True)
             raise
 
         BACKUPS.mkdir(mode=0o700, parents=True, exist_ok=True)
