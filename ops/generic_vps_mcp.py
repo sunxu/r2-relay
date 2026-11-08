@@ -133,7 +133,9 @@ def git_stage(project, commit):
 def _r2_install_request(action: str):
     if action not in ("r2_install_dry_run", "r2_install_apply",
                        "r2_runtime_smoke", "r2_service_prepare",
-                       "r2_service_verify", "r2_loopback_start"):
+                       "r2_service_verify", "r2_loopback_start",
+                       "r2_https_preflight", "r2_https_prepare",
+                       "r2_https_start", "r2_https_ca_fingerprint"):
         return {"error": "action_denied"}
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -196,3 +198,23 @@ def register(mcp):
     def vps_r2_loopback_start() -> dict:
         """只启动绑定 127.0.0.1:18085 的服务，健康失败回滚。"""
         return _r2_install_request("r2_loopback_start")
+
+    @mcp.tool()
+    def vps_r2_https_preflight() -> dict:
+        """只读 HTTPS 8443 准入检查，不下载软件、不创建证书。"""
+        return _r2_install_request("r2_https_preflight")
+
+    @mcp.tool()
+    def vps_r2_https_prepare() -> dict:
+        """固定 IP 的 Caddy 二进制、systemd 配置准备及静态校验；不启动。"""
+        return _r2_install_request("r2_https_prepare")
+
+    @mcp.tool()
+    def vps_r2_https_start() -> dict:
+        """固定 Caddy HTTPS 8443 启动和双栈 TLS 自检，失败停止；不启用开机自启。"""
+        return _r2_install_request("r2_https_start")
+
+    @mcp.tool()
+    def vps_r2_https_ca_fingerprint() -> dict:
+        """只报告本地 Caddy 根 CA 公钥证书 SHA256 指纹及路径，永不返回私钥。"""
+        return _r2_install_request("r2_https_ca_fingerprint")
