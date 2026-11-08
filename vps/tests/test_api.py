@@ -51,3 +51,39 @@ async def test_reject_non_r2_target(tmp_path):
         r = await client.post("/v1/parts/prepare", json=payload,
                               headers={"Authorization":"Bearer testing"})
         assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_benchmark_sink_requires_auth_and_discards_bounded_body(tmp_path):
+    app = create_app(CacheStore(tmp_path), token="testing")
+    body = b"network-only-payload" * 1024
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        unauth = await client.put("/v1/bench/sink", content=body)
+        assert unauth.status_code == 401
+        response = await client.put(
+            "/v1/bench/sink", content=body,
+            headers={"Authorization": "Bearer testing"},
+        )
+        assert response.status_code == 200
+        result = response.json()
+        assert result["status"] == "received_and_discarded"
+        assert result["received_bytes"] == len(body)
+        assert result["server_elapsed_ms"] >= 0
+        assert result["server_mbps"] >= 0
+        assert not list(tmp_path.rglob("*"))
+
+
+@pytest.mark.asyncio
+async def test_benchmark_sink_rejects_oversized_body(tmp_path, monkeypatch):
+    monkeypatch.setenv("R2_RELAY_BENCH_MAX_BYTES", "8")
+    app = create_app(CacheStore(tmp_path), token="testing")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.put(
+            "/v1/bench/sink", content=b"123456789",
+            headers={"Authorization": "Bearer testing"},
+        )
+        assert response.status_code == 413
