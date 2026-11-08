@@ -92,6 +92,10 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
         raise BootstrapError("ssh_directory_permissions_invalid")
     if AUTHORIZED_KEYS.is_symlink():
         raise BootstrapError("authorized_keys_symlink")
+    if AUTHORIZED_KEYS.exists():
+        key_stat = AUTHORIZED_KEYS.stat()
+        if not AUTHORIZED_KEYS.is_file() or key_stat.st_uid != 0 or key_stat.st_mode & 0o022:
+            raise BootstrapError("authorized_keys_permissions_invalid")
     old_keys = AUTHORIZED_KEYS.read_bytes() if AUTHORIZED_KEYS.exists() else b""
     old_lines = old_keys.decode("utf-8").splitlines()
     if encoded in existing_key_data(old_lines):
@@ -112,9 +116,15 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
                 "receiver_destination": str(RECEIVER_DEST)}
 
     if RECEIVER_DEST.is_symlink():
+        if RECEIVER_DEST.parent.is_symlink():
+            raise BootstrapError("receiver_parent_symlink")
+        if RECEIVER_DEST.parent.exists() and not RECEIVER_DEST.parent.is_dir():
+            raise BootstrapError("receiver_parent_not_directory")
         raise BootstrapError("receiver_destination_symlink")
     if RECEIVER_DEST.exists() and RECEIVER_DEST.stat().st_uid != 0:
         raise BootstrapError("receiver_destination_not_root_owned")
+    if BACKUPS.is_symlink():
+        raise BootstrapError("backup_directory_symlink")
     BACKUPS.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(BACKUPS, 0o700)
     safe_fingerprint = fingerprint.replace("SHA256:", "").replace("/", "_").replace("+", "-").replace("=", "")
