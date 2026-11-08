@@ -82,7 +82,7 @@ ssh root@104.224.168.192 \
 Bootstrap 会：
 - 创建独立系统账号 `r2relay-deploy`，Home 为 `/var/lib/r2relay-deploy`，不使用 Root SSH 身份；
 - 把 Root receiver 安装到 `/usr/local/libexec/r2relay_deploy_receiver.py`；
-- 仅向部署账号的 `~/.ssh/authorized_keys` 追加专用公钥；
+- 仅管理部署账号的专用公钥；升级时只识别并替换本项目此前精确生成的旧 ForcedCommand 行，保留相同公钥和限制选项，拒绝未知 key 或授权选项；
 - 对该 key 设置固定 Forced Command：`sudo -n /usr/local/libexec/r2relay_deploy_receiver.py`；receiver 使用固定 `/usr/bin/python3` shebang，sudoers 对这个可执行文件路径设置 `NOPASSWD` 并以 `""` 限定零参数。不要把 `/usr/bin/python3` 本身列为 sudo 授权命令，否则可能扩大为任意 Root Python 执行。
 - 在 `/etc/sudoers.d/r2-relay-deploy` 中只允许不带任何额外参数地执行这一条固定命令，并仅保留 receiver 所需的 `SSH_ORIGINAL_COMMAND` 环境变量；
 - 若同名部署账号已存在，必须已经无密码登录能力且没有额外组；未锁定账号直接拒绝，不擅自改变其账户状态；若账号不存在但残留同名 Home 目录，也直接拒绝，避免误删既有数据；
