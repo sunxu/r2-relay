@@ -12,6 +12,7 @@ sudo install -d -o r2relay -g r2relay -m 0700 /var/lib/r2-relay/cache
 sudo install -d -o root -g root -m 0700 /etc/r2-relay
 # 将已审查代码放到 /opt/r2-relay
 python3.11 -m venv /opt/r2-relay/.venv
+/opt/r2-relay/.venv/bin/pip install -r /opt/r2-relay/requirements/rc1-direct.txt
 /opt/r2-relay/.venv/bin/pip install -e /opt/r2-relay/vps
 # 将 deploy/vps.env.example 复制为 /etc/r2-relay/vps.env，填写随机 token
 sudo chmod 0600 /etc/r2-relay/vps.env
@@ -44,9 +45,9 @@ python -m r2relay_local
 
 当前无 VPS 和 R2 时运行：
 ```bash
-python -m pip install -e './vps[test]' -e './local[test]'
-cd vps && python -m pytest -q
-cd ../local && python -m pytest -q
+python -m pip install -r requirements/rc1-direct.txt
+python -m pip install -e ./vps -e ./local
+python scripts/rc1_offline.py
 ```
 
 `local/tests/test_real_fullstack.py` 启动真实 mitmdump 和 TLS VPS（回环），注入 httpx MockTransport 取代外部 R2；测试 MISS/HIT、重试、实际 ETag、缓存唯一性。完整外网验证、真实 ETag 和性能报告必须等环境可用后再做。

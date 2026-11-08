@@ -19,6 +19,11 @@ Cloudflare R2 Multipart Upload 的 Python 本地 HTTPS 代理与 VPS MD5 内容�
 - [离线验收记录](docs/OFFLINE_ACCEPTANCE.md) · [部署物料](docs/DEPLOYMENT.md)
 - [开发 Agent 规范](AGENTS.md)
 
+## RC1 离线审计与演练
+
+- [RC1 审计结论及待验收项](docs/RC1_AUDIT.md)
+- [RC1 单命令验证](scripts/rc1_offline.py)（完全使用模拟 R2，不触发外网云端上传）
+
 ## 运行本地模拟
 
 ```bash
