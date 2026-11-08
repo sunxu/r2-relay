@@ -216,8 +216,8 @@ def local_tls(ip):
     with socket.create_connection(("127.0.0.1", 8443), timeout=8) as raw:
         with context.wrap_socket(raw, server_hostname=ip) as tls:
             tls.settimeout(8)
-            tls.sendall(("GET /healthz HTTP/1.1\\r\\nHost: " + host +
-                         ":8443\\r\\nConnection: close\\r\\n\\r\\n").encode())
+            tls.sendall(("GET /healthz HTTP/1.1\r\nHost: " + host +
+                         ":8443\r\nConnection: close\r\n\r\n").encode())
             result = tls.recv(4096)
             if not result.startswith(b"HTTP/1.1 200 "):
                 raise ValueError("tls_health_check_failed")
