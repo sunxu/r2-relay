@@ -1,6 +1,8 @@
 """Read-only, allowlisted inspection for a Debian R2 Relay MCP connector."""
 from pathlib import Path
+import errno
 import re
+import stat
 import subprocess
 
 SERVICES = ("r2-relay-vps.service", "caddy.service", "docker.service",
@@ -24,6 +26,24 @@ def _run(args):
         return -1, ""
 
 
+def inspect_path(path: Path) -> dict:
+    """Distinguish a missing path from one that cannot be inspected."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return {"exists": False, "error": "not_found"}
+    except PermissionError:
+        return {"exists": None, "error": "permission_denied"}
+    except OSError as exc:
+        return {"exists": None, "error": f"os_error_{exc.errno or 'unknown'}"}
+
+    mode = info.st_mode
+    kind = ("symlink" if stat.S_ISLNK(mode)
+            else "directory" if stat.S_ISDIR(mode)
+            else "file" if stat.S_ISREG(mode) else "other")
+    return {"exists": True, "type": kind, "mode": oct(mode & 0o777)}
+
+
 def deployment_inspect() -> dict:
     """Inspect a fixed set of services, paths and listening ports only."""
     services = {}
@@ -37,20 +57,7 @@ def deployment_inspect() -> dict:
             "active": fields.get("ActiveState", "unknown"),
             "query_ok": code == 0,
         }
-    files = {}
-    for name in FILES:
-        path = Path(name)
-        try:
-            info = path.lstat()
-            files[name] = {
-                "exists": True,
-                "type": ("symlink" if path.is_symlink()
-                         else "directory" if path.is_dir()
-                         else "file" if path.is_file() else "other"),
-                "mode": oct(info.st_mode & 0o777),
-            }
-        except OSError:
-            files[name] = {"exists": False}
+    files = {name: inspect_path(Path(name)) for name in FILES}
     listeners = {str(port): [] for port in PORTS}
     code, text = _run(["/usr/bin/ss", "-H", "-lnt"])
     if code == 0:
