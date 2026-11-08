@@ -370,6 +370,40 @@ def test_production_workflow_is_owner_gated_and_requires_deployment_checks():
     assert "push:" not in workflow
 
 
+def test_bootstrap_upgrades_only_the_exact_legacy_forced_command_key():
+    encoded = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
+    legacy = (
+        'command="' + bootstrap.LEGACY_FORCED_COMMAND
+        + '",restrict ssh-ed25519 ' + encoded + " r2-relay-github-actions\n"
+    ).encode()
+    updated, exists = bootstrap.update_authorized_keys(
+        legacy, encoded, "r2-relay-github-actions"
+    )
+    assert exists is True
+    assert updated.decode() == bootstrap.authorized_key_line(
+        encoded, "r2-relay-github-actions"
+    ) + "\n"
+    repeated, exists_again = bootstrap.update_authorized_keys(
+        updated, encoded, "r2-relay-github-actions"
+    )
+    assert exists_again is True
+    assert repeated == updated
+
+
+def test_bootstrap_rejects_unknown_authorized_key_options():
+    encoded = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="
+    unknown = (
+        'command="/bin/sh",restrict ssh-ed25519 '
+        + encoded + " r2-relay-github-actions\n"
+    ).encode()
+    try:
+        bootstrap.update_authorized_keys(unknown, encoded, "r2-relay-github-actions")
+    except bootstrap.BootstrapError as exc:
+        assert str(exc) == "unexpected_deploy_account_authorized_key"
+    else:
+        raise AssertionError("unknown authorized_keys command accepted")
+
+
 def test_bootstrap_accepts_only_current_or_exact_legacy_sudoers_policy():
     assert bootstrap.is_managed_sudoers_policy(bootstrap.SUDOERS_TEXT)
     assert bootstrap.is_managed_sudoers_policy(bootstrap.LEGACY_SUDOERS_TEXT)
