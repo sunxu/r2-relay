@@ -1,6 +1,5 @@
 """Read-only, allowlisted inspection for a Debian R2 Relay MCP connector."""
 from pathlib import Path
-import errno
 import re
 import stat
 import subprocess
