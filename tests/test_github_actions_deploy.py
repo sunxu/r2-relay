@@ -317,19 +317,19 @@ def test_bootstrap_reports_only_password_lock_state(tmp_path):
 
 
 def test_deployment_lock_requires_root_owned_private_regular_file(tmp_path, monkeypatch):
-    from types import SimpleNamespace
+    import os
     import stat
 
     lock_path = tmp_path / "deploy.lock"
     monkeypatch.setattr(receiver, "LOCK", lock_path)
-    monkeypatch.setattr(receiver.os, "fstat", lambda _fd: SimpleNamespace(
-        st_mode=stat.S_IFREG | 0o600, st_uid=0, st_nlink=1
+    monkeypatch.setattr(receiver.os, "fstat", lambda _fd: os.stat_result(
+        (stat.S_IFREG | 0o600, 1, 1, 1, 0, 0, 0, 0, 0, 0)
     ))
     fd = receiver.open_deploy_lock()
     receiver.os.close(fd)
 
-    monkeypatch.setattr(receiver.os, "fstat", lambda _fd: SimpleNamespace(
-        st_mode=stat.S_IFREG | 0o644, st_uid=0, st_nlink=1
+    monkeypatch.setattr(receiver.os, "fstat", lambda _fd: os.stat_result(
+        (stat.S_IFREG | 0o644, 1, 1, 1, 0, 0, 0, 0, 0, 0)
     ))
     try:
         receiver.open_deploy_lock()
