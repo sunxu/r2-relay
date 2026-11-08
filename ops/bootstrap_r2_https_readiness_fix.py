@@ -14,7 +14,7 @@ from urllib.request import urlopen
 REPO_FILE="ops/r2_https_ip_control.py"
 TARGET=Path("/usr/local/libexec/r2_https_ip_control.py")
 BACKUP_ROOT=Path("/var/backups/vps-mcp")
-SHA=re.compile(r"[0-9a-f]{40}\\Z")
+SHA=re.compile(r"[0-9a-f]{40}$")
 
 def install(commit,apply=False):
     if os.geteuid()!=0:
