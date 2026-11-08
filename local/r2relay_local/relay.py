@@ -20,8 +20,12 @@ EXECUTION_TERMINAL = frozenset({"SUCCEEDED", "FAILED"})
 def is_upload_part(method: str, url: str) -> bool:
     if method.upper() != "PUT":
         return False
-    parts = urlsplit(url)
-    if parts.scheme != "https" or parts.port not in (None, 443):
+    try:
+        parts = urlsplit(url)
+        allowed_port = parts.port in (None, 443)
+    except ValueError:
+        return False
+    if parts.scheme != "https" or not allowed_port:
         return False
     hostname = parts.hostname or ""
     if not hostname.endswith(".r2.cloudflarestorage.com"):
@@ -85,11 +89,19 @@ class RelayClient:
                 **kwargs,
             )
             if result.status_code == 507:
-                raise RelayStorageUnavailable("VPS rejected cache write before R2")
+                if method == "PUT" and path.startswith("/v1/parts/data/"):
+                    # Only the data endpoint promises no R2 worker started.
+                    raise RelayStorageUnavailable("VPS rejected cache write before R2")
+                raise RelayOutcomeUnknown("unexpected VPS HTTP 507 outside cache staging")
             if result.status_code >= 500:
-                raise RelayUnavailable(f"VPS HTTP {result.status_code}")
+                # A reverse proxy can emit 5xx after the backend has accepted
+                # Prepare and started a HIT PUT. Only failed TCP connect is
+                # provably safe for a direct fallback.
+                raise RelayOutcomeUnknown(f"VPS HTTP {result.status_code} is ambiguous")
             if result.status_code >= 400:
-                raise RelayUnavailable(f"VPS protocol HTTP {result.status_code}")
+                # Authentication/configuration and invalid protocol are not
+                # evidence of network unavailability; never bypass to R2.
+                raise RelayOutcomeUnknown(f"VPS protocol HTTP {result.status_code}")
             return result
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             # Connection was not established: safe to bypass the VPS.
@@ -120,12 +132,12 @@ class RelayClient:
             status = decision["status"]
             execution_id = decision["execution_id"]
         except (ValueError, TypeError, KeyError) as exc:
-            raise RelayUnavailable("VPS invalid prepare response") from exc
+            raise RelayOutcomeUnknown("VPS invalid prepare response") from exc
         if status == "MISS":
             try:
                 transfer = decision["transfer_id"]
             except KeyError as exc:
-                raise RelayUnavailable("VPS missing transfer_id") from exc
+                raise RelayOutcomeUnknown("VPS missing transfer_id") from exc
             try:
                 await self._request(
                     "PUT", f"/v1/parts/data/{transfer}",
@@ -140,7 +152,7 @@ class RelayClient:
                 # The VPS might have staged the full part and begun R2 PUT.
                 raise RelayOutcomeUnknown("VPS data transfer acknowledgement was lost") from exc
         elif status != "HIT":
-            raise RelayUnavailable(f"VPS invalid cache status {status!r}")
+            raise RelayOutcomeUnknown(f"VPS invalid cache status {status!r}")
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.execution_timeout
@@ -153,7 +165,7 @@ class RelayClient:
                 data = result.json()
                 current = data["status"]
             except (ValueError, TypeError, KeyError) as exc:
-                raise RelayUnavailable("VPS malformed execution result") from exc
+                raise RelayOutcomeUnknown("VPS malformed execution result") from exc
             if current in EXECUTION_TERMINAL:
                 upstream = data.get("upstream_response")
                 if upstream:
@@ -167,11 +179,11 @@ class RelayClient:
                             body=base64.b64decode(upstream["body_base64"], validate=True),
                         )
                     except (KeyError, ValueError, TypeError) as exc:
-                        raise RelayUnavailable("VPS malformed R2 result") from exc
+                        raise RelayOutcomeUnknown("VPS malformed R2 result") from exc
                 # No R2 status existed. Do not claim the error came from R2.
                 reason = data.get("relay_error", {})
                 raise RelayOutcomeUnknown(f"VPS execution ended without R2 response: {reason}")
             if current not in ("QUEUED", "RUNNING", "RETRY_WAIT"):
-                raise RelayUnavailable(f"VPS invalid execution status {current!r}")
+                raise RelayOutcomeUnknown(f"VPS invalid execution status {current!r}")
             await asyncio.sleep(self.poll_interval)
         raise RelayOutcomeUnknown("VPS execution timeout; R2 result is unknown")
