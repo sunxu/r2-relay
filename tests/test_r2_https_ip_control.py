@@ -106,7 +106,42 @@ def test_start_failed_tls_checks_stop_service(monkeypatch):
     commands=[]
     monkeypatch.setattr(m,"run",lambda args,**kw: commands.append(args) or "")
     monkeypatch.setattr(m,"fingerprint",lambda: (_ for _ in ()).throw(ValueError("ca_missing")))
-    with pytest.raises(ValueError,match="ca_missing"):
+    with pytest.raises(ValueError,match="https_start_stage_ca_fingerprint"):
         m.start()
     assert ["/usr/bin/systemctl","start",m.SERVICE] in commands
+    assert ["/usr/bin/systemctl","stop",m.SERVICE] in commands
+
+def test_start_waits_for_delayed_8443(monkeypatch):
+    m=load("https_delayed","ops/r2_https_ip_control.py")
+    monkeypatch.setattr(m,"check_prepared",lambda:None)
+    monkeypatch.setattr(m,"run",lambda args,**kw:"")
+    monkeypatch.setattr(m,"service_state",lambda name:"active")
+    probes={"port":0}
+    def bound(port):
+        if port==443: return ["*:443"]
+        if port==8443:
+            probes["port"]+=1
+            return [] if probes["port"]==1 else ["0.0.0.0:8443"]
+        return []
+    monkeypatch.setattr(m,"listeners",bound)
+    monkeypatch.setattr(m,"fingerprint",lambda: {"status":"CA_FINGERPRINT_READY"})
+    calls=[]
+    monkeypatch.setattr(m,"local_tls",lambda ip:calls.append(ip))
+    monkeypatch.setattr("time.sleep",lambda n:None)
+    r=m.start()
+    assert r["status"]=="HTTPS_IP_SAN_LOCAL_PASS"
+    assert calls==[m.IP4,m.IP6]
+
+def test_start_failure_reports_safe_stage(monkeypatch):
+    m=load("https_failure_stage","ops/r2_https_ip_control.py")
+    monkeypatch.setattr(m,"check_prepared",lambda:None)
+    commands=[]
+    monkeypatch.setattr(m,"run",lambda args,**kw:commands.append(args) or "")
+    monkeypatch.setattr(m,"service_state",lambda name:"active")
+    monkeypatch.setattr(m,"listeners",lambda port:["*:443"] if port==443 else ["*:8443"])
+    monkeypatch.setattr(m,"fingerprint",lambda:{"status":"CA_FINGERPRINT_READY"})
+    monkeypatch.setattr(m,"local_tls",lambda ip:(_ for _ in ()).throw(ValueError("sensitive details")))
+    with pytest.raises(ValueError,match="https_start_stage_tls_ipv4") as err:
+        m.start()
+    assert "sensitive" not in str(err.value)
     assert ["/usr/bin/systemctl","stop",m.SERVICE] in commands

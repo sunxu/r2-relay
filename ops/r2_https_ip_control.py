@@ -309,16 +309,31 @@ def start():
     check_prepared()
     before_443=listeners(443)
     invoked=False
+    stage="systemd_start"
     try:
         invoked=True
         run(["/usr/bin/systemctl","start",SERVICE],timeout=40)
-        if service_state(SERVICE)!="active" or listeners(443)!=before_443:
-            raise ValueError("service_or_443_changed")
-        if not listeners(8443):
-            raise ValueError("8443_not_listening")
+        # systemctl reports a started process before Caddy necessarily binds.
+        stage="wait_https_listener"
+        import time
+        deadline=time.monotonic()+15
+        while True:
+            if listeners(443)!=before_443:
+                raise ValueError("443_changed")
+            if service_state(SERVICE)!="active":
+                raise ValueError("caddy_not_active")
+            if listeners(8443):
+                break
+            if time.monotonic()>=deadline:
+                raise ValueError("8443_not_ready")
+            time.sleep(0.25)
+        stage="ca_fingerprint"
         fp=fingerprint()
+        stage="tls_ipv4"
         local_tls(IP4)
+        stage="tls_ipv6"
         local_tls(IP6)
+        stage="port_boundary"
         if listeners(443)!=before_443:
             raise ValueError("443_changed_after_tls")
         return {**fp,"status":"HTTPS_IP_SAN_LOCAL_PASS",
@@ -329,7 +344,8 @@ def start():
     except Exception:
         if invoked:
             run(["/usr/bin/systemctl","stop",SERVICE],timeout=25,ok=False)
-        raise
+        # Expose only a fixed, nonsecret diagnostic stage.
+        raise ValueError("https_start_stage_"+stage) from None
 
 def main():
     p=argparse.ArgumentParser()
@@ -345,6 +361,7 @@ def main():
              start() if a.start else fingerprint())
     except Exception as exc:
         out={"status":"HTTPS_IP_CONTROL_FAILED","error_type":type(exc).__name__,
+             "failure_stage": str(exc) if str(exc).startswith("https_start_stage_") else "unspecified",
              "private_key_emitted":False}
     print(json.dumps(out,sort_keys=True))
     return 0 if out["status"] in ("HTTPS_PREFLIGHT_PASS","HTTPS_PREPARED_NOT_STARTED",
