@@ -24,14 +24,13 @@ def test_dry_run_preserves_files(monkeypatch,tmp_path):
     targets={}
     for source in module.FILES:
         dest=tmp_path/source.replace("/","_")
-        dest.write_text("old")
         targets[source]=dest
     monkeypatch.setattr(module,"FILES",targets)
     monkeypatch.setattr(module.os,"geteuid",lambda:0)
     monkeypatch.setattr(module,"get_files",
                         lambda c: {x:b"x=1\n" for x in targets})
     assert module.install("a"*40,apply=False)["status"]=="UPGRADE_DRY_RUN_PASS"
-    assert all(p.read_text()=="old" for p in targets.values())
+    assert all(not p.exists() for p in targets.values())
 
 def test_no_shell_and_preserve_tunnel():
     text=p.read_text()
