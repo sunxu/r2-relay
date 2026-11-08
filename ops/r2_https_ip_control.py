@@ -19,7 +19,8 @@ import ssl
 IP4 = "104.224.168.192"
 IP6 = "2607:8700:5500:a47f::2"
 BINARY = Path("/usr/local/libexec/r2-caddy")
-CONFIG = Path("/etc/r2-relay/Caddyfile.ip")
+CONF_DIR = Path("/etc/r2-caddy")
+CONFIG = CONF_DIR / "Caddyfile"
 UNIT = Path("/etc/systemd/system/caddy.service")
 DATA = Path("/var/lib/r2-caddy")
 CA = DATA / "data/caddy/pki/authorities/local/root.crt"
@@ -50,7 +51,7 @@ Environment=HOME=/var/lib/r2-caddy
 Environment=XDG_DATA_HOME=/var/lib/r2-caddy/data
 Environment=XDG_CONFIG_HOME=/var/lib/r2-caddy/config
 WorkingDirectory=/var/lib/r2-caddy
-ExecStart=/usr/local/libexec/r2-caddy run --environ --config /etc/r2-relay/Caddyfile.ip --adapter caddyfile
+ExecStart=/usr/local/libexec/r2-caddy run --environ --config /etc/r2-caddy/Caddyfile --adapter caddyfile
 Restart=on-failure
 RestartSec=4
 NoNewPrivileges=true
@@ -105,7 +106,7 @@ def preflight():
         raise ValueError("existing_443_not_listening")
     if listeners(8443):
         raise ValueError("port_8443_occupied")
-    if UNIT.exists() or UNIT.is_symlink() or CONFIG.exists() or CONFIG.is_symlink():
+    if CONF_DIR.exists() or CONF_DIR.is_symlink() or UNIT.exists() or UNIT.is_symlink() or CONFIG.exists() or CONFIG.is_symlink():
         raise ValueError("caddy_existing_configuration")
     if BINARY.exists() or BINARY.is_symlink() or DATA.exists() or DATA.is_symlink():
         raise ValueError("caddy_existing_files")
@@ -163,6 +164,9 @@ def prepare():
         created.append(DATA)
         os.chown(DATA,owner,group)
         os.chmod(DATA,0o700)
+        CONF_DIR.mkdir(mode=0o755)
+        created.append(CONF_DIR)
+        os.chmod(CONF_DIR,0o755)
         write_exclusive(CONFIG,CADDYFILE,0o644)
         created.append(CONFIG)
         write_exclusive(UNIT,SYSTEMD,0o644)
@@ -184,6 +188,8 @@ def prepare():
             try:
                 if path == DATA:
                     shutil.rmtree(path)
+                elif path == CONF_DIR:
+                    path.rmdir()
                 else:
                     path.unlink(missing_ok=True)
             except OSError:
@@ -197,6 +203,9 @@ def check_prepared():
         st=path.lstat()
         if not stat.S_ISREG(st.st_mode) or st.st_uid!=0:
             raise ValueError("prepared_file_invalid")
+    conf_state = CONF_DIR.lstat()
+    if not stat.S_ISDIR(conf_state.st_mode) or conf_state.st_uid != 0 or stat.S_IMODE(conf_state.st_mode) != 0o755:
+        raise ValueError("caddy_config_directory_permissions")
     if UNIT.read_text()!=SYSTEMD or CONFIG.read_text()!=CADDYFILE:
         raise ValueError("prepared_config_mismatch")
     state = DATA.lstat()

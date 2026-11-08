@@ -20,6 +20,7 @@ def test_no_domains_and_443_binding():
     assert "reverse_proxy 127.0.0.1:18085" in m.CADDYFILE
     assert "auto_https disable_redirects" in m.CADDYFILE
     assert ":443 {" not in m.CADDYFILE and ":80 {" not in m.CADDYFILE
+    assert "/etc/r2-caddy/Caddyfile" in m.SYSTEMD
     assert "User=r2caddy" in m.SYSTEMD and "NoNewPrivileges=true" in m.SYSTEMD
     assert "ProtectSystem=strict" in m.SYSTEMD
     assert "ReadWritePaths=/var/lib/r2-caddy" in m.SYSTEMD
