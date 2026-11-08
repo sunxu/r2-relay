@@ -248,6 +248,7 @@ def test_production_workflow_is_owner_gated_and_requires_deployment_checks():
     assert 're.fullmatch(r"/deploy ([0-9a-f]{40})"' in workflow
     assert "git merge-base --is-ancestor" in workflow
     assert 'select(.name == "deploy-tests")' in workflow
+    assert '[ "$conclusion" = "success" ]' in workflow
     assert "StrictHostKeyChecking=yes" in workflow
     assert "VPS_HOST: 104.224.168.192" in workflow
     assert "workflow_dispatch:" not in workflow
