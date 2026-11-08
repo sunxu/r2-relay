@@ -24,7 +24,7 @@ FILES = {
     "ops/deployment_inspect.py": Path("/opt/r2-relay/scripts/deployment_inspect.py"),
 }
 BACKUP_ROOT = Path("/var/backups/vps-mcp/r2-loopback-control-upgrade")
-SHA = re.compile(r"[0-9a-f]{40}\\Z")
+SHA = re.compile(r"[0-9a-f]{40}\Z")
 SERVICES = ("r2-rootd.service", "r2-mcp.service")
 
 
