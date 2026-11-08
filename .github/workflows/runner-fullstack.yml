@@ -1,0 +1,44 @@
+name: Runner full-stack acceptance
+on:
+  pull_request:
+    paths:
+      - "tests/runner_fullstack/**"
+      - "vps/**"
+      - "local/**"
+      - "requirements/**"
+      - ".github/workflows/runner-fullstack.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fullstack:
+    name: Real Caddy/TLS/mitmproxy/VPS/Mock R2 on one Runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      R2_RELAY_RUN_RUNNER_FULLSTACK: "1"
+      R2_RELAY_RUNNER_REPORT: ${{ github.workspace }}/artifacts/runner-fullstack-safe.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned direct dependencies and project code
+        run: |
+          python -m pip install -r requirements/rc1-direct.txt
+          python -m pip install -e ./local -e ./vps
+      - name: Prepare Docker engine and report location
+        run: |
+          mkdir -p artifacts
+          docker info >/dev/null
+          docker pull caddy:2
+      - name: Real process network acceptance
+        run: python -m pytest -vv -s tests/runner_fullstack/test_fullstack_caddy.py
+      - name: Upload safe report and process diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-fullstack-safe-report
+          path: artifacts/runner-fullstack-safe.json
+          if-no-files-found: warn
+          retention-days: 30
