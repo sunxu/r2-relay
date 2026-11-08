@@ -117,7 +117,7 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
         raise BootstrapError("receiver_destination_not_root_owned")
     BACKUPS.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(BACKUPS, 0o700)
-    backup = BACKUPS / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + fingerprint[-12:])
+    safe_fingerprint = fingerprint.replace("SHA256:", "").replace("/", "_").replace("+", "-").replace("=", "")\n    backup = BACKUPS / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + safe_fingerprint[-12:])
     backup.mkdir(mode=0o700)
     if AUTHORIZED_KEYS.exists():
         shutil.copy2(AUTHORIZED_KEYS, backup / "authorized_keys")
