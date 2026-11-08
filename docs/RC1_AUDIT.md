@@ -1,8 +1,8 @@
 # R2 Relay RC1 离线候选版审计
 
 日期：2026-11-08  
-范围：`feat/m2-local-proxy-v01` / Draft PR #14（堆叠于 Draft PR #13）。  
-结论：**离线候选版，非生产发布批准**。RC1 Gate 必须对最终 Commit 完成 SUCCESS 后，才可标记本轮离线检查通过。
+范围：RC1 离线实现已通过 [PR #15](https://github.com/sunxu/r2-relay/pull/15) 合并到 `main`，Merge Commit `18e068a923238bccb83b2e8a77fe25ac4f7abb32`；PR #13、#14 已作为历史开发记录关闭。  
+结论：**RC1 离线验收基线已合并，非生产发布批准**。GitHub Runner 全栈、RC1 Gate、VPS/Local、离线基准与治理检查已在源 Commit `6f73ecff928433a76855544ffc9b29e6ff06d705` 上成功；合并后 `main` 的 VPS/Local CI 也已通过。
 
 ## 审查结论与证据
 
@@ -41,10 +41,15 @@ python scripts/rc1_offline.py
 4. R2 响应上限 8MiB；超限按内部错误拒绝，不能宣称任意大小响应完全透传。
 5. MD5 唯一内容缓存键、不校验 VPS 接收端二次 MD5、首次相同 MD5 不做互斥是已批准取舍；并非防碰撞/防污染系统。
 6. 单 VPS Worker、进程内执行记录，重启只恢复缓存文件，不恢复进行中的任务。
-7. 现有 Draft PR #13 尚未包含 PR #14 的 RC1 修补。**不能单独把旧 M1 快照视为 RC1 安全版本；合并前必须整理修复进入 main 的顺序**。
+7. 旧 PR #13 的 M1 快照及 PR #14 的后续 RC1 修复已由 PR #15 整体合并；后续以 `main` 的合并提交为唯一 RC1 源代码基线，不单独部署旧分支。
 
 ## 最终审批条件
 
 - GitHub RC1 offline gate、Local/VPS tests、Offline benchmark smoke、PR governance 全部在**相同最终 Commit** PASS；
 - 真实环境阻断明确标记 `NOT_TESTED`，不是 `PASS`；
-- 由仓库 Owner 决定合并/发布；当前不部署、不合并。
+- Owner 已批准并合并 RC1 离线基线；**未批准生产部署**。真实外部验收请跟踪 [Issue #16](https://github.com/sunxu/r2-relay/issues/16) 和 [Issue #17](https://github.com/sunxu/r2-relay/issues/17)。
+
+## 合并后说明
+
+- [PR #15](https://github.com/sunxu/r2-relay/pull/15) 已合并；[Runner 全栈 CI](https://github.com/sunxu/r2-relay/actions/runs/42443068248) 通过。
+- 对 Mock R2 的 HMAC 见证码校验不是 AWS SigV4；VPS 公网与真实 R2 仍为 `NOT_TESTED`。

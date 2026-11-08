@@ -1,6 +1,6 @@
 # 验收矩阵
 
-状态：全部待实现、待实测。不得以设计完成代替验收通过。
+状态：RC1 已通过 GitHub Runner 的模拟/本地真实进程测试；**尚未完成真实 VPS 公网、Cloudflare R2 和实际带宽验收**。各 Txx 的原始通过条件保持不变；不得将模拟覆盖误写为真实生产 PASS。
 
 | 测试 ID | 需求 | 场景与通过条件 |
 |---|---|---|
@@ -24,3 +24,10 @@
 | T18 | RLY-001/012 | 代理重启、VPS 停机、HTTP/2 断链、签名参数复杂时不破坏正常上传路径。 |
 
 验收证据：测试命令、环境、代码 commit、原始计数器和日志、错误注入方法、PASS/FAIL。性能要求以本地到 VPS 可用带宽为基准，明确协议开销；对照原始直传 R2。
+
+## RC1 模拟环境与未完成验收的区分
+
+- **已通过 Runner 离线全栈**：aiohttp → mitmdump CONNECT/TLS → Caddy HTTPS/HTTP2 `8443` → VPS Uvicorn → 独立 Mock R2 TCP 服务；验证 MD5 缓存 HIT/MISS、模拟 502/429 重试及 403、ETag 透传、VPS 进程重启后缓存恢复。证据：[Actions #42443068248](https://github.com/sunxu/r2-relay/actions/runs/42443068248)，[中文说明](../RUNNER_FULLSTACK_CN.md)。
+- **已通过 Runner 离线负载**：100 × 10 MiB 并发 8，第二轮缓存命中时本地→VPS 分片正文为 0 B。仅是 Runner 内部模拟，不能替代 T16 对并发 4/8/16 的真实网络 P95、RSS 与失败率要求。
+- **待外部环境**：真实 VPS、Cloudflare R2 的 SigV4、真实 ETag、Multipart Complete、公网传输和超时/故障行为；对应 [Issue #16](https://github.com/sunxu/r2-relay/issues/16)、[Issue #17](https://github.com/sunxu/r2-relay/issues/17)。
+- **状态定义**：`PASS_SIMULATED` 仅表示对应模拟场景通过；`NOT_TESTED_REAL` 表示真实环境尚无证据，绝不等同于 `PASS_REAL`。

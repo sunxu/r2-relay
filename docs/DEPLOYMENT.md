@@ -1,6 +1,6 @@
 # R2 Relay 部署说明（预备材料，当前未部署）
 
-本文件是部署物料，不代表真实 VPS/R2 已验证。本地代理默认 `127.0.0.1:18585`，VPS HTTPS `8443`（443 已被占用）；只部署经过审核的正式 Commit，生产执行必须另行授权。
+RC1 离线代码已合并到 `main`（PR #15）；**本文件仍只是部署预备材料**，不代表真实 VPS/R2 已验证。本地代理默认 `127.0.0.1:18585`，VPS HTTPS `8443`（443 已被占用）；只部署经过审核的正式 Commit，生产执行必须另行授权。
 
 ## 1. VPS Python API
 
@@ -50,7 +50,7 @@ python -m pip install -e ./vps -e ./local
 python scripts/rc1_offline.py
 ```
 
-`local/tests/test_real_fullstack.py` 启动真实 mitmdump 和 TLS VPS（回环），注入 httpx MockTransport 取代外部 R2；测试 MISS/HIT、重试、实际 ETag、缓存唯一性。完整外网验证、真实 ETag 和性能报告必须等环境可用后再做。
+`local/tests/test_real_fullstack.py` 启动真实 mitmdump 和 TLS VPS（回环），注入 httpx MockTransport 取代外部 R2；测试 MISS/HIT、重试、实际 ETag、缓存唯一性。Runner 实际 Caddy/Mock R2 全栈验证可参见 [RUNNER_FULLSTACK_CN.md](RUNNER_FULLSTACK_CN.md)。完整外网验证、真实 Cloudflare R2 ETag 和性能报告必须等环境可用后再做。
 
 ## 5. 回滚
 

@@ -34,3 +34,7 @@ CI 自动在 PR 变更对应目录时触发，或 Actions → Runner full-stack 
 - JSON 机器报告作为 Actions artifact `runner-fullstack-safe-report` 上传；含 Commit、真实协议组件、模拟请求次数与 `NOT_TESTED` 的 Cloudflare R2/SigV4/公网/带宽边界。
 
 这些结论只针对 GitHub Runner 内部服务，不能用作真实 VPS/R2 的生产验收。测试用独立 HMAC 见证码不等价于 AWS SigV4。
+
+## 主分支状态
+
+RC1 已由 [PR #15](https://github.com/sunxu/r2-relay/pull/15) 合并到 `main`（Merge Commit `18e068a923238bccb83b2e8a77fe25ac4f7abb32`）。测试环境不等于生产部署；真实协议和性能分别由 Issues [#16](https://github.com/sunxu/r2-relay/issues/16)、[#17](https://github.com/sunxu/r2-relay/issues/17) 跟踪。
