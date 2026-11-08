@@ -306,7 +306,7 @@ def chown_release(root: Path, gid: int) -> None:
                 continue
             mode = path.stat().st_mode
             os.chown(path, 0, gid, follow_symlinks=False)
-            os.chmod(path, 0o750 if mode & 0o111 else 0o640)
+            os.chmod(path, 0o700 if mode & 0o111 else 0o600)
         for name in dirs:
             path = base / name
             if path.is_symlink():
@@ -333,9 +333,9 @@ def chown_build_tree(root: Path, uid: int, gid: int) -> None:
             if path.is_symlink():
                 raise DeployError("build_source_symlink_unexpected")
             os.chown(path, uid, gid, follow_symlinks=False)
-            os.chmod(path, 0o750)
+            os.chmod(path, 0o700)
         os.chown(base, uid, gid, follow_symlinks=False)
-        os.chmod(base, 0o750)
+        os.chmod(base, 0o700)
 
 def run_as_r2relay(argv: list[str], timeout: int = 120) -> None:
     result = subprocess.run(
@@ -376,7 +376,7 @@ def prepare_release(stage: Path, uid: int, gid: int) -> None:
     build_root = Path(tempfile.mkdtemp(prefix="r2-relay-build-", dir="/var/tmp"))
     try:
         os.chown(build_root, uid, gid)
-        os.chmod(build_root, 0o750)
+        os.chmod(build_root, 0o700)
         build_source = build_root / "vps"
         shutil.copytree(stage / "vps", build_source, symlinks=False)
         chown_build_tree(build_source, uid, gid)
