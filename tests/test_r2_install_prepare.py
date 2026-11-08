@@ -54,3 +54,26 @@ def test_rc1_vps_direct_dependencies_pinned():
     assert "uvicorn==0.54.0" in source
     assert "httpx[http2]==0.28.1" in source
     assert '"--no-deps"' in source
+
+def test_git_archive_pax_commit_comment_allowed():
+    data=io.BytesIO()
+    with tarfile.open(fileobj=data,mode="w",format=tarfile.PAX_FORMAT) as tf:
+        for name in app.REQUIRED:
+            info=tarfile.TarInfo(name)
+            info.type=tarfile.REGTYPE
+            info.size=1
+            info.pax_headers={"comment": app.COMMIT}
+            tf.addfile(info,io.BytesIO(b"x"))
+    assert app.verify_members(data.getvalue())["files"] == len(app.REQUIRED)
+
+def test_reject_unexpected_pax_metadata():
+    data=io.BytesIO()
+    with tarfile.open(fileobj=data,mode="w",format=tarfile.PAX_FORMAT) as tf:
+        for name in app.REQUIRED:
+            info=tarfile.TarInfo(name)
+            info.type=tarfile.REGTYPE
+            info.size=1
+            info.pax_headers={"path": "../escaped"}
+            tf.addfile(info,io.BytesIO(b"x"))
+    with pytest.raises(ValueError):
+        app.verify_members(data.getvalue())

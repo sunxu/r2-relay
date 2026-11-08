@@ -50,7 +50,8 @@ def verify_members(archive):
                 if (not name or path.is_absolute() or ".." in path.parts
                         or name in names or "\\" in name
                         or not (member.isfile() or member.isdir())
-                        or member.pax_headers):
+                        or (member.pax_headers and
+                            member.pax_headers != {"comment": COMMIT})):
                     raise ValueError("unsafe_archive_member")
                 names.add(name)
                 if member.isfile():
