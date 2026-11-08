@@ -188,3 +188,53 @@ def test_bootstrap_detects_existing_key_without_rewriting():
     assert bootstrap.existing_key_data([
         'command="/usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py",restrict ssh-ed25519 AAAA comment'
     ]) == {"AAAA"}
+
+
+def test_automatic_rollback_restores_unit_and_previous_release(tmp_path, monkeypatch):
+    release_root = tmp_path / "releases"
+    release_root.mkdir()
+    previous = release_root / ("b" * 40)
+    current_release = release_root / SHA
+    previous.mkdir()
+    current_release.mkdir()
+    current = tmp_path / "current"
+    current.symlink_to(current_release)
+    unit = tmp_path / "r2-relay-vps.service"
+    unit.write_text("new unit")
+    backup = tmp_path / "backup.service"
+    backup.write_text("old unit")
+
+    monkeypatch.setattr(receiver, "CURRENT", current)
+    monkeypatch.setattr(receiver, "RELEASES", release_root)
+    monkeypatch.setattr(receiver, "UNIT", unit)
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: None)
+    monkeypatch.setattr(receiver, "health_check", lambda attempts=25: True)
+
+    assert receiver.restore(backup, str(previous), True) is True
+    assert unit.read_text() == "old unit"
+    assert current.is_symlink()
+    assert current.resolve() == previous
+
+
+def test_first_deploy_rollback_removes_new_pointer(tmp_path, monkeypatch):
+    release_root = tmp_path / "releases"
+    release_root.mkdir()
+    current_release = release_root / SHA
+    current_release.mkdir()
+    current = tmp_path / "current"
+    current.symlink_to(current_release)
+    unit = tmp_path / "r2-relay-vps.service"
+    unit.write_text("new unit")
+    backup = tmp_path / "backup.service"
+    backup.write_text("legacy unit")
+
+    monkeypatch.setattr(receiver, "CURRENT", current)
+    monkeypatch.setattr(receiver, "RELEASES", release_root)
+    monkeypatch.setattr(receiver, "UNIT", unit)
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: None)
+    monkeypatch.setattr(receiver, "health_check", lambda attempts=25: True)
+
+    assert receiver.restore(backup, "", False) is True
+    assert unit.read_text() == "legacy unit"
+    assert not current.exists()
+    assert not current.is_symlink()
