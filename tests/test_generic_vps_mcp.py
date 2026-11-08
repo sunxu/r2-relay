@@ -50,7 +50,7 @@ def test_stage_fixed_argv(tmp_path, monkeypatch):
     sha="a"*40
     def fake(args, **kwargs):
         calls.append(args)
-        return {"exit_code":0,"stdout":sha+"\\n" if "rev-parse" in args else "",
+        return {"exit_code":0,"stdout":sha+"\n" if "rev-parse" in args else "",
                 "stderr":""}
     monkeypatch.setattr(mod, "run_fixed", fake)
     result=mod._stage("r2-relay", sha, base=root)
