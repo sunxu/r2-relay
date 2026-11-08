@@ -20,8 +20,12 @@ EXECUTION_TERMINAL = frozenset({"SUCCEEDED", "FAILED"})
 def is_upload_part(method: str, url: str) -> bool:
     if method.upper() != "PUT":
         return False
-    parts = urlsplit(url)
-    if parts.scheme != "https" or parts.port not in (None, 443):
+    try:
+        parts = urlsplit(url)
+        allowed_port = parts.port in (None, 443)
+    except ValueError:
+        return False
+    if parts.scheme != "https" or not allowed_port:
         return False
     hostname = parts.hostname or ""
     if not hostname.endswith(".r2.cloudflarestorage.com"):
@@ -90,7 +94,10 @@ class RelayClient:
                     raise RelayStorageUnavailable("VPS rejected cache write before R2")
                 raise RelayOutcomeUnknown("unexpected VPS HTTP 507 outside cache staging")
             if result.status_code >= 500:
-                raise RelayUnavailable(f"VPS HTTP {result.status_code}")
+                # A reverse proxy can emit 5xx after the backend has accepted
+                # Prepare and started a HIT PUT. Only failed TCP connect is
+                # provably safe for a direct fallback.
+                raise RelayOutcomeUnknown(f"VPS HTTP {result.status_code} is ambiguous")
             if result.status_code >= 400:
                 # Authentication/configuration and invalid protocol are not
                 # evidence of network unavailability; never bypass to R2.
