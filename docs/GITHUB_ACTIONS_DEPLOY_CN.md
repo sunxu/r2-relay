@@ -181,3 +181,7 @@ GitHub Actions Workflow 和部署代码合并，不等于 VPS 已完成 bootstra
 ## Deployment failure diagnostics
 
 Every receiver response includes `receiver_build_id`, allowing the empty-archive smoke test to prove which root-owned receiver version is installed without accepting a deployment archive. Runtime preparation failures identify the exact fixed step (`venv_create`, `pip_requirements`, `pip_project`, or `runtime_import`) and exit code. Raw subprocess stdout/stderr is deliberately not returned in the SSH receipt, avoiding accidental disclosure of package-index credentials or environment data.
+
+## Release source permissions
+
+The deployed release source is owned by `root:r2relay`. Regular files use `0640`, executable files use `0750`, and directories use `0750`: the service account can read/traverse source through its group but cannot modify it. Do not use `0600` for regular release files; that denies the `r2relay` group read access and prevents the service account from reading the requirements lockfile and Python modules. The disposable package-build copy remains owned by `r2relay` with private writable modes.
