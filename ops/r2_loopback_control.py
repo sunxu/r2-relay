@@ -20,7 +20,7 @@ ENV_DIR = Path("/etc/r2-relay")
 ENV_FILE = ENV_DIR / "vps.env"
 CACHE = Path("/var/lib/r2-relay/cache")
 SERVICE = "r2-relay-vps.service"
-SHA = re.compile(r"[0-9a-f]{40}\\Z")
+SHA = re.compile(r"[0-9a-f]{40}\Z")
 BOUNDS = {
     "R2_RELAY_MAX_EXECUTIONS": (1, 100000),
     "R2_RELAY_MAX_CONCURRENT": (1, 1024),
