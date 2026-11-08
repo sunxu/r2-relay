@@ -248,11 +248,14 @@ def validate_host_state() -> tuple[int, int, str]:
     if CACHE.is_symlink() or not CACHE.is_dir():
         raise DeployError("cache_directory_missing_or_unsafe")
     cache_stat = CACHE.stat()
-    if cache_stat.st_uid != account.pw_uid or cache_stat.st_gid != group.gr_gid:
-        raise DeployError("cache_directory_owner_invalid")
+    if cache_stat.st_uid != account.pw_uid or cache_stat.st_gid != group.gr_gid or cache_stat.st_mode & 0o077:
+        raise DeployError("cache_directory_owner_or_permissions_invalid")
     if UNIT.is_symlink() or not UNIT.is_file():
         raise DeployError("service_unit_missing_or_unsafe")
-    unit_stat = UNIT.stat()\n    if unit_stat.st_uid != 0 or unit_stat.st_mode & 0o022:\n        raise DeployError("service_unit_permissions_invalid")\n    unit_text = UNIT.read_text(encoding="utf-8")
+    unit_stat = UNIT.stat()
+    if unit_stat.st_uid != 0 or unit_stat.st_mode & 0o022:
+        raise DeployError("service_unit_permissions_invalid")
+    unit_text = UNIT.read_text(encoding="utf-8")
     if unit_text.strip() not in (LEGACY_UNIT_TEXT.strip(), UNIT_TEXT.strip()):
         raise DeployError("installed_service_unit_not_recognized")
     active = subprocess.run(
