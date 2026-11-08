@@ -106,7 +106,7 @@ def test_start_failed_tls_checks_stop_service(monkeypatch):
     commands=[]
     monkeypatch.setattr(m,"run",lambda args,**kw: commands.append(args) or "")
     monkeypatch.setattr(m,"fingerprint",lambda: (_ for _ in ()).throw(ValueError("ca_missing")))
-    with pytest.raises(ValueError,match="ca_missing"):
+    with pytest.raises(ValueError,match="https_start_stage_ca_fingerprint"):
         m.start()
     assert ["/usr/bin/systemctl","start",m.SERVICE] in commands
     assert ["/usr/bin/systemctl","stop",m.SERVICE] in commands
