@@ -313,19 +313,44 @@ def chown_release(root: Path, gid: int) -> None:
         os.chmod(base, 0o750)
 
 
-def prepare_release(stage: Path, gid: int) -> None:
+def run_as_r2relay(argv: list[str], timeout: int = 120) -> None:
+    result = subprocess.run(
+        ["/usr/sbin/runuser", "-u", "r2relay", "--", *argv],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, errors="replace",
+        check=False, timeout=timeout, shell=False,
+        env={
+            "HOME": "/var/lib/r2-relay",
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C",
+            "PIP_NO_INPUT": "1",
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+            "PIP_NO_CACHE_DIR": "1",
+        },
+    )
+    if result.returncode != 0:
+        raise DeployError("runtime_user_command_failed:" + Path(argv[0]).name)
+
+
+def prepare_release(stage: Path, uid: int, gid: int) -> None:
+    # Source is root-owned/read-only to the service account. Build and install
+    # Python packages as r2relay so repository-controlled build hooks never run
+    # with root privileges.
+    chown_release(stage, gid)
     venv = stage / ".venv"
-    run_fixed(["/usr/bin/python3.11", "-m", "venv", str(venv)], timeout=120)
+    venv.mkdir(mode=0o750)
+    os.chown(venv, uid, gid)
+    run_as_r2relay(["/usr/bin/python3.11", "-m", "venv", str(venv)], timeout=120)
     pip = str(venv / "bin/pip")
-    run_fixed([
+    run_as_r2relay([
         pip, "install", "--no-input", "--disable-pip-version-check",
         "--no-cache-dir", "-r", str(stage / "deploy/requirements-vps.lock"),
     ], timeout=600)
-    run_fixed([
+    run_as_r2relay([
         pip, "install", "--no-input", "--disable-pip-version-check",
         "--no-deps", "--no-build-isolation", str(stage / "vps"),
     ], timeout=300)
-    run_fixed([
+    run_as_r2relay([
         str(venv / "bin/python"), "-c",
         "import fastapi, uvicorn, r2relay_vps.app; print('runtime-import-ok')",
     ], timeout=30)
@@ -412,7 +437,7 @@ def deploy(sha: str, archive_path: Path) -> dict:
         shutil.rmtree(stage)
         extract_archive(archive_path, stage, members)
         try:
-            prepare_release(stage, gid)
+            prepare_release(stage, uid, gid)
             os.rename(stage, release)
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
