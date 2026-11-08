@@ -23,3 +23,14 @@
 CI 自动在 PR 变更对应目录时触发，或 Actions → Runner full-stack acceptance → Run workflow。需要 GitHub Runner 自带的 Docker Engine，自动拉取 Caddy 2。**不可把这个脚本放到真实 VPS 上运行**；测试证书、明文 mock token、HMAC key 都是固定测试值。
 
 本工作流不会调用 Cloudflare R2 或连接真实 VPS，没有外部云凭据。Caddy 镜像下载和 Python 依赖下载是构建依赖网络请求，不是 R2 上传测试。
+
+## 验证证据（2026-11-08）
+
+- GitHub Actions [Runner Full Stack run #42442988163](https://github.com/sunxu/r2-relay/actions/runs/42442988163)：**SUCCESS**
+- 测试 Commit：`4d121ae77bcfaa9ec459760e9446ab0bc7a30912`
+- 实际通过 Docker Caddy HTTPS `:8443` → 真实 TCP VPS/Uvicorn → 独立 HTTP Mock R2，客户端是 aiohttp 经 mitmdump。
+- 已验证 Caddy HTTP/2、Bearer 指标、首次 MISS、后续 HIT、502/429 各额外重试一次、403 不重试，模拟 ETag 与正文 MD5。
+- 真实重启 VPS Uvicorn 后在同一磁盘目录恢复缓存，再次命中且不用第二次传输本地分片正文。
+- JSON 机器报告作为 Actions artifact `runner-fullstack-safe-report` 上传；含 Commit、真实协议组件、模拟请求次数与 `NOT_TESTED` 的 Cloudflare R2/SigV4/公网/带宽边界。
+
+这些结论只针对 GitHub Runner 内部服务，不能用作真实 VPS/R2 的生产验收。测试用独立 HMAC 见证码不等价于 AWS SigV4。
