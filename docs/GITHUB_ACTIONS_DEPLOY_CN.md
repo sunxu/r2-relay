@@ -68,11 +68,16 @@ scp ops/bootstrap_github_actions_deploy.py \
     root@104.224.168.192:/root/
 
 PUBKEY="$(cat ~/.ssh/r2-relay-github-actions.pub)"
+# 先做只读预检（不带 --apply）
+ssh root@104.224.168.192 \
+  "python3 /root/bootstrap_github_actions_deploy.py --public-key '$PUBKEY'"
+
+# 确认 DRY_RUN_PASS 且 fingerprint 与本机一致后，再实际应用
 ssh root@104.224.168.192 \
   "python3 /root/bootstrap_github_actions_deploy.py --public-key '$PUBKEY' --apply"
 ```
 
-先前可用 `--apply` 的同一脚本也支持只读 `--public-key ...` dry-run；建议先运行 dry-run，确认输出 `DRY_RUN_PASS` 和公钥 fingerprint 与本机 `ssh-keygen -lf ~/.ssh/r2-relay-github-actions.pub` 一致，再运行 `--apply`。不要将私钥或 Token 复制到 VPS。
+不要将私钥或 Token 复制到 VPS。
 
 Bootstrap 会：
 - 创建独立系统账号 `r2relay-deploy`，Home 为 `/var/lib/r2relay-deploy`，不使用 Root SSH 身份；
