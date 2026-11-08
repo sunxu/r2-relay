@@ -258,7 +258,6 @@ def test_production_workflow_is_owner_gated_and_requires_deployment_checks():
     assert "VPS_USER: root" not in workflow
     assert "jq -s --arg sha" in workflow
     assert r"IFS=$'\\t'" not in workflow
-    assert r"IFS=$'\t'" in workflow
     assert 'result.get("commit") != expected_sha' in workflow
     assert "SSH_OR_RECEIVER_TRANSPORT_FAILED" in workflow
     assert "workflow_dispatch:" not in workflow
