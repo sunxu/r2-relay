@@ -54,7 +54,7 @@ class R2Worker:
                         "PUT", spec["url"], headers=headers, content=file_chunks(path)
                     ) as response:
                         body = bytearray()
-                        async for chunk in response.aiter_bytes():
+                        async for chunk in response.aiter_raw():
                             if len(body) + len(chunk) > MAX_RESPONSE_BODY:
                                 record["relay_error"] = {
                                     "type": "ResponseTooLarge",

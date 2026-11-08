@@ -79,13 +79,21 @@ class R2RelayAddon:
                             if k.lower() not in {"content-length", "transfer-encoding",
                                                  "connection", "keep-alive", "proxy-connection",
                                                  "te", "trailer", "upgrade"}]
+        # .make(content=...) applies Content-Encoding from headers. Preserve
+        # the exact wire bytes already received from R2 instead of encoding twice.
+        encodings = [(k, v) for k, v in response_headers
+                     if k.lower() == "content-encoding"]
+        plain_headers = [(k, v) for k, v in response_headers
+                         if k.lower() != "content-encoding"]
         flow.response = http.Response.make(
             status_code=result.status,
             content=result.body,
-            headers=[(k.encode("utf-8", "surrogateescape"),
-                      v.encode("utf-8", "surrogateescape"))
-                     for k, v in response_headers],
+            headers=[(k.encode("latin-1"), v.encode("latin-1"))
+                     for k, v in plain_headers],
         )
+        for name, value in encodings:
+            flow.response.headers.add(name, value)
+        flow.response.headers["Content-Length"] = str(len(result.body))
 
     def error(self, flow: http.HTTPFlow) -> None:
         self._release(flow)
