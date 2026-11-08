@@ -63,7 +63,7 @@ def inspect_path(path: Path) -> dict:
     return result
 
 
-def inspect_current_release() -> dict:
+def inspect_current_release(expected_uid=0) -> dict:
     """Resolve only a direct child of the fixed release root with a matching marker."""
     try:
         current_stat = CURRENT.lstat()
@@ -71,7 +71,7 @@ def inspect_current_release() -> dict:
         return {"status": "MISSING", "reason": "current_pointer_missing"}
     except OSError as exc:
         return {"status": "UNKNOWN", "reason": f"current_pointer_os_error_{exc.errno or 'unknown'}"}
-    if not stat.S_ISLNK(current_stat.st_mode) or current_stat.st_uid != 0:
+    if not stat.S_ISLNK(current_stat.st_mode) or current_stat.st_uid != expected_uid:
         return {"status": "INVALID", "reason": "current_pointer_not_root_symlink"}
     try:
         releases_root = RELEASES.resolve(strict=True)
@@ -84,7 +84,7 @@ def inspect_current_release() -> dict:
             return {"status": "INVALID", "reason": "release_name_not_full_sha"}
         marker = release / ".deployment-commit"
         marker_stat = marker.lstat()
-        if (not stat.S_ISREG(marker_stat.st_mode) or marker_stat.st_uid != 0
+        if (not stat.S_ISREG(marker_stat.st_mode) or marker_stat.st_uid != expected_uid
                 or marker_stat.st_mode & 0o027):
             return {"status": "INVALID", "reason": "commit_marker_permissions_invalid"}
         if marker.read_text(encoding="ascii").strip() != commit:
@@ -157,7 +157,7 @@ def deployment_inspect() -> dict:
             columns = line.split()
             if len(columns) < 4 or columns[0] != "LISTEN":
                 continue
-            match = re.fullmatch(r"(\\[[^\\]]+\\]|[^:\\s]+):(\\d+)", columns[3])
+            match = re.fullmatch(r"(\[[^\]]+\]|[^:\s]+):(\d+)", columns[3])
             if match and int(match.group(2)) in PORTS:
                 entry = listeners[match.group(2)]
                 if match.group(1) not in entry:
