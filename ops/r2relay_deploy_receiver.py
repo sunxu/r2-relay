@@ -327,7 +327,7 @@ def chown_build_tree(root: Path, uid: int, gid: int) -> None:
                 raise DeployError("build_source_symlink_unexpected")
             mode = path.stat().st_mode
             os.chown(path, uid, gid, follow_symlinks=False)
-            os.chmod(path, 0o750 if mode & 0o111 else 0o640)
+            os.chmod(path, 0o700 if mode & 0o111 else 0o600)
         for name in dirs:
             path = base / name
             if path.is_symlink():
@@ -336,6 +336,7 @@ def chown_build_tree(root: Path, uid: int, gid: int) -> None:
             os.chmod(path, 0o700)
         os.chown(base, uid, gid, follow_symlinks=False)
         os.chmod(base, 0o700)
+
 
 def run_as_r2relay(argv: list[str], timeout: int = 120) -> None:
     result = subprocess.run(
