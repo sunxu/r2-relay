@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import logging
 from urllib.parse import urlsplit
 
 import httpx
@@ -74,3 +75,54 @@ async def test_r2_502_from_vps_is_returned_without_direct_fallback():
         result=await relay.upload(URL,[],b"data")
     assert result.status==502
     assert result.body==b"R2 502"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hit", [False, True])
+async def test_relay_stage_timing_is_sanitized(caplog, hit):
+    secret_url = URL + "&X-Amz-Signature=private-signature"
+    body = b"timing payload"
+
+    def handler(req):
+        if req.url.path.endswith("/prepare"):
+            return httpx.Response(200, json={
+                "status": "HIT" if hit else "MISS",
+                "execution_id": "private-execution-id",
+                "transfer_id": "private-transfer-id",
+            })
+        if "/data/" in req.url.path:
+            assert req.content == body
+            return httpx.Response(200, json={"status": "STAGED"})
+        return httpx.Response(200, json={
+            "status": "FAILED",
+            "upstream_response": {
+                "status_code": 403,
+                "headers": [],
+                "body_base64": base64.b64encode(b"expired").decode(),
+            },
+        })
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        relay = RelayClient("https://vps.example:8443", "private-token",
+                            client=http, poll_interval=0)
+        with caplog.at_level(logging.INFO, logger="r2relay.local.timing"):
+            result = await relay.upload(secret_url, [], body)
+
+    assert result.status == 403
+    logs = [r.getMessage() for r in caplog.records
+            if r.name == "r2relay.local.timing"]
+    assert len(logs) == 1
+    line = logs[0]
+    assert f"cache={'HIT' if hit else 'MISS'}" in line
+    assert f"size_bytes={len(body)}" in line
+    assert "prepare_ms=" in line
+    assert "execution_wait_ms=" in line
+    assert "total_relay_ms=" in line
+    assert "polls=1" in line
+    assert "r2_status=403" in line
+    assert ("data_upload_ms=na" in line) == hit
+    assert ("data_mbps=na" in line) == hit
+    for sensitive in ("private-token", "private-signature",
+                      "private-execution-id", "private-transfer-id",
+                      secret_url, "timing payload"):
+        assert sensitive not in line
