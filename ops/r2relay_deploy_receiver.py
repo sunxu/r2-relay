@@ -307,7 +307,7 @@ def chown_release(root: Path, gid: int) -> None:
                 continue
             mode = path.stat().st_mode
             os.chown(path, 0, gid, follow_symlinks=False)
-            os.chmod(path, 0o700 if mode & 0o111 else 0o600)
+            os.chmod(path, 0o750 if mode & 0o111 else 0o640)
         for name in dirs:
             path = base / name
             if path.is_symlink():
