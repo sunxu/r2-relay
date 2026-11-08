@@ -125,7 +125,7 @@ VPS receiver 会拒绝超限归档、路径穿越、符号链接、硬链接、�
 - VPS 有 Python 3.11、venv、pip 和访问 PyPI 的网络；
 - GitHub Secrets 已设置，SSH host key 已核验。
 
-任一条件不满足时，receiver fail-closed，不会切换版本。当前只读 VPS 检查曾报告 `/etc/r2-relay/vps.env` 不存在，而 API 进程仍为 active；在核实实际运行进程的环境来源并安全恢复真实配置前，禁止 bootstrap 和首次部署。不要把真实 Token 发到 Issue、PR 或 ChatGPT。
+任一条件不满足时，receiver fail-closed，不会切换版本。生产 EnvironmentFile 已由 Owner 在 VPS 上直接核实：`systemctl show` 指向 `/etc/r2-relay/vps.env (ignore_errors=no)`；`stat` 确认普通文件、`root:root`、`0600`、462 bytes；只检查 `/proc/<MainPID>/environ` 的变量名，确认运行进程已加载 `R2_RELAY_TOKEN`，未读取值。因此 EnvironmentFile 缺失这一部署阻塞已解除。此前 `deployment_inspect` 报告文件不存在属于检查器误报：旧实现把所有 `OSError` 都当作不存在；PR 分支已修复为区分 `ENOENT`、权限错误和其他 OS 错误，并通过 5 项检查测试。不要把真实 Token 发到 Issue、PR 或 ChatGPT。
 
 ## 手工回滚
 
