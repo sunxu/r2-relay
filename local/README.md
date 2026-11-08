@@ -26,3 +26,18 @@ python -m r2relay_local
 - 当前采用声明长度预算预留，真实高负载与恶意 HTTP 长度仍需外网/真实客户端验证。
 
 **仍未生产验收：** 实际 VPS 8443、真实 R2 签名/ETag 与 100 Mbps 链路测试。
+
+
+## Mac → VPS HTTP 版本 A/B 测速
+
+默认使用 HTTP/2；只允许 `R2_RELAY_HTTP2=1`（HTTP/2）或 `0`（仅 HTTP/1.1）。修改环境变量后需要重启本地代理；该开关仅影响本地 RelayClient → VPS:8443，不改变 curl → 18585 或 VPS → R2 的 HTTP 版本，也不关闭 TLS 验证。
+
+```bash
+# 在启动代理的终端中，确保已配置 R2_RELAY_VPS_URL/TOKEN/CA_FILE
+export R2_RELAY_HTTP2=0  # HTTP/1.1 对照组；默认 1
+python -m r2relay_local --listen-host 127.0.0.1 --listen-port 18585
+```
+
+使用同一大小、不同内容（确保 MISS）的受控测试分片，分别在 HTTP/1.1 和 HTTP/2 下运行，至少各 3 次，记录 `relay_timing` 中的 `data_upload_ms`、`data_mbps`、`vps_http_version`。相同 MD5 第二次会变为 HIT，**无法**用于对照 Data 上传带宽。日志不输出 Token、签名 URL 或请求体。请使用独立测试任务，避免修改生产 Multipart 的有效分片。
+
+`data_mbps` 反映上传请求体到收到 VPS Data 确认的有效速度，包括 HTTPS/TCP、VPS 缓存写入及处理开销，不是纯网络链路带宽。签名过期后的 R2 HTTP 403 也可以用于测这段耗时，但不代表实际 R2 上传成功。
