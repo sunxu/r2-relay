@@ -158,6 +158,39 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
     async def healthz():
         return {"status": "ok"}
 
+    # Dedicated network benchmark sink: authenticated, bounded, streamed and discarded.
+    bench_max_bytes = int(os.environ.get("R2_RELAY_BENCH_MAX_BYTES", str(32 * 1024 * 1024)))
+    bench_semaphore = asyncio.Semaphore(
+        int(os.environ.get("R2_RELAY_BENCH_MAX_CONCURRENT", "4"))
+    )
+
+    @app.put("/v1/bench/sink")
+    async def benchmark_sink(request: Request,
+                             authorization: str | None = Header(default=None)):
+        authorize(authorization)
+        raw_length = request.headers.get("content-length")
+        try:
+            expected = int(raw_length) if raw_length is not None else -1
+        except ValueError:
+            expected = -1
+        if expected < 0 or expected > bench_max_bytes:
+            raise HTTPException(status_code=413, detail="invalid or excessive benchmark body size")
+
+        async with bench_semaphore:
+            started = time.perf_counter()
+            received = 0
+            async for chunk in request.stream():
+                received += len(chunk)
+                if received > expected or received > bench_max_bytes:
+                    raise HTTPException(status_code=413, detail="benchmark body exceeds declared size")
+            elapsed = time.perf_counter() - started
+            if received != expected:
+                raise HTTPException(status_code=400, detail="benchmark body length mismatch")
+        mbps = (received * 8 / elapsed / 1_000_000) if elapsed > 0 else 0.0
+        return {"status": "received_and_discarded", "received_bytes": received,
+                "server_elapsed_ms": round(elapsed * 1000, 2),
+                "server_mbps": round(mbps, 2)}
+
     @app.post("/v1/parts/prepare")
     async def prepare(p: Prepare, authorization: str | None = Header(default=None)):
         authorize(authorization)
