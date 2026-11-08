@@ -43,6 +43,9 @@ ssh-keygen -t ed25519 -a 64 -N "" \
 
 ## VPS 一次性 bootstrap
 
+> **职责边界：这是一项由 Owner 执行的一次性初始化，不纳入 GitHub Actions 自动化范围。** Owner 可以通过现有可信 Root SSH 管理通道执行下面的 Bootstrap；完成后，日常部署不再需要人工登录 VPS 或执行命令。无需新增 Bootstrap Workflow、VPS MCP Server 或独立管理项目。
+
+
 先把本仓库当前已审核版本中的以下两个文件传到 VPS 的临时目录：
 
 - `ops/bootstrap_github_actions_deploy.py`
@@ -84,7 +87,7 @@ Bootstrap 会：
 
 ## ChatGPT 触发部署
 
-PR 合并且完成一次性 bootstrap、GitHub Secrets 配置后，告诉 ChatGPT：
+PR 合并、Owner 完成一次性 VPS Bootstrap，并配置好两个 GitHub Actions Secrets 后，告诉 ChatGPT。Bootstrap 是唯一预先约定的人工 VPS 操作；此后指定 Commit 的部署、验收、失败回执和自动回滚均由 GitHub Actions 完成：
 
 ```text
 将 sunxu/r2-relay 的 Commit <完整40位SHA> 部署到生产 VPS。
