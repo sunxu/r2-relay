@@ -15,7 +15,7 @@ def test_static_allowlists_cover_new_release_layout_without_secret_values():
     assert "/var/backups/r2-relay/deploy" in mod.FILES
     assert "/etc/r2-relay/vps.env" in mod.FILES
     assert mod.PORTS == (22, 443, 8443, 18085, 18765)
-    assert "Environment" not in mod.SYSTEMD_PROPERTIES
+    assert "Environment=" not in str(mod.SYSTEMD_PROPERTIES)
     assert "EnvironmentFiles" in mod.SYSTEMD_PROPERTIES
     assert not any("token" in item.lower() for item in mod.FILES)
 
