@@ -15,6 +15,7 @@ import os
 from pathlib import Path, PurePosixPath
 import pwd
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -502,6 +503,11 @@ def fsync_path(path: Path) -> None:
         os.close(fd)
 
 
+def new_staging_path(sha: str) -> Path:
+    if not SHA_RE.fullmatch(sha):
+        raise DeployError("invalid_commit_sha")
+    return RELEASES / (".staging-" + sha + "-" + secrets.token_hex(8))
+
 def deploy(sha: str, archive_path: Path) -> dict:
     if not SHA_RE.fullmatch(sha):
         raise DeployError("invalid_commit_sha")
@@ -542,7 +548,7 @@ def deploy(sha: str, archive_path: Path) -> dict:
 
         members, archive_info = validate_archive(archive_path, sha)
         if not reuse_existing_release:
-            stage = Path(tempfile.mkdtemp(prefix=".staging-" + sha + "-", dir=RELEASES))
+            stage = new_staging_path(sha)
             extract_archive(archive_path, stage, members)
             try:
                 # Move source to its immutable final path before creating the venv:
@@ -561,7 +567,7 @@ def deploy(sha: str, archive_path: Path) -> dict:
         if not stat.S_ISDIR(backup_root_stat.st_mode) or backup_root_stat.st_uid != 0:
             raise DeployError("backup_root_permissions_invalid")
         os.chmod(BACKUPS, 0o700)
-        backup_dir = BACKUPS / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + sha[:12])
+        backup_dir = BACKUPS / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + sha[:12] + "-" + secrets.token_hex(4))
         backup_dir.mkdir(mode=0o700)
         backup_unit = backup_dir / "r2-relay-vps.service"
         shutil.copy2(UNIT, backup_unit)
