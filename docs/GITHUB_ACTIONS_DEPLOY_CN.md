@@ -50,8 +50,8 @@ ssh-keygen -t ed25519 -a 64 -N "" \
 
 ```bash
 git fetch origin main
-git checkout --detach <PR-42-MERGE-COMMIT-SHA>
-test "$(git rev-parse HEAD)" = "<PR-42-MERGE-COMMIT-SHA>"
+git checkout --detach d4af052d5d075514e6820a4e5071c24812343be5
+test "$(git rev-parse HEAD)" = "d4af052d5d075514e6820a4e5071c24812343be5"
 git status --short
 ```
 
@@ -97,7 +97,7 @@ Bootstrap 会：
 在 GitHub Secrets 配置完成前，可用专用私钥向受限入口发送一个**空归档**，验证 SSH 公钥认证、ForcedCommand、sudoers 和 Root receiver 全链路。该命令不会进入 `deploy()`，不会切换版本或重启服务：
 
 ```bash
-MERGE_SHA="<PR-42-MERGE-COMMIT-SHA>"
+MERGE_SHA="d4af052d5d075514e6820a4e5071c24812343be5"
 set +e
 printf '' | ssh -T \
   -i ~/.ssh/r2-relay-github-actions \
