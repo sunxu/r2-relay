@@ -415,7 +415,7 @@ def restore(backup_unit: Path, previous_target: str, previous_was_symlink: bool)
         if previous_was_symlink:
             set_current(previous_target)
         else:
-            CURRENT.unlink(missing_ok=True)
+            set_current(None)
         run_fixed(["/usr/bin/systemctl", "daemon-reload"], timeout=30)
         run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
         return health_check(attempts=20)
@@ -423,10 +423,29 @@ def restore(backup_unit: Path, previous_target: str, previous_was_symlink: bool)
         return False
 
 
+def open_deploy_lock() -> int:
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(LOCK, flags, 0o600)
+    info = os.fstat(fd)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+            or info.st_mode & 0o077 or info.st_nlink != 1):
+        os.close(fd)
+        raise DeployError("deployment_lock_file_unsafe")
+    return fd
+
+
+def fsync_path(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def deploy(sha: str, archive_path: Path) -> dict:
     if not SHA_RE.fullmatch(sha):
         raise DeployError("invalid_commit_sha")
-    lock_fd = os.open(LOCK, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    lock_fd = open_deploy_lock()
     with os.fdopen(lock_fd, "r+") as lock:
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -436,8 +455,12 @@ def deploy(sha: str, archive_path: Path) -> dict:
         uid, gid, previous_target = validate_host_state()
         previous_was_symlink = CURRENT.is_symlink()
         release = RELEASES / sha
-        if release.exists():
-            if previous_was_symlink and Path(previous_target) == release.resolve():
+        try:
+            release.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if previous_was_symlink and Path(previous_target) == release.resolve(strict=True):
                 return {"status": "ALREADY_DEPLOYED", "commit": sha}
             raise DeployError("release_already_exists")
         if RELEASES.is_symlink():
@@ -446,6 +469,8 @@ def deploy(sha: str, archive_path: Path) -> dict:
             releases_stat = RELEASES.lstat()
             if not stat.S_ISDIR(releases_stat.st_mode) or releases_stat.st_uid != 0 or releases_stat.st_mode & 0o022:
                 raise DeployError("release_root_permissions_invalid")
+            if releases_stat.st_gid != gid:
+                os.chown(RELEASES, 0, gid)
         else:
             RELEASES.mkdir(mode=0o750, parents=False, exist_ok=False)
             os.chown(RELEASES, 0, gid)
@@ -480,8 +505,16 @@ def deploy(sha: str, archive_path: Path) -> dict:
             "previous_target": previous_target,
             "previous_was_symlink": previous_was_symlink,
         }
-        (backup_dir / "state.json").write_text(json.dumps(state, sort_keys=True) + "\n")
-        os.chmod(backup_dir / "state.json", 0o600)
+        state_path = backup_dir / "state.json"
+        with state_path.open("w", encoding="utf-8") as output:
+            output.write(json.dumps(state, sort_keys=True) + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(state_path, 0o600)
+        with backup_unit.open("rb") as backup_stream:
+            os.fsync(backup_stream.fileno())
+        fsync_path(backup_dir)
+        fsync_path(BACKUPS)
 
         try:
             write_atomic(UNIT, UNIT_TEXT)
