@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """Forced-command receiver for GitHub Actions R2 Relay deployments.
 
 This program is installed root-owned on the VPS and invoked only through one
