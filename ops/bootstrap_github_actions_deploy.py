@@ -32,7 +32,7 @@ SUDO_COMMAND = "/usr/local/libexec/r2relay_deploy_receiver.py"
 FORCED_COMMAND = "/usr/bin/sudo -n " + SUDO_COMMAND
 SUDOERS_TEXT = (
     'Defaults:r2relay-deploy env_keep += "SSH_ORIGINAL_COMMAND"\n'
-    'r2relay-deploy ALL=(root) NOPASSWD: /usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py ""\n'
+    'r2relay-deploy ALL=(root) NOPASSWD: /usr/local/libexec/r2relay_deploy_receiver.py ""\n'
 )
 KEY_RE = re.compile(r"^ssh-ed25519 ([A-Za-z0-9+/]+={0,2})(?: (.*))?$")
 
