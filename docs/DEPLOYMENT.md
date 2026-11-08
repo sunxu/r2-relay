@@ -64,6 +64,10 @@ python scripts/rc1_offline.py
 - Caddy 证书路径必须由 Caddy 运行账户可读；不得改变现有 `443` 监听。
 - 生产前复核 systemd 单元与 Caddy 实际加载配置：`systemd-analyze verify`、`caddy validate`；目前只完成 Runner 模拟，不表示真实 VPS 验收通过。
 
-## 6. 回滚
+## 6. 纯离线预部署检查
+
+参见 [离线预部署检查与 SAFE 报告](DEPLOYMENT_PREFLIGHT_CN.md)。该检查不需 VPS/R2，可以在 GitHub Runner 校验 systemd/Caddy 语法、环境变量约束与权限策略，但不代表真实 VPS 已部署。
+
+## 7. 回滚
 
 停止本地代理：原 aiohttp 移除显式代理配置，即恢复既有上传路径。VPS 不可用时本地按约定只在明确连接失败时直传。关闭 VPS 服务使用 `systemctl stop r2-relay-vps`，不删除运行中的其他服务或端口配置。对正在执行的 Multipart 不保证无中断迁移。
