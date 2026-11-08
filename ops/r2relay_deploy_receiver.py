@@ -168,7 +168,7 @@ def validate_archive(archive_path: Path, expected_sha: str):
             marker = None
             for member in members:
                 raw_name = member.name
-                if not isinstance(raw_name, str) or not raw_name or "\\\\" in raw_name:
+                if not isinstance(raw_name, str) or not raw_name or chr(92) in raw_name:
                     raise DeployError("archive_path_invalid")
                 if raw_name.startswith("/"):
                     raise DeployError("archive_absolute_path")
