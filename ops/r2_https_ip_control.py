@@ -15,7 +15,6 @@ import socket
 import subprocess
 import tempfile
 import ssl
-import urllib.request
 
 IP4 = "104.224.168.192"
 IP6 = "2607:8700:5500:a47f::2"
@@ -52,7 +51,6 @@ Environment=XDG_DATA_HOME=/var/lib/r2-caddy/data
 Environment=XDG_CONFIG_HOME=/var/lib/r2-caddy/config
 WorkingDirectory=/var/lib/r2-caddy
 ExecStart=/usr/local/libexec/r2-caddy run --environ --config /etc/r2-relay/Caddyfile.ip --adapter caddyfile
-ExecReload=/usr/local/libexec/r2-caddy reload --config /etc/r2-relay/Caddyfile.ip --adapter caddyfile
 Restart=on-failure
 RestartSec=4
 NoNewPrivileges=true
@@ -201,6 +199,10 @@ def check_prepared():
             raise ValueError("prepared_file_invalid")
     if UNIT.read_text()!=SYSTEMD or CONFIG.read_text()!=CADDYFILE:
         raise ValueError("prepared_config_mismatch")
+    state = DATA.lstat()
+    owner = pwd.getpwnam(IDENTITY).pw_uid
+    if not stat.S_ISDIR(state.st_mode) or state.st_uid != owner or stat.S_IMODE(state.st_mode) != 0o700:
+        raise ValueError("caddy_data_permissions")
     if service_state(API)!="active" or listeners(18085)!=["127.0.0.1:18085"]:
         raise ValueError("api_not_loopback_ready")
     if service_state(SERVICE)!="inactive":

@@ -93,3 +93,16 @@ def test_ca_fingerprint_is_public_only(tmp_path,monkeypatch):
     assert len(r["ca_sha256"])==64
     assert r["private_key_emitted"] is False
     assert "pem" not in r and "key" not in r
+
+def test_start_failed_tls_checks_stop_service(monkeypatch):
+    m=load("https_rollback","ops/r2_https_ip_control.py")
+    monkeypatch.setattr(m,"check_prepared",lambda:None)
+    monkeypatch.setattr(m,"listeners",lambda port: ["*:443"] if port==443 else ["*:8443"])
+    monkeypatch.setattr(m,"service_state",lambda name:"active")
+    commands=[]
+    monkeypatch.setattr(m,"run",lambda args,**kw: commands.append(args) or "")
+    monkeypatch.setattr(m,"fingerprint",lambda: (_ for _ in ()).throw(ValueError("ca_missing")))
+    with pytest.raises(ValueError,match="ca_missing"):
+        m.start()
+    assert ["/usr/bin/systemctl","start",m.SERVICE] in commands
+    assert ["/usr/bin/systemctl","stop",m.SERVICE] in commands
