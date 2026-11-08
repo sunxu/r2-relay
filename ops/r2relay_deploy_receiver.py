@@ -252,7 +252,7 @@ def validate_host_state() -> tuple[int, int, str]:
         raise DeployError("cache_directory_owner_invalid")
     if UNIT.is_symlink() or not UNIT.is_file():
         raise DeployError("service_unit_missing_or_unsafe")
-    unit_text = UNIT.read_text(encoding="utf-8")
+    unit_stat = UNIT.stat()\n    if unit_stat.st_uid != 0 or unit_stat.st_mode & 0o022:\n        raise DeployError("service_unit_permissions_invalid")\n    unit_text = UNIT.read_text(encoding="utf-8")
     if unit_text.strip() not in (LEGACY_UNIT_TEXT.strip(), UNIT_TEXT.strip()):
         raise DeployError("installed_service_unit_not_recognized")
     active = subprocess.run(
@@ -428,8 +428,13 @@ def deploy(sha: str, archive_path: Path) -> dict:
             raise DeployError("release_already_exists")
         if RELEASES.is_symlink():
             raise DeployError("release_root_symlink")
-        RELEASES.mkdir(mode=0o755, parents=True, exist_ok=True)
-        os.chown(RELEASES, 0, gid)
+        if RELEASES.exists():
+            releases_stat = RELEASES.lstat()
+            if not stat.S_ISDIR(releases_stat.st_mode) or releases_stat.st_uid != 0 or releases_stat.st_mode & 0o022:
+                raise DeployError("release_root_permissions_invalid")
+        else:
+            RELEASES.mkdir(mode=0o750, parents=False, exist_ok=False)
+            os.chown(RELEASES, 0, gid)
         os.chmod(RELEASES, 0o750)
 
         members, archive_info = validate_archive(archive_path, sha)
@@ -445,7 +450,12 @@ def deploy(sha: str, archive_path: Path) -> dict:
             shutil.rmtree(release, ignore_errors=True)
             raise
 
+        if BACKUPS.is_symlink():
+            raise DeployError("backup_root_symlink")
         BACKUPS.mkdir(mode=0o700, parents=True, exist_ok=True)
+        backup_root_stat = BACKUPS.stat()
+        if not stat.S_ISDIR(backup_root_stat.st_mode) or backup_root_stat.st_uid != 0:
+            raise DeployError("backup_root_permissions_invalid")
         os.chmod(BACKUPS, 0o700)
         backup_dir = BACKUPS / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + sha[:12])
         backup_dir.mkdir(mode=0o700)
