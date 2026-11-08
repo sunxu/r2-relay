@@ -367,9 +367,14 @@ def write_atomic(path: Path, content: str, mode: int = 0o644) -> None:
             output.write(content)
             output.flush()
             os.fsync(output.fileno())
-        os.chmod(name, mode)
         os.chown(name, 0, 0)
+        os.chmod(name, mode)
         os.replace(name, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
     finally:
         Path(name).unlink(missing_ok=True)
 
@@ -377,11 +382,16 @@ def write_atomic(path: Path, content: str, mode: int = 0o644) -> None:
 def set_current(target: str | None) -> None:
     if target is None:
         CURRENT.unlink(missing_ok=True)
-        return
-    temp = CURRENT.parent / (".r2-relay-current-" + str(os.getpid()))
-    temp.unlink(missing_ok=True)
-    os.symlink(target, temp)
-    os.replace(temp, CURRENT)
+    else:
+        temp = CURRENT.parent / (".r2-relay-current-" + str(os.getpid()))
+        temp.unlink(missing_ok=True)
+        os.symlink(target, temp)
+        os.replace(temp, CURRENT)
+    dir_fd = os.open(CURRENT.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def health_check(attempts: int = 25) -> bool:
@@ -400,7 +410,8 @@ def health_check(attempts: int = 25) -> bool:
 
 def restore(backup_unit: Path, previous_target: str, previous_was_symlink: bool) -> bool:
     try:
-        shutil.copy2(backup_unit, UNIT)
+        backup_mode = stat.S_IMODE(backup_unit.stat().st_mode)
+        write_atomic(UNIT, backup_unit.read_text(encoding="utf-8"), backup_mode)
         if previous_was_symlink:
             set_current(previous_target)
         else:
