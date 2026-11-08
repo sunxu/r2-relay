@@ -268,11 +268,26 @@ def test_bootstrap_uses_a_dedicated_account_and_one_sudo_command():
     assert bootstrap.DEPLOY_USER == "r2relay-deploy"
     assert bootstrap.FORCED_COMMAND.startswith("/usr/bin/sudo -n ")
     assert 'env_keep += "SSH_ORIGINAL_COMMAND"' in bootstrap.SUDOERS_TEXT
-    assert "NOPASSWD: " + bootstrap.SUDO_COMMAND in bootstrap.SUDOERS_TEXT
+    assert "NOPASSWD: " + bootstrap.SUDO_COMMAND + ' ""' in bootstrap.SUDOERS_TEXT
     assert "ALL=(ALL)" not in bootstrap.SUDOERS_TEXT
     line = bootstrap.authorized_key_line("AAAA", "test")
     assert line.startswith('command="/usr/bin/sudo -n ')
     assert ',restrict ssh-ed25519 AAAA test' in line
+
+
+def test_bootstrap_reports_only_password_lock_state(tmp_path):
+    shadow = tmp_path / "shadow"
+    shadow.write_text("r2relay-deploy:!locked-hash:20000:0:99999:7:::\\n")
+    assert bootstrap.password_is_locked("r2relay-deploy", shadow) is True
+    shadow.write_text("r2relay-deploy:$6$secret-hash:20000:0:99999:7:::\\n")
+    assert bootstrap.password_is_locked("r2relay-deploy", shadow) is False
+    shadow.write_text("another-user:!:20000:0:99999:7:::\\n")
+    try:
+        bootstrap.password_is_locked("r2relay-deploy", shadow)
+    except bootstrap.BootstrapError as exc:
+        assert str(exc) == "shadow_account_missing"
+    else:
+        raise AssertionError("missing shadow account accepted")
 
 
 def test_deployment_tests_run_on_main_push():
