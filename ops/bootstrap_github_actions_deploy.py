@@ -40,7 +40,7 @@ def parse_public_key(value: str) -> tuple[str, str, str]:
         blob = base64.b64decode(encoded, validate=True)
     except Exception:
         raise BootstrapError("invalid_public_key_encoding") from None
-    if not blob.startswith(b"\x00\x00\x00\x0bssh-ed25519") or len(blob) < 51:
+    if not blob.startswith(b"\x00\x00\x00\x0bssh-ed25519") or blob[15:19] != b"\x00\x00\x00 " or len(blob) != 51:
         raise BootstrapError("invalid_ed25519_key_blob")
     fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
     return encoded, comment[:80].replace('"', ""), fingerprint
@@ -117,7 +117,8 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
         raise BootstrapError("receiver_destination_not_root_owned")
     BACKUPS.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(BACKUPS, 0o700)
-    safe_fingerprint = fingerprint.replace("SHA256:", "").replace("/", "_").replace("+", "-").replace("=", "")\n    backup = BACKUPS / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + safe_fingerprint[-12:])
+    safe_fingerprint = fingerprint.replace("SHA256:", "").replace("/", "_").replace("+", "-").replace("=", "")
+    backup = BACKUPS / (time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + safe_fingerprint[-12:])
     backup.mkdir(mode=0o700)
     if AUTHORIZED_KEYS.exists():
         shutil.copy2(AUTHORIZED_KEYS, backup / "authorized_keys")
