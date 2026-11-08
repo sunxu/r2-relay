@@ -249,6 +249,32 @@ def make_existing_release(path: Path, python_target: Path, gid: int):
     app.chmod(0o640)
 
 
+def test_chown_release_keeps_group_readable_immutable_source_modes(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    root = tmp_path / "release"
+    source = root / "vps"
+    source.mkdir(parents=True)
+    regular = source / "app.py"
+    executable = source / "launcher"
+    regular.write_text("app = True\\n")
+    executable.write_text("#!/bin/sh\\nexit 0\\n")
+    executable.chmod(0o755)
+    chown_calls = []
+    monkeypatch.setattr(receiver.os, "chown", lambda path, uid, gid, **kwargs: chown_calls.append((Path(path), uid, gid)))
+
+    receiver.chown_release(root, 4242)
+
+    assert stat.S_IMODE(regular.stat().st_mode) == 0o640
+    assert stat.S_IMODE(executable.stat().st_mode) == 0o750
+    assert stat.S_IMODE(source.stat().st_mode) == 0o750
+    assert stat.S_IMODE(root.stat().st_mode) == 0o750
+    assert chown_calls
+    assert all(uid == 0 and gid == 4242 for _, uid, gid in chown_calls)
+    assert stat.S_IMODE(regular.stat().st_mode) & 0o040
+    assert not (stat.S_IMODE(regular.stat().st_mode) & 0o020)
+
 def test_prepare_release_builds_from_writable_copy_and_keeps_release_read_only(tmp_path, monkeypatch):
     import os
     import stat
