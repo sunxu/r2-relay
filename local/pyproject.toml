@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "r2relay-local"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["mitmproxy>=11,<13", "httpx[http2]>=0.27,<1"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "aiohttp>=3.11,<4"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["r2relay_local*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

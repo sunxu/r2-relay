@@ -1,0 +1,10 @@
+{
+  # 443 is already occupied; do not create automatic redirects on 80/443.
+  auto_https disable_redirects
+}
+
+# Requires an existing certificate valid for R2_RELAY_HOST.
+https://{$R2_RELAY_HOST}:8443 {
+  tls {$R2_RELAY_TLS_CERT} {$R2_RELAY_TLS_KEY}
+  reverse_proxy 127.0.0.1:18085
+}

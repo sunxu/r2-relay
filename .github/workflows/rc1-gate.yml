@@ -1,0 +1,41 @@
+name: RC1 offline release gate
+on:
+  pull_request:
+    paths:
+      - "vps/**"
+      - "local/**"
+      - "benchmarks/**"
+      - "scripts/**"
+      - "requirements/**"
+      - "deploy/**"
+      - "docs/**"
+      - ".github/workflows/rc1-gate.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    name: RC1 offline gate (Linux Python 3.11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned direct dependencies and project packages
+        run: |
+          python -m pip install -r requirements/rc1-direct.txt
+          python -m pip install -e './vps' -e './local'
+      - name: Capture actual Linux dependency versions
+        run: |
+          mkdir -p artifacts
+          python -m pip freeze --exclude-editable > artifacts/rc1-linux-py311-installed.txt
+      - name: Upload dependency record
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc1-linux-py311-dependencies
+          path: artifacts/rc1-linux-py311-installed.txt
+          retention-days: 30
+      - name: Full offline gate
+        run: python scripts/rc1_offline.py
