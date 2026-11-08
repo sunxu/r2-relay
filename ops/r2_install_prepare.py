@@ -110,8 +110,16 @@ def prepare(dry_run=True, stage=STAGE, dest=DEST):
         os.chown(venv, owner.pw_uid, owner.pw_gid)
         if run_as_user(["/usr/bin/python3", "-m", "venv", str(venv)], timeout=120):
             return {"status": "PARTIAL_INSTALL", "step": "venv"}
+        # PEP 517 builders may write metadata into source; build from a
+        # r2relay-owned temporary copy, never modify root-owned runtime files.
+        build_src = venv / "build-src"
+        shutil.copytree(dest / "vps", build_src)
+        shutil.chown(build_src, user="r2relay", group="r2relay")
+        for base, dirs, files in os.walk(build_src):
+            for name in dirs + files:
+                os.chown(Path(base)/name, owner.pw_uid, owner.pw_gid)
         if run_as_user([str(venv/"bin/python"), "-m", "pip", "install",
-                        "--no-input", str(dest/"vps")], timeout=480):
+                        "--no-input", str(build_src)], timeout=480):
             return {"status": "PARTIAL_INSTALL", "step": "pip"}
         return {"status": "INSTALLED_NOT_STARTED", "commit": COMMIT,
                 "path": str(dest), "service_started": False}
