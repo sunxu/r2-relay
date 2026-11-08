@@ -115,11 +115,11 @@ def bootstrap(public_key: str, *, apply: bool) -> dict:
                 "pty_disabled": True, "port_forwarding_disabled": True,
                 "receiver_destination": str(RECEIVER_DEST)}
 
+    if RECEIVER_DEST.parent.is_symlink():
+        raise BootstrapError("receiver_parent_symlink")
+    if RECEIVER_DEST.parent.exists() and not RECEIVER_DEST.parent.is_dir():
+        raise BootstrapError("receiver_parent_not_directory")
     if RECEIVER_DEST.is_symlink():
-        if RECEIVER_DEST.parent.is_symlink():
-            raise BootstrapError("receiver_parent_symlink")
-        if RECEIVER_DEST.parent.exists() and not RECEIVER_DEST.parent.is_dir():
-            raise BootstrapError("receiver_parent_not_directory")
         raise BootstrapError("receiver_destination_symlink")
     if RECEIVER_DEST.exists() and RECEIVER_DEST.stat().st_uid != 0:
         raise BootstrapError("receiver_destination_not_root_owned")
