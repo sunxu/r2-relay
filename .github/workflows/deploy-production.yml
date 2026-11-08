@@ -157,11 +157,11 @@ jobs:
         run: |
           set -euo pipefail
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          body="**R2 Relay production deployment: $JOB_RESULT**"$'\n\n'"Requested Commit: `$TARGET_SHA`"$'\n'"Workflow run: $run_url"
+          printf -v body '**R2 Relay production deployment: %s**\n\nRequested Commit: %s\nWorkflow run: %s' "$JOB_RESULT" "$TARGET_SHA" "$run_url"
           if [ -f "$RUNNER_TEMP/deploy-response.json" ]; then
             receipt="$(cat "$RUNNER_TEMP/deploy-response.json")"
-            body+=$'\n\n'"Deployment receipt: `$receipt`"
+            printf -v body '%s\n\nDeployment receipt: %s' "$body" "$receipt"
           elif [ "$JOB_RESULT" != "success" ]; then
-            body+=$'\n\n'"Deployment was blocked before a VPS receipt was produced. See the failed workflow step for the exact preflight reason."
+            printf -v body '%s\n\nDeployment receipt: %s' "$body" "$receipt"
           fi
           gh issue comment 41 --repo "$GITHUB_REPOSITORY" --body "$body"

@@ -57,6 +57,19 @@ def test_forced_command_accepts_only_exact_full_sha():
             raise AssertionError(f"accepted unsafe command: {command!r}")
 
 
+def test_deployment_staging_path_is_unique_and_created_by_extractor(tmp_path, monkeypatch):
+    monkeypatch.setattr(receiver, "RELEASES", tmp_path)
+    monkeypatch.setattr(receiver.secrets, "token_hex", lambda _n: "f" * 16)
+    stage = receiver.new_staging_path(SHA)
+    assert stage == tmp_path / (".staging-" + SHA + "-" + "f" * 16)
+    assert not stage.exists()
+    archive = tmp_path / "stage-contract.tar"
+    make_archive(archive)
+    members, _ = receiver.validate_archive(archive, SHA)
+    receiver.extract_archive(archive, stage, members)
+    assert stage.is_dir()
+    assert (stage / "vps/r2relay_vps/app.py").is_file()
+
 def test_valid_archive_and_commit_marker(tmp_path):
     archive = tmp_path / "release.tar"
     make_archive(archive)
@@ -486,6 +499,14 @@ def test_deployment_lock_requires_root_owned_private_regular_file(tmp_path, monk
     else:
         raise AssertionError("permissive lock file accepted")
 
+
+def test_deployment_receipt_does_not_use_backtick_command_substitution():
+    workflow = (ROOT / ".github/workflows/deploy-production.yml").read_text(encoding="utf-8")
+    receipt = workflow.split("      - name: Publish deployment receipt", 1)[1]
+    assert "printf -v body" in receipt
+    assert "Requested Commit: %s" in receipt
+    assert "`$TARGET_SHA`" not in receipt
+    assert "`$receipt`" not in receipt
 
 def test_deployment_tests_run_on_main_push():
     workflow = (ROOT / ".github/workflows/deploy-tests.yml").read_text(encoding="utf-8")
