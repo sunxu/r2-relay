@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import pwd
 import re
-import socket
 import stat
 import subprocess
 import time
@@ -78,10 +77,19 @@ def parse_private_env():
             raise ValueError("env_bound_invalid")
     return len(required)
 
+def bound_addresses(port):
+    """Inspect all network interfaces, not only localhost."""
+    lines = command(["/usr/bin/ss", "-H", "-lnt", "sport", "=", f":{port}"])
+    addresses = []
+    for line in lines.splitlines():
+        parts = line.split()
+        if len(parts) < 5:
+            raise ValueError("listener_output_invalid")
+        addresses.append(parts[3])
+    return addresses
+
 def listening(port):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as conn:
-        conn.settimeout(0.5)
-        return conn.connect_ex(("127.0.0.1", port)) == 0
+    return bool(bound_addresses(port))
 
 def systemd_state():
     if command(["/usr/bin/systemctl", "show", SERVICE, "-p", "FragmentPath", "--value"]) != str(UNIT):
@@ -130,6 +138,7 @@ def start():
         raise ValueError("service_not_inactive")
     if previous["port_18085_listening"]:
         raise ValueError("port_18085_busy")
+    prior_443 = bound_addresses(443)
     issued = False
     try:
         issued = True
@@ -148,11 +157,10 @@ def start():
             time.sleep(0.5)
         if not healthy or systemd_state() != "active":
             raise ValueError("healthz_not_ready")
-        listeners = command(["/usr/bin/ss", "-H", "-lnt", "sport", "=", ":18085"])
-        addrs = [line.split()[3] for line in listeners.splitlines() if line.strip()]
+        addrs = bound_addresses(18085)
         if not addrs or any(addr != "127.0.0.1:18085" for addr in addrs):
             raise ValueError("listener_not_loopback_only")
-        if not listening(443) or listening(8443):
+        if bound_addresses(443) != prior_443 or listening(8443):
             raise ValueError("port_boundary_changed")
         return {"status": "LOOPBACK_START_PASS", "service_state": "active",
                 "health_status": 200, "listener": "127.0.0.1:18085",
