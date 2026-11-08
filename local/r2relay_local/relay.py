@@ -20,6 +20,14 @@ EXECUTION_TERMINAL = frozenset({"SUCCEEDED", "FAILED"})
 LOG = logging.getLogger("r2relay.local.timing")
 
 
+def http2_enabled() -> bool:
+    """Read the opt-in protocol override; preserve HTTP/2 as the default."""
+    value = os.environ.get("R2_RELAY_HTTP2", "1")
+    if value not in ("0", "1"):
+        raise ValueError("R2_RELAY_HTTP2 must be 0 (HTTP/1.1) or 1 (HTTP/2)")
+    return value == "1"
+
+
 def is_upload_part(method: str, url: str) -> bool:
     if method.upper() != "PUT":
         return False
@@ -73,7 +81,7 @@ class RelayClient:
         self.token = token
         self._owns_client = client is None
         self.client = client or httpx.AsyncClient(
-            http2=True, timeout=request_timeout, trust_env=False,
+            http2=http2_enabled(), timeout=request_timeout, trust_env=False,
             verify=os.environ.get("R2_RELAY_VPS_CA_FILE") or True,
             follow_redirects=False,
         )
@@ -132,6 +140,7 @@ class RelayClient:
         }
         reply = await self._request("POST", "/v1/parts/prepare", json=prepare)
         prepared_at = time.perf_counter()
+        vps_http_version = reply.http_version
         data_upload_ms: float | None = None
         data_mbps: float | None = None
         try:
@@ -198,13 +207,13 @@ class RelayClient:
                     LOG.info(
                         "relay_timing cache=%s size_bytes=%d prepare_ms=%.1f "
                         "data_upload_ms=%s data_mbps=%s execution_wait_ms=%.1f "
-                        "total_relay_ms=%.1f polls=%d r2_status=%d",
+                        "total_relay_ms=%.1f polls=%d r2_status=%d vps_http_version=%s",
                         status, len(body), (prepared_at - started_at) * 1000,
                         f"{data_upload_ms:.1f}" if data_upload_ms is not None else "na",
                         f"{data_mbps:.2f}" if data_mbps is not None else "na",
                         (finished_at - execution_started_at) * 1000,
                         (finished_at - started_at) * 1000, poll_count,
-                        upstream_result.status,
+                        upstream_result.status, vps_http_version,
                     )
                     return upstream_result
                 # No R2 status existed. Do not claim the error came from R2.
