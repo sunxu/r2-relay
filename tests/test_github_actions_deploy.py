@@ -185,7 +185,7 @@ def test_bootstrap_accepts_only_valid_ed25519_public_key():
 
 def test_bootstrap_detects_existing_key_without_rewriting():
     assert bootstrap.existing_key_data([
-        'command="/usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py",restrict ssh-ed25519 AAAA comment'
+        'command="/usr/bin/sudo -n /usr/bin/python3 /usr/local/libexec/r2relay_deploy_receiver.py",restrict ssh-ed25519 AAAA comment'
     ]) == {"AAAA"}
 
 
@@ -208,6 +208,7 @@ def test_automatic_rollback_restores_unit_and_previous_release(tmp_path, monkeyp
     monkeypatch.setattr(receiver, "UNIT", unit)
     monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: None)
     monkeypatch.setattr(receiver, "health_check", lambda attempts=25: True)
+    monkeypatch.setattr(receiver.os, "chown", lambda *args, **kwargs: None)
 
     assert receiver.restore(backup, str(previous), True) is True
     assert unit.read_text() == "old unit"
@@ -232,6 +233,7 @@ def test_first_deploy_rollback_removes_new_pointer(tmp_path, monkeypatch):
     monkeypatch.setattr(receiver, "UNIT", unit)
     monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: None)
     monkeypatch.setattr(receiver, "health_check", lambda attempts=25: True)
+    monkeypatch.setattr(receiver.os, "chown", lambda *args, **kwargs: None)
 
     assert receiver.restore(backup, "", False) is True
     assert unit.read_text() == "legacy unit"
@@ -251,8 +253,37 @@ def test_production_workflow_is_owner_gated_and_requires_deployment_checks():
     assert '[ "$conclusion" = "success" ]' in workflow
     assert "StrictHostKeyChecking=yes" in workflow
     assert "VPS_HOST: 104.224.168.192" in workflow
+    assert "VPS_USER: r2relay-deploy" in workflow
+    assert "VPS_USER: root" not in workflow
+    assert "jq -s --arg sha" in workflow
+    assert '.app.slug == "github-actions"' in workflow
+    assert "IFS=
+    workflow = (ROOT / ".github/workflows/deploy-tests.yml").read_text(encoding="utf-8")
+    assert "push:" in workflow
+    assert "branches: [main]" in workflow
+    assert "pull_request:" in workflow
+\\\\t'" not in workflow
+    assert "IFS=
+    workflow = (ROOT / ".github/workflows/deploy-tests.yml").read_text(encoding="utf-8")
+    assert "push:" in workflow
+    assert "branches: [main]" in workflow
+    assert "pull_request:" in workflow
+\\t'" in workflow
+    assert "result.get(\\"commit\\") != expected_sha" in workflow
+    assert "SSH_OR_RECEIVER_TRANSPORT_FAILED" in workflow
     assert "workflow_dispatch:" not in workflow
     assert "push:" not in workflow
+
+
+def test_bootstrap_uses_a_dedicated_account_and_one_sudo_command():
+    assert bootstrap.DEPLOY_USER == "r2relay-deploy"
+    assert bootstrap.FORCED_COMMAND.startswith("/usr/bin/sudo -n ")
+    assert "env_keep += \\"SSH_ORIGINAL_COMMAND\\"" in bootstrap.SUDOERS_TEXT
+    assert "NOPASSWD: " + bootstrap.SUDO_COMMAND in bootstrap.SUDOERS_TEXT
+    assert "ALL=(ALL)" not in bootstrap.SUDOERS_TEXT
+    line = bootstrap.authorized_key_line("AAAA", "test")
+    assert line.startswith('command="/usr/bin/sudo -n ')
+    assert ',restrict ssh-ed25519 AAAA test' in line
 
 
 def test_deployment_tests_run_on_main_push():
