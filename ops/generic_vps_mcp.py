@@ -132,7 +132,8 @@ def git_stage(project, commit):
 
 def _r2_install_request(action: str):
     if action not in ("r2_install_dry_run", "r2_install_apply",
-                       "r2_runtime_smoke", "r2_service_prepare"):
+                       "r2_runtime_smoke", "r2_service_prepare",
+                       "r2_service_verify", "r2_loopback_start"):
         return {"error": "action_denied"}
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -185,3 +186,13 @@ def register(mcp):
     def vps_r2_service_prepare() -> dict:
         """仅创建固定 systemd unit 和本机随机令牌（不回显），不启动或启用服务。"""
         return _r2_install_request("r2_service_prepare")
+
+    @mcp.tool()
+    def vps_r2_service_verify() -> dict:
+        """root-only 检验 R2 Relay unit、私有 env 权限与端口，不输出 Token。"""
+        return _r2_install_request("r2_service_verify")
+
+    @mcp.tool()
+    def vps_r2_loopback_start() -> dict:
+        """只启动绑定 127.0.0.1:18085 的服务，健康失败回滚。"""
+        return _r2_install_request("r2_loopback_start")
