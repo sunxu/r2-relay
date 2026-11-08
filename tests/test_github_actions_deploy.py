@@ -61,7 +61,6 @@ def test_valid_archive_and_commit_marker(tmp_path):
     assert info["files"] == 5
     assert info["unpacked_bytes"] > 0
     stage = tmp_path / "stage"
-    stage.mkdir()
     receiver.extract_archive(archive, stage, members)
     assert (stage / "vps/r2relay_vps/app.py").read_bytes() == b"app = True\n"
     assert not (stage / ".deployment-commit").exists()
