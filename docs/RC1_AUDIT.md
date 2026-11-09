@@ -53,3 +53,13 @@ python scripts/rc1_offline.py
 
 - [PR #15](https://github.com/sunxu/r2-relay/pull/15) 已合并；[Runner 全栈 CI](https://github.com/sunxu/r2-relay/actions/runs/42443068248) 通过。
 - 对 Mock R2 的 HMAC 见证码校验不是 AWS SigV4；VPS 公网与真实 R2 仍为 `NOT_TESTED`。
+
+
+## 2026-11-09 部署后状态补充
+
+本审计主体记录 2026-11-08 的 RC1 离线候选审计，以下更新用于纠正当时部署状态，不改写原审计时点：
+
+- RC1-09（部署和回滚）：已完成真实 VPS 部署。当前 Release `eafa6ed358eca98b9d3b91d71565ffae74914770`；`UNIFIED_DEPLOYMENT_STATUS_PASS`；R2 Relay API、Caddy、MCP、Tunnel active；443 原有监听保留，8443 由 Caddy 提供，18085 仅 loopback。部署手册见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+- 外部客户端证书链/IP SAN/双栈连通性仍待 #33；VPS 内部检查不替代外部客户端验证。
+- 真实 R2 SigV4、ETag、Multipart Complete 和 R2 故障行为仍待 #16；本次部署状态检查没有访问真实 R2。
+- Mac→VPS 短时吞吐基线已整理并关闭 #17；不表示长期稳定性或 90% 持续上行利用率通过。

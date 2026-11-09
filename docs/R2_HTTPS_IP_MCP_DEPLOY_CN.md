@@ -44,3 +44,10 @@ curl --cacert /path/to/r2-root.crt 'https://[2607:8700:5500:a47f::2]:8443/health
 必须启用 TLS 证书链和 IP SAN 验证；禁止 `curl -k` / `verify=False`。从 VPS 自身对 loopback 的验证不能替代真正的外部 IPv4/IPv6 连通性测试。HTTPS /healthz=200 也不等于客户端 Token 已安全同步或真实 R2 上传成功。
 
 既有 `deploy/Caddyfile.ip-selfsigned.example` 是早期单 IP `tls internal` 方案说明，不是此部署动作的运行配置。
+
+
+## 当前部署状态（2026-11-09）
+
+上述固定双栈 IP SAN 自签名 CA 方案已在 VPS 部署。只读状态核验确认 Caddy active、8443 监听、443 原有监听保留、API 18085 仅 loopback；统一状态入口返回 `UNIFIED_DEPLOYMENT_STATUS_PASS`。CA 公钥指纹工具返回 `CA_FINGERPRINT_READY`，SHA-256：`2a5fd6545942b88f3b3c13f9db4e3e04cfc9e251ad39282440ba948440a2e80b`。该动作仅输出指纹和公钥证书路径，不输出 CA PEM 或私钥。
+
+**仍待完成：** Owner Mac/外部客户端通过可信通道取得 CA 公钥证书、独立核对指纹，并从 IPv4/IPv6 外部验证证书链、IP SAN、/healthz 与 metrics 鉴权。VPS 本机状态与监听不能替代外部验证。真实 R2 上传仍由 #16 负责。

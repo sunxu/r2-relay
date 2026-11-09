@@ -7,3 +7,8 @@ vps_r2_loopback_start 只能在 verify PASS、service inactive 和 18085 空闲�
 新工具通过 Unix Socket rootd 白名单固定动作。ChatGPT 无法传递任意路径、参数或 shell。正式上线后，按先 verify、后 start、再只读 inspection 的顺序执行。该验收不代表公网 HTTPS 或真实 R2 功能通过。
 
 接入 VPS 需要可信 root SSH 一次安装 root-owned 升级器，原服务备份保留。GitHub 合并后从固定 SHA 下载 ops/bootstrap_r2_loopback.py，先无 --apply dry-run，再 --apply；仅重启 r2-rootd 与 r2-mcp。重新同步 bandwagonhost 工具目录。
+
+
+## 当前状态补充（2026-11-09）
+
+本文件前文的“8443 未监听”是 Caddy 部署前的准入条件，不是当前状态。Caddy 已由后续固定 IP 自签名 HTTPS 部署流程启用；当前 8443 对外监听，原有 443 保持，R2 API 仍仅监听 127.0.0.1:18085。以 `vps_r2_deployment_status` 的统一检查为准，不要在当前已部署状态下重复执行初始 preflight/prepare 流程。
