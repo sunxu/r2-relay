@@ -644,6 +644,7 @@ def test_deployment_receipt_does_not_use_backtick_command_substitution():
     assert "Requested Commit: %s" in receipt
     assert "`$TARGET_SHA`" not in receipt
     assert "`$receipt`" not in receipt
+    assert 'receipt="No receiver/SSH response was produced; inspect the workflow logs for the failing step."' in receipt
 
 def test_deployment_tests_run_on_main_push():
     workflow = (ROOT / ".github/workflows/deploy-tests.yml").read_text(encoding="utf-8")
