@@ -74,3 +74,26 @@ bash scripts/verify_external_https.sh "$HOME/.config/r2-relay/root.crt"
 脚本使用 `curl --cacert` 严格验证 CA 链和 URL IP SAN，不使用 `-k`，并用 `--noproxy '*'` 测试 Mac 的直接公网路径。它分别检查 IPv4/IPv6 的 `/healthz=200` 与未授权 `/v1/metrics=401`，不会读取或发送生产 Token。若 Mac 的直接 IPv6 网络不可用，IPv6 检查会明确失败；不要将其改成跳过 TLS 或伪造 PASS。
 
 脚本通过后，保留完整终端输出作为 #33 的外部验收证据。该脚本不执行真实 R2 请求。
+
+## Owner Mac 外部验收（可重复脚本）
+
+先经可信 SSH 通道将 VPS 的**公共 CA 证书**取到 Mac（只取 `root.crt`，不取 `root.key`）：
+
+```bash
+mkdir -p "$HOME/.config/r2-relay"
+chmod 700 "$HOME/.config/r2-relay"
+scp root@104.224.168.192:/etc/r2-relay/tls-ca/root.crt \
+  "$HOME/.config/r2-relay/root.crt"
+chmod 600 "$HOME/.config/r2-relay/root.crt"
+```
+
+核对 SHA-256 并执行脚本（脚本会再次核对指纹）：
+
+```bash
+shasum -a 256 "$HOME/.config/r2-relay/root.crt"
+bash scripts/verify_external_https.sh "$HOME/.config/r2-relay/root.crt"
+```
+
+脚本使用 `curl --cacert` 严格验证 CA 链和 URL IP SAN，不使用 `-k`，并用 `--noproxy '*'` 测试 Mac 的直接公网路径。它分别检查 IPv4/IPv6 的 `/healthz=200` 与未授权 `/v1/metrics=401`，不会读取或发送生产 Token。若 Mac 的直接 IPv6 网络不可用，IPv6 检查会明确失败；不要将其改成跳过 TLS 或伪造 PASS。
+
+脚本通过后，保留完整终端输出作为 #33 的外部验收证据。该脚本不执行真实 R2 请求。
