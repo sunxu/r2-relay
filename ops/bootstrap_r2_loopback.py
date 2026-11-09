@@ -58,7 +58,7 @@ def atomically_install(dest: Path, data: bytes, group: int):
             output.flush()
             os.fsync(output.fileno())
         os.chown(temp, 0, group)
-        mode = 0o640 if dest.name == "generic_vps_mcp.py" else (0o755 if dest.name == "r2relay_deploy_receiver.py" else 0o644)
+        mode = 0o640 if dest.name == "generic_vps_mcp.py" else (RECEIVER_MODE if dest.name == "r2relay_deploy_receiver.py" else 0o644)
         os.chmod(temp, mode)
         os.replace(temp, dest)
     finally:
