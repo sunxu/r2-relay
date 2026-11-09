@@ -23,7 +23,7 @@
 | T17 | RLY-005/016 | 重试全部缓存命中时，本地到 VPS 文件正文为 0 B，只有元数据请求。 |
 | T18 | RLY-001/012 | 代理重启、VPS 停机、HTTP/2 断链、签名参数复杂时不破坏正常上传路径。 |
 | T19 | RLY-017 | 固定 Issue #41 仅接受仓库 Owner 的 `/deploy <完整 SHA>`；拒绝错误 Issue/作者/格式、非 main 祖先及部署专项 CI 未成功的 Commit；SSH 使用独立无密码部署账号，Forced Command 仅能 sudo 执行固定 Root 接收器；成功时只切换并重启 R2 Relay API，健康检查失败恢复旧版本；已存在的目标版本必须校验所有权、权限、符号链接和运行时导入后才能复用；Caddy、8443、凭据、缓存和其他服务不变。 |
-| T20 | RLY-018 | 新 Release 必须由受信任的完整 SHA 生成 `.deployment-commit`（root:r2relay、0640）；部署后 verifier 可读取并与 Release 目录 SHA 一致；缺失环境文件、缓存目录、Release 根目录、标记文件及 unit 必须分别报告准确路径错误；旧 Release 缺少标记时不得误报为 `vps.env` 缺失。 |
+| T20 | RLY-018 | 新 Release 必须由受信任的完整 SHA 生成 `.deployment-commit`（root:r2relay、0640）；部署后 verifier 可读取并与 Release 目录 SHA 一致；缺失环境文件、缓存目录、Release 根目录、标记文件及 unit 必须分别报告准确路径错误；旧 Release 缺少标记时不得误报为 `vps.env` 缺失；VPS Bootstrap 必须同步升级 Root Receiver，避免旧接收器继续删除标记。 |
 
 验收证据：测试命令、环境、代码 commit、原始计数器和日志、错误注入方法、PASS/FAIL。性能要求以本地到 VPS 可用带宽为基准，明确协议开销；对照原始直传 R2。
 

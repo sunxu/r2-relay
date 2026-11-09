@@ -14,6 +14,7 @@ def test_upgrade_scope_includes_both_legacy_inspectors():
     assert set(module.FILES) == {
         "ops/r2_rootd.py",
         "ops/r2_loopback_control.py",
+        "ops/r2relay_deploy_receiver.py",
         "ops/generic_vps_mcp.py",
         "ops/deployment_inspect.py",
     }
@@ -36,3 +37,9 @@ def test_backup_directory_is_unique_private_and_root_owned(tmp_path, monkeypatch
     assert stat.S_IMODE(first.stat().st_mode) == 0o700
     assert stat.S_IMODE(second.stat().st_mode) == 0o700
     assert first.stat().st_uid == os.geteuid()
+
+
+def test_receiver_install_target_is_executable_and_fixed():
+    assert module.FILES["ops/r2relay_deploy_receiver.py"] == Path(
+        "/usr/local/libexec/r2relay_deploy_receiver.py")
+    assert module.RECEIVER_MODE == 0o755
