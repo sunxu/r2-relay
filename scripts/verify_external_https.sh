@@ -58,11 +58,47 @@ check_authenticated_metrics() {
   local result code verify remote_ip
 
   # Read the bearer token from stdin via curl config, not argv; never print it.
-  if ! result="$(printf 'header = "Authorization: Bearer %s"\\n' "$R2_RELAY_TOKEN" | \
+  if ! result="$(printf 'header = "Authorization: Bearer %s"\n' "$R2_RELAY_TOKEN" | \
       curl --config - --noproxy '*' --silent --show-error \
       --connect-timeout 10 --max-time 20 --cacert "$CA_FILE" \
       --output /dev/null \
-      --write-out http_code=%{http_code}\\nssl_verify_result=%{ssl_verify_result}\\nremote_ip=%{remote_ip}\\n' \
+      --write-out  \
+      "$url")"; then
+    echo "FAIL: $label (connection, TLS, or authenticated request)"
+    return 1
+  fi
+
+  code="$(printf '%s\n' "$result" | awk -F= '$1=="http_code"{print $2}')"
+  verify="$(printf '%s\\n' "$result" | awk -F= '$1=="ssl_verify_result"{print $2}')"
+  remote_ip="$(printf '%s\\n' "$result" | awk -F= '$1=="remote_ip"{print $2}')"
+  if [[ "$code" != "200" || "$verify" != "0" ]]; then
+    echo "FAIL: $label expected_http=200 actual_http=$code ssl_verify_result=$verify remote_ip=$remote_ip"
+    return 1
+  fi
+  echo "PASS: $label http=$code ssl_verify_result=$verify remote_ip=$remote_ip (token value not emitted)"
+}
+
+failed=0
+check "IPv4 healthz" "https://104.224.168.192:8443/healthz" "200" || failed=1
+check "IPv4 unauthenticated metrics" "https://104.224.168.192:8443/v1/metrics" "401" || failed=1
+check "IPv6 healthz" "https://[2607:8700:5500:a47f::2]:8443/healthz" "200" || failed=1
+check "IPv6 unauthenticated metrics" "https://[2607:8700:5500:a47f::2]:8443/v1/metrics" "401" || failed=1
+
+if [[ -z "${R2_RELAY_TOKEN:-}" ]]; then
+  echo "FAIL: R2_RELAY_TOKEN is not set; authenticated metrics check is required."
+  failed=1
+else
+  check_authenticated_metrics "IPv4 authenticated metrics" "https://104.224.168.192:8443/v1/metrics" || failed=1
+  check_authenticated_metrics "IPv6 authenticated metrics" "https://[2607:8700:5500:a47f::2]:8443/v1/metrics" || failed=1
+fi
+
+unset R2_RELAY_TOKEN || true
+if [[ "$failed" -ne 0 ]]; then
+  echo "RESULT: EXTERNAL_HTTPS_ACCEPTANCE_FAILED"
+  exit 1
+fi
+echo "RESULT: EXTERNAL_HTTPS_ACCEPTANCE_PASS"
+http_code=%{http_code}\nssl_verify_result=%{ssl_verify_result}\nremote_ip=%{remote_ip}\n' \
       "$url")"; then
     echo "FAIL: $label (connection, TLS, or authenticated request)"
     return 1
