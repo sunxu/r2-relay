@@ -42,3 +42,12 @@ GitHub Actions [运行 42395100244](https://github.com/sunxu/r2-relay/actions/ru
 - [Runner full-stack run #42443068248](https://github.com/sunxu/r2-relay/actions/runs/42443068248)：真实 aiohttp、mitmdump、Caddy TLS/HTTP2 `8443`、VPS Uvicorn 和独立 HTTP Mock R2；模拟 502/429 重试、403 透传、缓存 HIT/MISS、VPS 重启后缓存恢复。
 - JSON SAFE 报告由 Actions Artifact 保存，标注公网 VPS、真实 R2 SigV4 和带宽 `NOT_TESTED`。
 - [RUNNER_FULLSTACK_CN.md](RUNNER_FULLSTACK_CN.md) 给出详细测试方案。以上不等于真实 Cloudflare R2 兼容性。
+
+
+## 2026-11-09 部署状态补充（不改变离线测试性质）
+
+本文件前文记录的是 RC1 离线验收过程与当时环境，不应再被理解为当前 VPS 尚未部署。当前 VPS 的独立只读检查已返回 `UNIFIED_DEPLOYMENT_STATUS_PASS`；R2 Relay API、Caddy 8443、MCP 与 Tunnel active；Runtime Smoke 返回 `RUNTIME_SMOKE_PASS`。这只证明部署/运行状态，不证明真实 R2。
+
+- 外部客户端 CA 信任、双栈 TLS/IP SAN 与公网鉴权：仍由 [Issue #33](https://github.com/sunxu/r2-relay/issues/33) 跟踪。
+- 真实 Cloudflare R2 SigV4、UploadPart、ETag、Multipart Complete：仍为 `BLOCKED_REAL_R2`，由 [Issue #16](https://github.com/sunxu/r2-relay/issues/16) 跟踪。
+- Mac→VPS 短时吞吐基线：已记录，见 [R17 报告](R17_EXISTING_NETWORK_EVIDENCE_CN.md)；不代表长期稳定性或 VPS→R2 性能。
