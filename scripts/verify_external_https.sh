@@ -62,15 +62,15 @@ check_authenticated_metrics() {
       curl --config - --noproxy '*' --silent --show-error \
       --connect-timeout 10 --max-time 20 --cacert "$CA_FILE" \
       --output /dev/null \
-      --write-out  \
+      --write-out $'http_code=%{http_code}\nssl_verify_result=%{ssl_verify_result}\nremote_ip=%{remote_ip}\n' \
       "$url")"; then
     echo "FAIL: $label (connection, TLS, or authenticated request)"
     return 1
   fi
 
   code="$(printf '%s\n' "$result" | awk -F= '$1=="http_code"{print $2}')"
-  verify="$(printf '%s\\n' "$result" | awk -F= '$1=="ssl_verify_result"{print $2}')"
-  remote_ip="$(printf '%s\\n' "$result" | awk -F= '$1=="remote_ip"{print $2}')"
+  verify="$(printf '%s\n' "$result" | awk -F= '$1=="ssl_verify_result"{print $2}')"
+  remote_ip="$(printf '%s\n' "$result" | awk -F= '$1=="remote_ip"{print $2}')"
   if [[ "$code" != "200" || "$verify" != "0" ]]; then
     echo "FAIL: $label expected_http=200 actual_http=$code ssl_verify_result=$verify remote_ip=$remote_ip"
     return 1
