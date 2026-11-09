@@ -1,73 +1,133 @@
-# R2 Relay 部署说明（预备材料，当前未部署）
+# R2 Relay 部署与运行手册
 
-RC1 离线代码已合并到 `main`（PR #15）；**本文件仍只是部署预备材料**，不代表真实 VPS/R2 已验证。本地代理默认 `127.0.0.1:18585`，VPS HTTPS `8443`（443 已被占用）；只部署经过审核的正式 Commit，生产执行必须另行授权。
+最后核对：2026-11-09。本文区分当前真实 VPS 部署状态、客户端本地配置和仍待真实 R2 环境验证的项目。
 
-## 1. VPS Python API
+## 1. 当前部署状态
 
-Linux 上配置专用服务账户、缓存目录和 Python 虚拟环境。以下命令是供运维审核的示例，不会自动执行：
+截至 2026-11-09，以下状态已通过 ChatGPT bandwagonhost MCP 只读检查：
 
-```bash
-sudo useradd --system --home /var/lib/r2-relay --shell /usr/sbin/nologin r2relay
-sudo install -d -o r2relay -g r2relay -m 0700 /var/lib/r2-relay/cache
-sudo install -d -o root -g root -m 0700 /etc/r2-relay
-sudo install -d -o root -g root -m 0755 /opt/r2-relay
-# 将已审查代码放到 /opt/r2-relay
-python3.11 -m venv /opt/r2-relay/.venv
-/opt/r2-relay/.venv/bin/pip install -r /opt/r2-relay/requirements/rc1-direct.txt
-/opt/r2-relay/.venv/bin/pip install -e /opt/r2-relay/vps
-# 将 deploy/vps.env.example 复制为 /etc/r2-relay/vps.env，填写随机 token
-sudo chown root:root /etc/r2-relay/vps.env
-sudo chmod 0600 /etc/r2-relay/vps.env
-sudo cp deploy/vps.service /etc/systemd/system/r2-relay-vps.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now r2-relay-vps
+- 当前应用 Release：`eafa6ed358eca98b9d3b91d71565ffae74914770`。
+- 统一检查：`UNIFIED_DEPLOYMENT_STATUS_PASS`。
+- R2 Relay API：`r2-relay-vps.service` active，Uvicorn 只监听 `127.0.0.1:18085`。
+- Caddy：`caddy.service` active，对外提供 HTTPS `:8443`。
+- sing-box 原有 `:443` 仍在监听，本项目不接管或重启它。
+- MCP 与 Secure Tunnel：`r2-mcp.service`、`r2-mcp-tunnel.service` active。
+- EnvironmentFile：`/etc/r2-relay/vps.env`，root:root、0600；本手册不记录其内容。
+- Cache：`/var/lib/r2-relay/cache`，r2relay 专用目录，0700。
+- 18085 只允许 loopback；不得直接暴露公网。
+- 本机 Runtime Smoke：`RUNTIME_SMOKE_PASS`（health 200、metrics 未授权 401、授权 200）；使用临时假 Token，不访问真实 R2。
+
+以上是部署与服务状态证据，不等于真实 Cloudflare R2 PUT、ETag、Multipart Complete 或 VPS→R2 性能验收通过。真实 R2 项目由 [Issue #16](https://github.com/sunxu/r2-relay/issues/16) 跟踪。
+
+## 2. VPS 当前架构
+
+```text
+本地 Python / aiohttp 客户端
+  └─ HTTP CONNECT → 127.0.0.1:18585 (mitmdump)
+       └─ TLS MITM 仅限 *.r2.cloudflarestorage.com
+            └─ HTTPS :8443 (Caddy，自签名 IP SAN 证书)
+                 └─ 127.0.0.1:18085 (R2 Relay FastAPI)
+                      └─ /var/lib/r2-relay/cache
+                      └─ R2 UploadPart Worker（真实 R2 尚待验收）
 ```
 
-Systemd 只监听 `127.0.0.1:18085`，不能把明文 HTTP 18085 暴露公网。
+`:443` 由既有 sing-box 使用。禁止将 Caddy 绑定到 443、80，禁止将 API 18085 暴露公网。公网 8443 的服务端证书为 VPS 自建私有 CA 签发的 IP SAN 证书；客户端必须使用已通过可信通道取得并核对指纹的 CA 公钥证书验证链与 IP SAN。不得使用 `curl -k`、`verify=False` 或 `ssl_insecure=true`。
 
-## 2. VPS HTTPS 8443
+证书及权限设计见 [双栈 IP 自签名 HTTPS 部署记录](R2_HTTPS_IP_MCP_DEPLOY_CN.md)。CA 私钥留在 VPS；客户端只需要 CA 公钥证书。证书轮换前需更新客户端信任锚并重新验证指纹。
 
-`deploy/Caddyfile.example` 在 8443 接收 HTTPS/2，并反代 loopback API。配置 `R2_RELAY_HOST`、`R2_RELAY_TLS_CERT`、`R2_RELAY_TLS_KEY`，证书必须匹配主机名；使用现有已签发证书，不依赖占用中的 443 或 HTTP-01。安装和启用 Caddy 的操作应与 VPS 现有配置隔离，不能覆盖正在运行的 443 服务。
+## 3. 本地代理安装（macOS / Linux）
 
-Caddy 对外仅暴露 `8443`，务必由防火墙限制预期来源；API 内部端口 `18085` 仅回环绑定。验证 `curl --fail --cacert <CA> https://HOST:8443/healthz`，再测试认证拒绝和 Prepare/MISS/HIT。不要开启 TLS 验证绕过。
-
-## 3. 本地 mitmproxy
+要求 Python 3.11+。
 
 ```bash
 python3.11 -m venv .venv
 . .venv/bin/activate
-python -m pip install -e './local[test]' -e './vps[test]'
-# 设置 R2_RELAY_VPS_URL、R2_RELAY_TOKEN，必要时 R2_RELAY_VPS_CA_FILE
-python -m r2relay_local
+python -m pip install -e './local[test]'
 ```
 
-原 aiohttp 程序自行将原有 CA 与 mitmproxy CA 合并，并通过 `proxy="http://127.0.0.1:18585"` 连接。代理 CA 私钥、VPS token、R2 预签名 URL 属于敏感运行数据，不得提交 GitHub。按现有确认，受控运行日志可显示完整字段。
+在启动代理的同一个终端中配置：
 
-## 4. 试验环境验收
-
-当前无 VPS 和 R2 时运行：
 ```bash
-python -m pip install -r requirements/rc1-direct.txt
-python -m pip install -e ./vps -e ./local
-python scripts/rc1_offline.py
+export R2_RELAY_VPS_URL='https://YOUR_VPS_IP:8443'
+export R2_RELAY_TOKEN='从受控秘密分发渠道取得的客户端 Token'
+export R2_RELAY_VPS_CA_FILE='/absolute/path/to/r2-vps-root-ca.pem'
+export R2_RELAY_BUFFER_BUDGET=536870912
+python -m r2relay_local --listen-host 127.0.0.1 --listen-port 18585
 ```
 
-`local/tests/test_real_fullstack.py` 启动真实 mitmdump 和 TLS VPS（回环），注入 httpx MockTransport 取代外部 R2；测试 MISS/HIT、重试、实际 ETag、缓存唯一性。Runner 实际 Caddy/Mock R2 全栈验证可参见 [RUNNER_FULLSTACK_CN.md](RUNNER_FULLSTACK_CN.md)。完整外网验证、真实 Cloudflare R2 ETag 和性能报告必须等环境可用后再做。
+不要将真实 Token 写入 Git、聊天、shell 命令历史、CI 日志或工单。推荐使用本机密码管理器/受保护环境注入方式；不要将真实值填入仓库中的示例文件。
 
-## 5. P0 部署前安全检查
+## 4. 本地代理安装（Windows PowerShell）
 
-- 将 VPS Token 视为高敏感共享密钥；用密码学安全随机源生成，绝不在 shell history、CI 公开日志、Issue 或 PR 中输出；环境文件权限 `root:root 0600`。systemd 作为 `r2relay` 账户运行，**服务账户不能读取 root-only EnvironmentFile 本身，systemd 管理器负责加载环境**。
-- VPS 凭据必须开启 TLS 验证；不要为“测试方便”启用 `ssl_insecure` 或 `verify=False`。
-- 只通过 Caddy 暴露 `8443`，不放行 `18085`；按最小来源 IP 开放防火墙。
-- 将 `R2_RELAY_MAX_PART_BYTES=33554432` 设置为与本地缓冲的 32 MiB 单片限制一致；超限 Prepare 明确返回 413，不创建任务。
-- `R2_RELAY_CACHE_DIR` 所在文件系统应配置磁盘容量告警、配额与清理；`R2_RELAY_MIN_FREE_BYTES` 只是剩余空间保护，**不是缓存总容量配额**。
-- Caddy 证书路径必须由 Caddy 运行账户可读；不得改变现有 `443` 监听。
-- 生产前复核 systemd 单元与 Caddy 实际加载配置：`systemd-analyze verify`、`caddy validate`；目前只完成 Runner 模拟，不表示真实 VPS 验收通过。
+要求安装 Python 3.11+，在项目根目录执行：
 
-## 6. 纯离线预部署检查
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e '.\local[test]'
+```
 
-参见 [离线预部署检查与 SAFE 报告](DEPLOYMENT_PREFLIGHT_CN.md)。该检查不需 VPS/R2，可以在 GitHub Runner 校验 systemd/Caddy 语法、环境变量约束与权限策略，但不代表真实 VPS 已部署。
+在同一 PowerShell 会话配置环境变量（下列值均为占位符）：
 
-## 7. 回滚
+```powershell
+$env:R2_RELAY_VPS_URL = 'https://YOUR_VPS_IP:8443'
+$env:R2_RELAY_TOKEN = '<从受控秘密分发渠道取得>'
+$env:R2_RELAY_VPS_CA_FILE = 'C:\Users\<用户>\certs\r2-vps-root-ca.pem'
+$env:R2_RELAY_BUFFER_BUDGET = '536870912'
+python -m r2relay_local --listen-host 127.0.0.1 --listen-port 18585
+```
 
-停止本地代理：原 aiohttp 移除显式代理配置，即恢复既有上传路径。VPS 不可用时本地按约定只在明确连接失败时直传。关闭 VPS 服务使用 `systemctl stop r2-relay-vps`，不删除运行中的其他服务或端口配置。对正在执行的 Multipart 不保证无中断迁移。
+Windows PowerShell 当前会话关闭后，环境变量不会自动保留。不要使用 `setx` 将秘密写入长期用户环境；应通过受保护的秘密管理方式注入。
+
+## 5. 客户端 CA 信任配置
+
+首次启动 mitmproxy 后会在用户目录生成代理 CA。常见路径：
+
+- macOS/Linux：`~/.mitmproxy/mitmproxy-ca-cert.pem`
+- Windows：`%USERPROFILE%\.mitmproxy\mitmproxy-ca-cert.pem`
+
+只分发 `mitmproxy-ca-cert.pem` 公共证书；绝不分发 `mitmproxy-ca.pem` 私钥文件。
+
+调用方必须在原有系统/应用 CA 信任基础上追加代理 CA，并继续验证 TLS。aiohttp 示例：
+
+```python
+import ssl
+import certifi
+import aiohttp
+
+ssl_context = ssl.create_default_context(cafile=certifi.where())
+ssl_context.load_verify_locations(cafile="/path/to/mitmproxy-ca-cert.pem")
+
+connector = aiohttp.TCPConnector(ssl=ssl_context)
+session = aiohttp.ClientSession(
+    connector=connector,
+    trust_env=False,
+)
+# 发请求时显式指定 proxy="http://127.0.0.1:18585"
+```
+
+Windows 将 CA 文件路径替换为 Windows 路径。若应用原本使用自定义 CA bundle，应以该 bundle 为基础追加 mitmproxy CA，不要用代理 CA 覆盖原有信任根。VPS 的自签名 CA 与 mitmproxy CA 是两种不同用途的信任锚：前者由 RelayClient 的 `R2_RELAY_VPS_CA_FILE` 使用，后者由本地 aiohttp 客户端用于代理 TLS MITM。
+
+## 6. 本地代理行为与限制
+
+- 默认监听 `127.0.0.1:18585`，仅对 `*.r2.cloudflarestorage.com` CONNECT 进行 TLS MITM；其他 HTTPS 作为普通隧道。
+- 只识别 HTTPS PUT UploadPart（需 `uploadId` 和 `partNumber`）。
+- 已知 Content-Length 且不超过 32 MiB、全局预算允许时完整缓冲并计算 MD5；未知长度、超限或超预算流量走普通流式路径。
+- 默认 HTTP/2 连接 VPS；`R2_RELAY_HTTP2=0` 可切换 HTTP/1.1 对照，修改后需重启本地代理。
+- VPS TCP 连接建立前失败可按既定逻辑回退；已提交任务后状态不确定时不发起竞争性直传。
+- R2 业务错误应透传，不伪造成功。真实 R2 错误与 Multipart 行为仍需 Issue #16 的独立环境验收。
+
+## 7. 运行、诊断与回滚
+
+- 本地停止：在运行代理的终端按 Ctrl+C；调用方移除显式代理设置即可恢复原上传路径。
+- VPS 状态：通过 ChatGPT 的 `vps_r2_deployment_status` 只读检查。旧第三方 `deployment_inspect` 为 Legacy，不作为生产验收依据。
+- 不要手工修改 `/etc/r2-relay/vps.env` 权限或内容；不要将其复制到项目目录。
+- 生产部署由固定 SHA 的受控 GitHub Actions / Root Receiver 流程管理；部署前检查、备份和回滚回执见 [GitHub Actions VPS 部署说明](GITHUB_ACTIONS_DEPLOY_CN.md)。
+- 发生异常时先保存脱敏状态与日志，再按已审核部署流程回滚；不要通过任意 root shell、重启 sing-box 或改动 443 进行排障。
+
+## 8. 测试状态与明确未验收项
+
+- Runner 离线全栈与 Mock R2：`PASS_SIMULATED`，见 [RUNNER_FULLSTACK_CN.md](RUNNER_FULLSTACK_CN.md)。
+- Mac→VPS 短时网络吞吐基线：已记录，见 [R17 报告](R17_EXISTING_NETWORK_EVIDENCE_CN.md)；不代表长期稳定性或 VPS→R2 速度。
+- 真实 Cloudflare R2 SigV4、UploadPart、真实 ETag、CompleteMultipartUpload、真实 R2 故障重试：`BLOCKED_REAL_R2`，见 [Issue #16](https://github.com/sunxu/r2-relay/issues/16)。
+- 不宣称 90% 持续上行利用率、长期稳定性、资源峰值或未执行的并发矩阵已通过。
