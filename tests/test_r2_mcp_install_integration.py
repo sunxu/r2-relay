@@ -35,7 +35,7 @@ def test_mcp_install_tool_registration(monkeypatch):
     assert set(app.items)=={"vps_system_snapshot","vps_project_doc_read",
                             "vps_git_stage","vps_r2_install_prepare",
                             "vps_r2_runtime_smoke","vps_r2_service_prepare",
-                            "vps_r2_service_verify","vps_r2_loopback_start",
+                            "vps_r2_service_verify","vps_r2_deployment_status","vps_r2_loopback_start",
                             "vps_r2_https_preflight","vps_r2_https_prepare",
                             "vps_r2_https_start","vps_r2_https_ca_fingerprint"}
     called=[]
@@ -47,3 +47,19 @@ def test_mcp_install_tool_registration(monkeypatch):
 def test_denies_custom_action():
     module=load("generic2","ops/generic_vps_mcp.py")
     assert module._r2_install_request("arbitrary-shell")=={"error":"action_denied"}
+
+
+def test_unified_status_tool_calls_only_fixed_action(monkeypatch):
+    module=load("generic_status","ops/generic_vps_mcp.py")
+    class App:
+        def __init__(self): self.items={}
+        def tool(self):
+            def decorate(fn): self.items[fn.__name__]=fn; return fn
+            return decorate
+    app=App()
+    module.register(app)
+    called=[]
+    monkeypatch.setattr(module,"_r2_install_request",lambda action: called.append(action) or {"schema":"r2_relay_unified_deployment_status_v1"})
+    result=app.items["vps_r2_deployment_status"]()
+    assert result["schema"] == "r2_relay_unified_deployment_status_v1"
+    assert called == ["r2_deployment_status"]

@@ -135,7 +135,8 @@ def _r2_install_request(action: str):
                        "r2_runtime_smoke", "r2_service_prepare",
                        "r2_service_verify", "r2_loopback_start",
                        "r2_https_preflight", "r2_https_prepare",
-                       "r2_https_start", "r2_https_ca_fingerprint"):
+                       "r2_https_start", "r2_https_ca_fingerprint",
+                       "r2_deployment_status"):
         return {"error": "action_denied"}
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
@@ -193,6 +194,11 @@ def register(mcp):
     def vps_r2_service_verify() -> dict:
         """root-only 检验 R2 Relay unit、私有 env 权限与端口，不输出 Token。"""
         return _r2_install_request("r2_service_verify")
+
+    @mcp.tool()
+    def vps_r2_deployment_status() -> dict:
+        """统一只读部署状态：交叉核对 Release、EnvironmentFile、systemd、端口和服务验收；不输出凭据、不修改生产环境。"""
+        return _r2_install_request("r2_deployment_status")
 
     @mcp.tool()
     def vps_r2_loopback_start() -> dict:

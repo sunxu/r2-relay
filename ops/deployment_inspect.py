@@ -179,3 +179,13 @@ def deployment_inspect() -> dict:
         "environment_file_contents_read": False,
         "real_r2_tested": False,
     }
+
+
+def main():
+    import json
+    print(json.dumps(deployment_inspect(), sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

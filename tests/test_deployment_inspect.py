@@ -115,3 +115,11 @@ def test_deployment_inspect_keeps_expected_443_8443_and_loopback_18085(monkeypat
     assert result["modified"] is False
     assert result["credentials_read"] is False
     assert result["environment_file_contents_read"] is False
+
+
+def test_cli_emits_versioned_json(monkeypatch, capsys):
+    expected = {"schema": "r2_relay_deployment_inspect_readonly_v2", "modified": False}
+    monkeypatch.setattr(mod, "deployment_inspect", lambda: expected)
+    assert mod.main() == 0
+    import json
+    assert json.loads(capsys.readouterr().out) == expected

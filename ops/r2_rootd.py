@@ -16,16 +16,17 @@ ACTIONS = frozenset(("probe", "install_prereqs", "prepare_dirs", "relay_status",
                      "r2_runtime_smoke", "r2_service_prepare",
                      "r2_service_verify", "r2_loopback_start",
                      "r2_https_preflight", "r2_https_prepare",
-                     "r2_https_start", "r2_https_ca_fingerprint"))
+                     "r2_https_start", "r2_https_ca_fingerprint",
+                     "r2_deployment_status"))
 MAX_REQUEST = 2048
 
-def run(argv, timeout=180):
+def run(argv, timeout=180, max_output=2500):
     try:
         p = subprocess.run(argv, shell=False, capture_output=True, text=True,
                            errors="replace", timeout=timeout, check=False,
                            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
                                 "DEBIAN_FRONTEND": "noninteractive", "LANG": "C"})
-        return {"exit_code": p.returncode, "stdout": p.stdout[-2500:],
+        return {"exit_code": p.returncode, "stdout": p.stdout[-max_output:],
                 "stderr": p.stderr[-1000:]}
     except (OSError, subprocess.TimeoutExpired) as e:
         return {"exit_code": 1, "error_type": type(e).__name__}
@@ -72,6 +73,41 @@ def execute(action):
         if action == "r2_loopback_start":
             argv.append("--start")
         return run(argv, timeout=90)
+    if action == "r2_deployment_status":
+        inspect = run(["/usr/bin/python3", "/opt/r2-relay/scripts/deployment_inspect.py"],
+                      timeout=30, max_output=10000)
+        verify = run(["/usr/bin/python3", "/usr/local/libexec/r2_loopback_control.py"],
+                     timeout=90, max_output=4000)
+        try:
+            inspection = json.loads(inspect.get("stdout", ""))
+            verification = json.loads(verify.get("stdout", ""))
+        except (TypeError, ValueError):
+            return {"schema": "r2_relay_unified_deployment_status_v1",
+                    "status": "UNIFIED_DEPLOYMENT_STATUS_FAILED",
+                    "reason": "subcheck_output_invalid", "token_emitted": False}
+        current = inspection.get("current_release", {})
+        env = inspection.get("files", {}).get("/etc/r2-relay/vps.env", {})
+        commit_matches = (current.get("status") == "VALID"
+                          and current.get("commit") == verification.get("release_commit"))
+        env_matches = (env.get("exists") is True
+                       and verification.get("env_exists") is True)
+        passed = (inspect.get("exit_code") == 0 and verify.get("exit_code") == 0
+                  and verification.get("status") == "SERVICE_VERIFY_PASS"
+                  and commit_matches and env_matches
+                  and inspection.get("systemd", {}).get("release_layout") is True)
+        return {
+            "schema": "r2_relay_unified_deployment_status_v1",
+            "status": "UNIFIED_DEPLOYMENT_STATUS_PASS" if passed else "UNIFIED_DEPLOYMENT_STATUS_FAILED",
+            "release_commit": verification.get("release_commit"),
+            "release_matches": commit_matches,
+            "environment_file_exists": env_matches,
+            "inspection": inspection,
+            "service_verification": verification,
+            "token_emitted": False,
+            "credentials_read": False,
+            "modified": False,
+            "real_r2_tested": False,
+        }
     if action in ("r2_https_preflight", "r2_https_prepare",
                   "r2_https_start", "r2_https_ca_fingerprint"):
         modes = {"r2_https_preflight": "--preflight",
