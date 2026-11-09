@@ -91,7 +91,8 @@ def test_deployment_staging_path_is_unique_and_created_by_extractor(tmp_path, mo
     members, _ = receiver.validate_archive(archive, SHA)
     receiver.extract_archive(archive, stage, members, SHA)
     assert stage.is_dir()
-    assert (stage / "vps/r2relay_vps/app.py").is_file()\n    assert (stage / ".deployment-commit").read_text(encoding="ascii") == SHA + "\\n"
+    assert (stage / "vps/r2relay_vps/app.py").is_file()
+    assert (stage / ".deployment-commit").read_text(encoding="ascii") == SHA + "\n"
 
 def test_valid_archive_and_commit_marker(tmp_path):
     archive = tmp_path / "release.tar"
@@ -102,7 +103,9 @@ def test_valid_archive_and_commit_marker(tmp_path):
     stage = tmp_path / "stage"
     receiver.extract_archive(archive, stage, members, SHA)
     assert (stage / "vps/r2relay_vps/app.py").read_bytes() == b"app = True\n"
-    marker = stage / ".deployment-commit"\n    assert marker.read_text(encoding="ascii") == SHA + "\\n"\n    assert marker.stat().st_mode & 0o777 == 0o640
+    marker = stage / ".deployment-commit"
+    assert marker.read_text(encoding="ascii") == SHA + "\n"
+    assert marker.stat().st_mode & 0o777 == 0o640
 
 
 def test_archive_rejects_wrong_commit_marker(tmp_path):
