@@ -71,7 +71,7 @@ shasum -a 256 "$HOME/.config/r2-relay/root.crt"
 bash scripts/verify_external_https.sh "$HOME/.config/r2-relay/root.crt"
 ```
 
-脚本使用 `curl --cacert` 严格验证 CA 链和 URL IP SAN，不使用 `-k`，并用 `--noproxy '*'` 测试 Mac 的直接公网路径。它分别检查 IPv4/IPv6 的 `/healthz=200` 与未授权 `/v1/metrics=401`，不会读取或发送生产 Token。若 Mac 的直接 IPv6 网络不可用，IPv6 检查会明确失败；不要将其改成跳过 TLS 或伪造 PASS。
+脚本使用 `curl --cacert` 严格验证 CA 链和 URL IP SAN，不使用 `-k`，并用 `--noproxy '*'` 测试 Mac 的直接公网路径。它分别检查 IPv4/IPv6 的 `/healthz=200`、未授权 `/v1/metrics=401`，以及使用客户端 Token 后授权 `/v1/metrics=200`。Token 通过环境变量传给脚本，再经 curl 配置 stdin 传递，不进入命令行参数或输出。若 Mac 的直接 IPv6 网络不可用，IPv6 检查会明确失败；不要将其改成跳过 TLS 或伪造 PASS。
 
 脚本通过后，保留完整终端输出作为 #33 的外部验收证据。该脚本不执行真实 R2 请求。
 
@@ -97,3 +97,13 @@ bash scripts/verify_external_https.sh "$HOME/.config/r2-relay/root.crt"
 脚本使用 `curl --cacert` 严格验证 CA 链和 URL IP SAN，不使用 `-k`，并用 `--noproxy '*'` 测试 Mac 的直接公网路径。它分别检查 IPv4/IPv6 的 `/healthz=200` 与未授权 `/v1/metrics=401`，不会读取或发送生产 Token。若 Mac 的直接 IPv6 网络不可用，IPv6 检查会明确失败；不要将其改成跳过 TLS 或伪造 PASS。
 
 脚本通过后，保留完整终端输出作为 #33 的外部验收证据。该脚本不执行真实 R2 请求。
+
+在 Mac 终端交互式输入 Token（输入不回显），执行完整验收；不要把 Token 粘贴到 ChatGPT、Issue 或 PR：
+
+```bash
+IFS= read -r -s -p "R2 Relay client token: " R2_RELAY_TOKEN
+printf '\\n'
+export R2_RELAY_TOKEN
+bash scripts/verify_external_https.sh "$HOME/.config/r2-relay/root.crt"
+unset R2_RELAY_TOKEN
+```
