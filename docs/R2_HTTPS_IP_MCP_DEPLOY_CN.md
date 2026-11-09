@@ -51,3 +51,59 @@ curl --cacert /path/to/r2-root.crt 'https://[2607:8700:5500:a47f::2]:8443/health
 上述固定双栈 IP SAN 自签名 CA 方案已在 VPS 部署。只读状态核验确认 Caddy active、8443 监听、443 原有监听保留、API 18085 仅 loopback；统一状态入口返回 `UNIFIED_DEPLOYMENT_STATUS_PASS`。CA 公钥指纹工具返回 `CA_FINGERPRINT_READY`，SHA-256：`2a5fd6545942b88f3b3c13f9db4e3e04cfc9e251ad39282440ba948440a2e80b`。该动作仅输出指纹和公钥证书路径，不输出 CA PEM 或私钥。
 
 **仍待完成：** Owner Mac/外部客户端通过可信通道取得 CA 公钥证书、独立核对指纹，并从 IPv4/IPv6 外部验证证书链、IP SAN、/healthz 与 metrics 鉴权。VPS 本机状态与监听不能替代外部验证。真实 R2 上传仍由 #16 负责。
+
+## Owner Mac 外部验收（可重复脚本）
+
+先经可信 SSH 通道将 VPS 的**公共 CA 证书**取到 Mac（只取 `root.crt`，不取 `root.key`）：
+
+```bash
+mkdir -p "$HOME/.config/r2-relay"
+chmod 700 "$HOME/.config/r2-relay"
+scp root@104.224.168.192:/etc/r2-relay/tls-ca/root.crt \
+  "$HOME/.config/r2-relay/root.crt"
+chmod 600 "$HOME/.config/r2-relay/root.crt"
+```
+
+核对 SHA-256 并执行脚本（脚本会再次核对指纹）：
+
+```bash
+shasum -a 256 "$HOME/.config/r2-relay/root.crt"
+bash scripts/verify_external_https.sh "$HOME/.config/r2-relay/root.crt"
+```
+
+脚本使用 `curl --cacert` 严格验证 CA 链和 URL IP SAN，不使用 `-k`，并用 `--noproxy '*'` 测试 Mac 的直接公网路径。它分别检查 IPv4/IPv6 的 `/healthz=200`、未授权 `/v1/metrics=401`，以及使用客户端 Token 后授权 `/v1/metrics=200`。Token 通过环境变量传给脚本，再经 curl 配置 stdin 传递，不进入命令行参数或输出。若 Mac 的直接 IPv6 网络不可用，IPv6 检查会明确失败；不要将其改成跳过 TLS 或伪造 PASS。
+
+脚本通过后，保留完整终端输出作为 #33 的外部验收证据。该脚本不执行真实 R2 请求。
+
+## Owner Mac 外部验收（可重复脚本）
+
+先经可信 SSH 通道将 VPS 的**公共 CA 证书**取到 Mac（只取 `root.crt`，不取 `root.key`）：
+
+```bash
+mkdir -p "$HOME/.config/r2-relay"
+chmod 700 "$HOME/.config/r2-relay"
+scp root@104.224.168.192:/etc/r2-relay/tls-ca/root.crt \
+  "$HOME/.config/r2-relay/root.crt"
+chmod 600 "$HOME/.config/r2-relay/root.crt"
+```
+
+核对 SHA-256 并执行脚本（脚本会再次核对指纹）：
+
+```bash
+shasum -a 256 "$HOME/.config/r2-relay/root.crt"
+bash scripts/verify_external_https.sh "$HOME/.config/r2-relay/root.crt"
+```
+
+脚本使用 `curl --cacert` 严格验证 CA 链和 URL IP SAN，不使用 `-k`，并用 `--noproxy '*'` 测试 Mac 的直接公网路径。它分别检查 IPv4/IPv6 的 `/healthz=200` 与未授权 `/v1/metrics=401`，不会读取或发送生产 Token。若 Mac 的直接 IPv6 网络不可用，IPv6 检查会明确失败；不要将其改成跳过 TLS 或伪造 PASS。
+
+脚本通过后，保留完整终端输出作为 #33 的外部验收证据。该脚本不执行真实 R2 请求。
+
+在 Mac 终端交互式输入 Token（输入不回显），执行完整验收；不要把 Token 粘贴到 ChatGPT、Issue 或 PR：
+
+```bash
+IFS= read -r -s -p "R2 Relay client token: " R2_RELAY_TOKEN
+printf '\\n'
+export R2_RELAY_TOKEN
+bash scripts/verify_external_https.sh "$HOME/.config/r2-relay/root.crt"
+unset R2_RELAY_TOKEN
+```
