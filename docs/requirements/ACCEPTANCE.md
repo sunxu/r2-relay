@@ -19,7 +19,7 @@
 | T13 | RLY-012 | R2 返回业务 403/502（由 VPS 正常返回）不错误触发本地直传竞争。 |
 | T14 | RLY-004 | 超出内存阈值的合法分片不导致无限内存增长，按预先确定的直传路径处理。 |
 | T15 | RLY-007/008 | 临时文件不可被 HIT；文件到期删除时 R2 任务失败可诊断。 |
-| T16 | RLY-006/016 | 100×10 MB 首次传输，以独立目标进行 4/8/16 并发测试，记录 MB/s、P95、内存和失败率。 |
+| T16 | RLY-006/016 | 使用已存在的 GitHub Runner 100×10 MiB MockTransport 基准作为离线模拟证据；不得将其解释为真实公网吞吐。Owner 已明确不执行 4/8/16 并发测试，不新增此类并发测试。真实 Mac→VPS 吞吐证据单独记录于 Issue #17。 |
 | T17 | RLY-005/016 | 重试全部缓存命中时，本地到 VPS 文件正文为 0 B，只有元数据请求。 |
 | T18 | RLY-001/012 | 代理重启、VPS 停机、HTTP/2 断链、签名参数复杂时不破坏正常上传路径。 |
 | T19 | RLY-017 | 固定 Issue #41 仅接受仓库 Owner 的 `/deploy <完整 SHA>`；拒绝错误 Issue/作者/格式、非 main 祖先及部署专项 CI 未成功的 Commit；SSH 使用独立无密码部署账号，Forced Command 仅能 sudo 执行固定 Root 接收器；成功时只切换并重启 R2 Relay API，健康检查失败恢复旧版本；已存在的目标版本必须校验所有权、权限、符号链接和运行时导入后才能复用；Caddy、8443、凭据、缓存和其他服务不变。 |
@@ -31,7 +31,7 @@
 ## RC1 模拟环境与未完成验收的区分
 
 - **已通过 Runner 离线全栈**：aiohttp → mitmdump CONNECT/TLS → Caddy HTTPS/HTTP2 `8443` → VPS Uvicorn → 独立 Mock R2 TCP 服务；验证 MD5 缓存 HIT/MISS、模拟 502/429 重试及 403、ETag 透传、VPS 进程重启后缓存恢复。证据：[Actions #42443068248](https://github.com/sunxu/r2-relay/actions/runs/42443068248)，[中文说明](../RUNNER_FULLSTACK_CN.md)。
-- **已通过 Runner 离线负载**：100 × 10 MiB 并发 8，第二轮缓存命中时本地→VPS 分片正文为 0 B。仅是 Runner 内部模拟，不能替代 T16 对并发 4/8/16 的真实网络 P95、RSS 与失败率要求。
+- **已通过 Runner 离线负载**：历史结果为 100 × 10 MiB、Runner 内部并发 8，第二轮缓存命中时本地→VPS 分片正文为 0 B。仅作为既有离线模拟证据，不是公网测试；不再扩展或重跑 4/8/16 并发矩阵。真实 Mac→VPS 的已完成观测见 [Issue #17](https://github.com/sunxu/r2-relay/issues/17) 及 [R17 报告](../R17_EXISTING_NETWORK_EVIDENCE_CN.md)。
 - **待外部环境**：真实 VPS、Cloudflare R2 的 SigV4、真实 ETag、Multipart Complete、公网传输和超时/故障行为；对应 [Issue #16](https://github.com/sunxu/r2-relay/issues/16)、[Issue #17](https://github.com/sunxu/r2-relay/issues/17)。
 - **状态定义**：`PASS_SIMULATED` 仅表示对应模拟场景通过；`NOT_TESTED_REAL` 表示真实环境尚无证据，绝不等同于 `PASS_REAL`。
 
