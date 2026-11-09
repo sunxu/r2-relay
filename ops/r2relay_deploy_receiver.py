@@ -236,6 +236,7 @@ def extract_archive(archive_path: Path, stage: Path, members, expected_sha: str)
         # the forced SSH command so every immutable release carries a verifiable
         # root-owned deployment identity.
         marker = stage / ".deployment-commit"
+        marker.unlink(missing_ok=True)
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
