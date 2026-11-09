@@ -18,6 +18,7 @@ from urllib.request import urlopen
 FILES = {
     "ops/r2_rootd.py": Path("/usr/local/libexec/r2-rootd.py"),
     "ops/r2_loopback_control.py": Path("/usr/local/libexec/r2_loopback_control.py"),
+    "ops/r2relay_deploy_receiver.py": Path("/usr/local/libexec/r2relay_deploy_receiver.py"),
     "ops/generic_vps_mcp.py": Path("/opt/r2-mcp/generic_vps_mcp.py"),
     # The legacy connector executes this fixed inspection module from the
     # retained /opt/r2-relay tree. Keep it read-only and update it atomically.
@@ -26,6 +27,7 @@ FILES = {
 BACKUP_ROOT = Path("/var/backups/vps-mcp/r2-loopback-control-upgrade")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SERVICES = ("r2-rootd.service", "r2-mcp.service")
+RECEIVER_MODE = 0o755
 
 
 def get_files(commit: str) -> dict:
@@ -56,7 +58,8 @@ def atomically_install(dest: Path, data: bytes, group: int):
             output.flush()
             os.fsync(output.fileno())
         os.chown(temp, 0, group)
-        os.chmod(temp, 0o640 if dest.name == "generic_vps_mcp.py" else 0o644)
+        mode = 0o640 if dest.name == "generic_vps_mcp.py" else (0o755 if dest.name == "r2relay_deploy_receiver.py" else 0o644)
+        os.chmod(temp, mode)
         os.replace(temp, dest)
     finally:
         if os.path.exists(temp):
