@@ -26,7 +26,7 @@ def test_allowed_probe(monkeypatch):
 
 def test_fixed_command_argv(monkeypatch):
     commands=[]
-    def capture(argv, timeout=180):
+    def capture(argv, timeout=180, max_output=2500):
         commands.append(argv)
         return {"exit_code": 0, "stdout": "", "stderr": ""}
     monkeypatch.setattr(daemon, "run", capture)
@@ -58,3 +58,20 @@ def test_unified_deployment_status_uses_fixed_read_only_scripts(monkeypatch):
     assert result["modified"] is False and result["token_emitted"] is False
     assert calls == [["/usr/bin/python3", "/opt/r2-relay/scripts/deployment_inspect.py"],
                      ["/usr/bin/python3", "/usr/local/libexec/r2_loopback_control.py"]]
+
+
+def test_unified_deployment_status_fails_on_environment_conflict(monkeypatch):
+    inspection = {"current_release": {"status": "VALID", "commit": "a" * 40},
+                  "files": {"/etc/r2-relay/vps.env": {"exists": False}},
+                  "systemd": {"release_layout": True}}
+    verification = {"status": "SERVICE_VERIFY_PASS", "release_commit": "a" * 40,
+                    "env_exists": True, "token_emitted": False}
+    def fake(argv, timeout=180, max_output=2500):
+        payload = inspection if "deployment_inspect.py" in argv[1] else verification
+        return {"exit_code": 0, "stdout": __import__("json").dumps(payload), "stderr": ""}
+    monkeypatch.setattr(daemon, "run", fake)
+    result = daemon.execute("r2_deployment_status")
+    assert result["status"] == "UNIFIED_DEPLOYMENT_STATUS_FAILED"
+    assert result["release_matches"] is True
+    assert result["environment_file_exists"] is False
+    assert result["modified"] is False
