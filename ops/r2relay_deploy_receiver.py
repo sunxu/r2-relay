@@ -242,7 +242,7 @@ def extract_archive(archive_path: Path, stage: Path, members, expected_sha: str)
             flags |= os.O_NOFOLLOW
         fd = os.open(marker, flags, 0o640)
         with os.fdopen(fd, "w", encoding="ascii") as output:
-            output.write(expected_sha + "\\n")
+            output.write(expected_sha + "\n")
             output.flush()
             os.fsync(output.fileno())
         os.chmod(marker, 0o640)
