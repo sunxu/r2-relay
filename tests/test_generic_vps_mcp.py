@@ -84,4 +84,5 @@ def test_snapshot_and_registration(monkeypatch):
                              "vps_r2_runtime_smoke", "vps_r2_service_prepare",
                              "vps_r2_service_verify", "vps_r2_loopback_start",
                              "vps_r2_https_preflight", "vps_r2_https_prepare",
-                             "vps_r2_https_start", "vps_r2_https_ca_fingerprint"]
+                             "vps_r2_https_start", "vps_r2_https_ca_fingerprint",
+                             "vps_r2_deployment_status"]
