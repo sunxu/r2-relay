@@ -2,7 +2,7 @@
 
 Cloudflare R2 Multipart Upload 的 Python 本地 HTTPS 代理与 VPS MD5 内容缓存中继。
 
-## 当前状态：RC1 离线验收基线已合并 main
+## 当前状态：RC1 离线基线已合并，VPS Relay 与 HTTPS 8443 已部署
 
 - 本地：`127.0.0.1:18585` 显式代理、仅对 R2 UploadPart 做 TLS MITM、完整请求体 MD5、HIT/MISS 协商、真实 R2 HTTP 结果透传、VPS 不可用回退。
 - VPS：HTTPS `8443`（Caddy TLS 反代至回环 API）、磁盘 MD5 缓存、固定 1800 秒 TTL、重启扫描恢复、R2 PUT Worker 最多额外三次重试。
@@ -10,7 +10,7 @@ Cloudflare R2 Multipart Upload 的 Python 本地 HTTPS 代理与 VPS MD5 内容�
 - 可观测性：鉴权指标 `GET /v1/metrics`、缓存与 R2 重试日志。
 - 离线：真实 aiohttp → mitmdump → TLS VPS → 模拟 R2 跨进程集成，以及可选 100×10 MiB 模拟基准。
 
-**RC1 已通过 GitHub Runner 全栈离线验收，并通过 [PR #15](https://github.com/sunxu/r2-relay/pull/15) 合并到 `main`（Merge Commit `18e068a923238bccb83b2e8a77fe25ac4f7abb32`）。** 不代表生产就绪：真实公网 VPS、Cloudflare R2 SigV4/Multipart Complete 和真实带宽均为 `NOT_TESTED`，未生产部署。
+**RC1 已通过 GitHub Runner 全栈离线验收，并通过 [PR #15](https://github.com/sunxu/r2-relay/pull/15) 合并到 `main`（Merge Commit `18e068a923238bccb83b2e8a77fe25ac4f7abb32`）。** 截至 2026-11-09，真实 VPS 上 R2 Relay API、Caddy HTTPS 8443、MCP 与 Tunnel 已部署并运行；统一只读部署检查返回 `UNIFIED_DEPLOYMENT_STATUS_PASS`，运行时烟测 `RUNTIME_SMOKE_PASS`。这不代表真实 Cloudflare R2 SigV4/Multipart Complete 已通过：相关测试仍为 `BLOCKED_REAL_R2`。Mac→VPS 已有短时吞吐基线，见 [R17 报告](docs/R17_EXISTING_NETWORK_EVIDENCE_CN.md)。
 
 ## 文档
 
@@ -19,7 +19,7 @@ Cloudflare R2 Multipart Upload 的 Python 本地 HTTPS 代理与 VPS MD5 内容�
 - [离线验收记录](docs/OFFLINE_ACCEPTANCE.md) · [部署物料](docs/DEPLOYMENT.md)
 - [开发 Agent 规范](AGENTS.md)
 - [部署前离线预检（不需 VPS/R2）](docs/DEPLOYMENT_PREFLIGHT_CN.md) · [GitHub Runner 真进程全栈验收](docs/RUNNER_FULLSTACK_CN.md)
-- [真实 VPS/R2 协议验收（待环境）](https://github.com/sunxu/r2-relay/issues/16) · [真实网络性能验收（待环境）](https://github.com/sunxu/r2-relay/issues/17)
+- [真实 VPS/R2 协议验收（等待独立 R2 测试 Bucket）](https://github.com/sunxu/r2-relay/issues/16) · [Mac→VPS 网络吞吐基线报告](docs/R17_EXISTING_NETWORK_EVIDENCE_CN.md)
 
 ## RC1 离线审计与演练
 
