@@ -162,6 +162,7 @@ jobs:
             receipt="$(cat "$RUNNER_TEMP/deploy-response.json")"
             printf -v body '%s\n\nDeployment receipt: %s' "$body" "$receipt"
           elif [ "$JOB_RESULT" != "success" ]; then
+            receipt="No receiver/SSH response was produced; inspect the workflow logs for the failing step."
             printf -v body '%s\n\nDeployment receipt: %s' "$body" "$receipt"
           fi
           gh issue comment 41 --repo "$GITHUB_REPOSITORY" --body "$body"
