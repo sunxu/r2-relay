@@ -1,6 +1,6 @@
 # 验收矩阵
 
-状态：RC1 已通过 GitHub Runner 的模拟/本地真实进程测试；**尚未完成真实 VPS 公网、Cloudflare R2 和实际带宽验收**。各 Txx 的原始通过条件保持不变；不得将模拟覆盖误写为真实生产 PASS。
+状态（2026-11-09）：RC1 Runner 模拟/本地真实进程测试已通过；真实 VPS R2 Relay API 与 Caddy HTTPS 8443 已部署，统一只读检查 `UNIFIED_DEPLOYMENT_STATUS_PASS`，Runtime Smoke `RUNTIME_SMOKE_PASS`。真实外部客户端 TLS/IP SAN 验收仍由 #33 跟踪；真实 Cloudflare R2 SigV4/Multipart 仍由 #16 跟踪。Mac→VPS 短时吞吐基线已记录并关闭 #17。各 Txx 必须区分 `PASS_SIMULATED` 与 `PASS_REAL`，不得将模拟覆盖误写为真实 R2 PASS。
 
 | 测试 ID | 需求 | 场景与通过条件 |
 |---|---|---|
@@ -32,7 +32,7 @@
 
 - **已通过 Runner 离线全栈**：aiohttp → mitmdump CONNECT/TLS → Caddy HTTPS/HTTP2 `8443` → VPS Uvicorn → 独立 Mock R2 TCP 服务；验证 MD5 缓存 HIT/MISS、模拟 502/429 重试及 403、ETag 透传、VPS 进程重启后缓存恢复。证据：[Actions #42443068248](https://github.com/sunxu/r2-relay/actions/runs/42443068248)，[中文说明](../RUNNER_FULLSTACK_CN.md)。
 - **已通过 Runner 离线负载**：历史结果为 100 × 10 MiB、Runner 内部并发 8，第二轮缓存命中时本地→VPS 分片正文为 0 B。仅作为既有离线模拟证据，不是公网测试；不再扩展或重跑 4/8/16 并发矩阵。真实 Mac→VPS 的已完成观测见 [Issue #17](https://github.com/sunxu/r2-relay/issues/17) 及 [R17 报告](../R17_EXISTING_NETWORK_EVIDENCE_CN.md)。
-- **待外部环境**：真实 VPS、Cloudflare R2 的 SigV4、真实 ETag、Multipart Complete、公网传输和超时/故障行为；对应 [Issue #16](https://github.com/sunxu/r2-relay/issues/16)、[Issue #17](https://github.com/sunxu/r2-relay/issues/17)。
+- **当前仍待外部验收**：外部客户端对 VPS 自签名 CA 的信任、双栈 IP SAN/TLS 与鉴权连通性（[Issue #33](https://github.com/sunxu/r2-relay/issues/33)）；真实 Cloudflare R2 SigV4、真实 ETag、Multipart Complete 与 R2 故障行为（[Issue #16](https://github.com/sunxu/r2-relay/issues/16)）。Mac→VPS 短时网络吞吐基线见已关闭的 [Issue #17](https://github.com/sunxu/r2-relay/issues/17)。
 - **状态定义**：`PASS_SIMULATED` 仅表示对应模拟场景通过；`NOT_TESTED_REAL` 表示真实环境尚无证据，绝不等同于 `PASS_REAL`。
 
 
