@@ -44,11 +44,13 @@ def command(args, timeout=20):
     return p.stdout.strip()
 
 
-def regular(path, mode=None, *, uid=0, gid=None):
+def regular(path, mode=None, *, uid=0, gid=None, missing_error="required_file_missing"):
     try:
         info = path.lstat()
+    except FileNotFoundError:
+        raise ValueError(missing_error) from None
     except OSError:
-        raise ValueError("required_file_missing") from None
+        raise ValueError("file_metadata_unavailable") from None
     if not stat.S_ISREG(info.st_mode) or info.st_uid != uid:
         raise ValueError("unsafe_file_ownership")
     if gid is not None and info.st_gid != gid:
@@ -81,11 +83,11 @@ def active_release(r2_gid, root_uid=0):
             or stat.S_IMODE(release_info.st_mode) != 0o750):
         raise ValueError("current_release_permissions_invalid")
     marker = release / ".deployment-commit"
-    regular(marker, 0o640, uid=root_uid, gid=r2_gid)
+    regular(marker, 0o640, uid=root_uid, gid=r2_gid, missing_error="release_marker_missing")
     if marker.read_text(encoding="ascii").strip() != commit:
         raise ValueError("current_release_marker_mismatch")
     unit_source = release / "deploy/vps.service"
-    regular(unit_source, 0o640, uid=root_uid, gid=r2_gid)
+    regular(unit_source, 0o640, uid=root_uid, gid=r2_gid, missing_error="release_unit_missing")
     uvicorn = release / ".venv/bin/uvicorn"
     try:
         uvicorn_info = uvicorn.lstat()
@@ -98,7 +100,7 @@ def active_release(r2_gid, root_uid=0):
 
 
 def parse_private_env():
-    regular(ENV_FILE, 0o600)
+    regular(ENV_FILE, 0o600, missing_error="environment_file_missing")
     values = {}
     for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -181,13 +183,21 @@ def systemd_state(release):
 def verify():
     if os.geteuid() != 0:
         raise ValueError("root_required")
-    regular(UNIT, 0o644)
-    try:
-        d = ENV_DIR.lstat()
-        c = CACHE.lstat()
-        releases_info = RELEASES.lstat()
-    except OSError:
-        raise ValueError("required_directory_missing") from None
+    regular(UNIT, 0o644, missing_error="service_unit_missing")
+    def required_directory(path: Path, missing_error: str):
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            raise ValueError(missing_error) from None
+        except OSError:
+            raise ValueError("directory_metadata_unavailable") from None
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError(missing_error.replace("_missing", "_not_directory"))
+        return info
+
+    d = required_directory(ENV_DIR, "environment_directory_missing")
+    c = required_directory(CACHE, "cache_directory_missing")
+    releases_info = required_directory(RELEASES, "release_root_missing")
     if (not stat.S_ISDIR(d.st_mode) or d.st_uid != 0
             or stat.S_IMODE(d.st_mode) != 0o700):
         raise ValueError("env_dir_permissions")

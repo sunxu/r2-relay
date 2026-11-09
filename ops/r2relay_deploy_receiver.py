@@ -207,7 +207,9 @@ def validate_archive(archive_path: Path, expected_sha: str):
         raise DeployError("archive_invalid") from None
 
 
-def extract_archive(archive_path: Path, stage: Path, members) -> None:
+def extract_archive(archive_path: Path, stage: Path, members, expected_sha: str) -> None:
+    if not SHA_RE.fullmatch(expected_sha):
+        raise DeployError("invalid_commit_sha")
     stage.mkdir(mode=0o700, parents=False, exist_ok=False)
     try:
         with tarfile.open(archive_path, mode="r:") as archive:
@@ -228,7 +230,22 @@ def extract_archive(archive_path: Path, stage: Path, members) -> None:
                 with os.fdopen(fd, "wb") as output:
                     shutil.copyfileobj(source, output, length=1024 * 1024)
                 os.chmod(target, 0o755 if member.mode & 0o111 else 0o644)
-        (stage / ".deployment-commit").unlink(missing_ok=True)
+
+        # The archive marker is validated before extraction but is never trusted
+        # as the installed marker. Recreate it from the exact SHA authorized by
+        # the forced SSH command so every immutable release carries a verifiable
+        # root-owned deployment identity.
+        marker = stage / ".deployment-commit"
+        marker.unlink(missing_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(marker, flags, 0o640)
+        with os.fdopen(fd, "w", encoding="ascii") as output:
+            output.write(expected_sha + "\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(marker, 0o640)
     except Exception:
         shutil.rmtree(stage, ignore_errors=True)
         raise
@@ -605,7 +622,7 @@ def deploy(sha: str, archive_path: Path) -> dict:
         members, archive_info = validate_archive(archive_path, sha)
         if not reuse_existing_release:
             stage = new_staging_path(sha)
-            extract_archive(archive_path, stage, members)
+            extract_archive(archive_path, stage, members, sha)
             try:
                 # Move source to its immutable final path before creating the venv:
                 # console-script shebangs embed the absolute venv path.
