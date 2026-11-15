@@ -1,5 +1,6 @@
 """Offline safety checks; no launchctl, network, VPS, or R2 traffic."""
 import importlib.util
+import plistlib
 from pathlib import Path
 import stat
 import subprocess
@@ -170,6 +171,8 @@ class MacManagerTests(unittest.TestCase):
         self.assertIn(str(self.p['manager']), launcher)
         self.assertNotIn(str(MODULE), launcher)
         self.assertEqual(self.p['manager'].read_bytes(), MODULE.read_bytes())
+        self.assertTrue(self.p['plist_template'].is_file())
+        self.assertFalse(self.p['plist'].exists(), 'install must not enable autostart')
 
     def test_stop_requires_confirm_idle(self):
         with self.assertRaisesRegex(RuntimeError, 'confirm-idle'):
@@ -225,7 +228,7 @@ class MacManagerTests(unittest.TestCase):
         target = self._fake_release('c' * 40)
         self.p['data'].mkdir(parents=True, exist_ok=True)
         self.p['current'].symlink_to(target)
-        for name in ('cli', 'run', 'manager', 'plist'):
+        for name in ('cli', 'run', 'manager'):
             self.p[name].parent.mkdir(parents=True, exist_ok=True)
             self.p[name].touch()
         with mock.patch.object(manager, 'is_loaded', return_value=False):
@@ -239,6 +242,74 @@ class MacManagerTests(unittest.TestCase):
         self.p['config'].chmod(0o400)
         with self.assertRaisesRegex(RuntimeError, '配置必须'):
             manager.check_config(self.p)
+
+
+
+    def _agent_template(self):
+        self.p['bin'].mkdir(parents=True, exist_ok=True)
+        self.p['data'].mkdir(parents=True, exist_ok=True)
+        self.p['logs'].mkdir(parents=True, exist_ok=True)
+        with self.p['plist_template'].open('wb') as f:
+            plistlib.dump(manager.agent_definition(self.p), f)
+        self.p['plist_template'].chmod(0o600)
+
+    def test_explicit_start_enables_login_autostart(self):
+        sha = 'a' * 40
+        target = self._fake_release(sha)
+        self.p['data'].mkdir(parents=True, exist_ok=True)
+        self.p['current'].symlink_to(target)
+        self._agent_template()
+        self.assertFalse(self.p['plist'].exists())
+        with mock.patch.object(manager, 'is_loaded', return_value=False), \
+                mock.patch.object(manager, 'port_available', return_value=True), \
+                mock.patch.object(manager, 'run', return_value=SimpleNamespace(returncode=0)), \
+                mock.patch.object(manager, 'wait_managed_listener', return_value=True):
+            manager.start(self.p)
+        self.assertEqual(plistlib.loads(self.p['plist'].read_bytes()), manager.agent_definition(self.p))
+
+    def test_explicit_stop_disables_autostart_across_login(self):
+        self._agent_template()
+        self.p['plist'].parent.mkdir(parents=True)
+        self.p['plist'].write_bytes(self.p['plist_template'].read_bytes())
+        with mock.patch.object(manager, 'is_loaded', return_value=True), \
+                mock.patch.object(manager, 'run', return_value=SimpleNamespace(returncode=0)), \
+                mock.patch.object(manager, 'wait_port', return_value=True):
+            manager.stop(self.p, confirm_idle=True)
+        self.assertFalse(self.p['plist'].exists())
+        self.assertTrue(self.p['plist_template'].exists())
+
+    def test_stopped_unloaded_service_removes_stale_plist(self):
+        self._agent_template()
+        self.p['plist'].parent.mkdir(parents=True)
+        self.p['plist'].write_bytes(self.p['plist_template'].read_bytes())
+        with mock.patch.object(manager, 'is_loaded', return_value=False):
+            manager.stop(self.p, confirm_idle=True)
+        self.assertFalse(self.p['plist'].exists())
+
+    def test_stop_rejects_tampered_plist(self):
+        self._agent_template()
+        self.p['plist'].parent.mkdir(parents=True)
+        self.p['plist'].write_text('foreign agent file')
+        with mock.patch.object(manager, 'is_loaded', return_value=True), \
+                mock.patch.object(manager, 'run') as calls:
+            with self.assertRaises(Exception):
+                manager.stop(self.p, confirm_idle=True)
+        calls.assert_not_called()
+        self.assertTrue(self.p['plist'].exists())
+
+    def test_failed_bootstrap_removes_persistent_autostart(self):
+        sha = 'a' * 40
+        target = self._fake_release(sha)
+        self.p['data'].mkdir(parents=True, exist_ok=True)
+        self.p['current'].symlink_to(target)
+        self._agent_template()
+        with mock.patch.object(manager, 'is_loaded', return_value=False), \
+                mock.patch.object(manager, 'port_available', return_value=True), \
+                mock.patch.object(manager, 'run', side_effect=subprocess.CalledProcessError(1, 'launchctl')):
+            with self.assertRaises(subprocess.CalledProcessError):
+                manager.start(self.p)
+        self.assertFalse(self.p['plist'].exists())
+        self.assertTrue(self.p['plist_template'].exists())
 
 
 if __name__ == '__main__':
