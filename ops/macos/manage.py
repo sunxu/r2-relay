@@ -244,7 +244,9 @@ def start(p):
         raise RuntimeError('18585 已被其他进程占用；请先确认并安全关闭旧代理')
     run(['launchctl', 'bootstrap', domain(), p['plist']])
     if not wait_port(should_listen=True):
-        print('WARNING: launchctl 已加载，但18585未监听，请检查 stderr.log', file=sys.stderr)
+        # Avoid leaving a crashing KeepAlive job behind on validation failure.
+        run(['launchctl', 'bootout', service()], check=False)
+        print('WARNING: 启动后18585未监听；已尝试卸载失败服务，请检查 stderr.log', file=sys.stderr)
         raise RuntimeError('启动后未检测到监听端口')
     print('SERVICE_STARTED')
 
