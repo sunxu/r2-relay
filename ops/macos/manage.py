@@ -6,6 +6,8 @@ No operation uses sudo, handles R2 upload traffic, or changes the VPS.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager, nullcontext
+import fcntl
 import os
 from pathlib import Path
 import plistlib
@@ -28,6 +30,7 @@ def paths():
     return {
         'home': home,
         'data': home / '.local/share/r2-relay',
+        'manager': home / '.local/share/r2-relay/manage.py',
         'releases': home / '.local/share/r2-relay/releases',
         'current': home / '.local/share/r2-relay/current',
         'previous': home / '.local/share/r2-relay/previous',
@@ -84,6 +87,52 @@ def wait_port(*, should_listen: bool, seconds: float = 12):
     return (not port_available()) == should_listen
 
 
+def managed_listener():
+    """Verify the TCP listener belongs to launchd's actual child PID."""
+    if not is_loaded():
+        return False
+    info = run(['launchctl', 'print', service()], check=False,
+               capture_output=True, text=True)
+    match = re.search(r'(?m)^\s*pid\s*=\s*(\d+)\s*$', info.stdout)
+    if not match:
+        return False
+    listener = run(['/usr/sbin/lsof', '-nP', '-t', '-iTCP:18585',
+                    '-sTCP:LISTEN'], check=False, capture_output=True, text=True)
+    if listener.returncode != 0:
+        return False
+    pids = {int(line) for line in listener.stdout.splitlines() if line.isdigit()}
+    return pids == {int(match.group(1))}
+
+
+def wait_managed_listener(seconds: float = 12):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if managed_listener():
+            return True
+        time.sleep(0.2)
+    return managed_listener()
+
+
+@contextmanager
+def operation_lock(p):
+    """Prevent concurrent CLI install/update/activation transactions."""
+    p['data'].mkdir(parents=True, exist_ok=True, mode=0o700)
+    if p['data'].is_symlink() or p['data'].stat().st_uid != os.getuid():
+        raise RuntimeError('数据目录不可信，拒绝管理')
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0)
+    fd = os.open(p['data'] / '.manage.lock', flags, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_uid != os.getuid():
+            raise RuntimeError('管理锁文件不可信')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError('另一个 R2 Relay 管理操作正在进行') from exc
+        yield
+    finally:
+        os.close(fd)
+
+
 def check_config(p):
     f = p['config']
     st = f.lstat()
@@ -97,7 +146,20 @@ def check_config(p):
 def link_target(path):
     if not path.is_symlink():
         return None
-    return path.resolve(strict=True)
+    try:
+        return path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError('版本链接损坏，拒绝操作') from exc
+
+
+def installed_link(p, name):
+    target = link_target(p[name])
+    if target is None:
+        return None
+    if target.parent != p['releases'] or not SHA_PATTERN.fullmatch(target.name):
+        raise RuntimeError(f'{name} 版本链接超出受管理的 release 目录')
+    rel_sha(p, target.name)
+    return target
 
 
 def rel_sha(p, value):
@@ -124,40 +186,55 @@ def atomic_link(p, which, destination):
 
 
 def stage_release(repo, sha, p):
+    if not SHA_PATTERN.fullmatch(sha):
+        raise RuntimeError('必须使用完整40位小写 Commit SHA，不能使用 HEAD 或分支名')
     repo = repo.expanduser().resolve(strict=True)
     if not (repo / '.git').exists():
         raise RuntimeError(f'不是 Git 工作仓库：{repo}')
-    dirty = run(['git', '-C', repo, 'status', '--porcelain'], capture_output=True, text=True).stdout
+    dirty = run(['git', '-C', repo, 'status', '--porcelain'],
+                capture_output=True, text=True).stdout
     if dirty.strip():
-        raise RuntimeError('工作区有未提交改动，拒绝构建以免丢失已验证的并发优化；请先整理和提交')
-    sha = run(['git', '-C', repo, 'rev-parse', '--verify', f'{sha}^{{commit}}'], capture_output=True, text=True).stdout.strip()
-    if not SHA_PATTERN.fullmatch(sha):
-        raise RuntimeError('无法解析完整 Commit SHA')
+        raise RuntimeError('工作区有未提交改动，拒绝构建；先冻结并提交当前五并发代码')
+    resolved = run(['git', '-C', repo, 'rev-parse', '--verify', f'{sha}^{{commit}}'],
+                   capture_output=True, text=True).stdout.strip()
+    if resolved != sha:
+        raise RuntimeError('指定 SHA 不是可用的完整提交标识')
     dest = p['releases'] / sha
-    if dest.exists():
+    if dest.exists() or dest.is_symlink():
         rel_sha(p, sha)
         print(f'RELEASE_ALREADY_PRESENT {sha}')
         return sha
     p['releases'].mkdir(parents=True, exist_ok=True, mode=0o700)
-    # Clone-free, pinned-tree deployment: never modify the active working checkout.
-    archive = run(['git', '-C', repo, 'archive', '--format=tar', sha], capture_output=True).stdout
-    with tempfile.TemporaryDirectory(prefix='.stage-', dir=p['releases']) as temp:
-        stage = Path(temp)
-        run(['tar', '-xf', '-', '-C', stage], input=archive)
+    if p['releases'].is_symlink():
+        raise RuntimeError('Release 根目录不允许是符号链接')
+    archive = run(['git', '-C', repo, 'archive', '--format=tar', sha],
+                  capture_output=True).stdout
+    # Extract first; create the venv only *after* moving the source to its final
+    # absolute path. Otherwise pip/editable .pth and mitmdump shebangs break.
+    with tempfile.TemporaryDirectory(prefix='.source-', dir=p['releases']) as temp:
+        source = Path(temp) / 'source'
+        source.mkdir()
+        run(['tar', '-xf', '-', '-C', source], input=archive)
+        if not (source / 'local/pyproject.toml').is_file() or not (source / 'local/addon_entry.py').is_file():
+            raise RuntimeError('Git 版本缺少本地代理源码')
+        if dest.exists() or dest.is_symlink():
+            raise RuntimeError('目标 Release 在构建期间被其他操作创建')
+        source.rename(dest)
+    try:
         python = shutil.which('python3.11')
         if not python:
-            if sys.version_info >= (3, 11):
-                python = sys.executable
-            else:
-                raise RuntimeError('需要 Python 3.11+，请安装 python3.11')
-        run([python, '-m', 'venv', stage / '.venv'])
-        run([stage / '.venv/bin/python', '-m', 'pip', 'install', '-e', str(stage / 'local')])
-        run([stage / '.venv/bin/python', '-m', 'pip', 'check'])
-        run([stage / '.venv/bin/python', '-c', 'import r2relay_local.relay; import r2relay_local.__main__'])
-        if not (stage / '.venv/bin/mitmdump').is_file():
+            raise RuntimeError('需要安装 Python 3.11')
+        run([python, '-m', 'venv', dest / '.venv'])
+        run([dest / '.venv/bin/python', '-m', 'pip', 'install', '-e', str(dest / 'local')])
+        run([dest / '.venv/bin/python', '-m', 'pip', 'check'])
+        run([dest / '.venv/bin/python', '-c',
+             'import r2relay_local.relay; import r2relay_local.__main__'])
+        if not (dest / '.venv/bin/mitmdump').is_file():
             raise RuntimeError('未找到 mitmdump 可执行文件')
-        (stage / '.deployment-commit').write_text(sha + '\n')
-        stage.rename(dest)
+        (dest / '.deployment-commit').write_text(sha + '\n')
+    except BaseException:
+        shutil.rmtree(dest)
+        raise
     print(f'RELEASE_STAGED {sha}')
     return sha
 
@@ -191,16 +268,19 @@ exec "$CURRENT/.venv/bin/mitmdump" \\
 def install(args, p):
     if p['current'].exists() or p['current'].is_symlink():
         raise RuntimeError('已有 current 版本链接；拒绝覆盖现有部署')
-    if p['plist'].exists():
-        raise RuntimeError('已有 LaunchAgent，拒绝覆盖；请使用 update/activate，或先核实旧安装')
+    if p['plist'].exists() or p['plist'].is_symlink() or is_loaded():
+        raise RuntimeError('已有 LaunchAgent，拒绝覆盖；请先核实旧安装')
+    for name in ('cli', 'run', 'manager'):
+        if p[name].exists() or p[name].is_symlink():
+            raise RuntimeError(f'已存在管理文件，拒绝覆盖：{p[name]}')
     sha = stage_release(args.repo, args.sha, p)
     p['bin'].mkdir(parents=True, exist_ok=True, mode=0o700)
     p['config_dir'].mkdir(parents=True, exist_ok=True, mode=0o700)
     p['config_dir'].chmod(0o700)
     p['logs'].mkdir(parents=True, exist_ok=True, mode=0o700)
     p['plist'].parent.mkdir(parents=True, exist_ok=True)
-    if not p['config'].exists():
-        p['config'].write_text('''# 仅保存在 Mac 本机。修改后需 restart；勿提交 Git。
+    if not p['config'].exists() and not p['config'].is_symlink():
+        p['config'].write_text('''# 仅保存在 Mac 本机；勿提交 Git。五并发由调用方/已验证配置管理。
 R2_RELAY_VPS_URL='https://104.224.168.192:8443'
 R2_RELAY_TOKEN='CHANGE_ME'
 R2_RELAY_VPS_CA_FILE="$HOME/.config/r2-relay/root.crt"
@@ -210,8 +290,13 @@ R2_RELAY_HTTP2='1'
         p['config'].chmod(0o600)
     check_config(p)
     make_runner(p)
-    manager = Path(__file__).resolve()
-    cmd = f'exec {shlex.quote(sys.executable)} {shlex.quote(str(manager))} "$@"\n'
+    # Never rely on the original Git checkout for the installed CLI.
+    p['manager'].write_bytes(Path(__file__).resolve().read_bytes())
+    p['manager'].chmod(0o700)
+    python = shutil.which('python3.11')
+    if not python:
+        raise RuntimeError('需要安装 Python 3.11')
+    cmd = f'exec {shlex.quote(python)} {shlex.quote(str(p["manager"]))} "$@"\n'
     p['cli'].write_text('#!/bin/sh\n' + cmd)
     p['cli'].chmod(0o700)
     for name in ('stdout.log', 'stderr.log'):
@@ -243,15 +328,17 @@ def start(p):
     if not port_available():
         raise RuntimeError('18585 已被其他进程占用；请先确认并安全关闭旧代理')
     run(['launchctl', 'bootstrap', domain(), p['plist']])
-    if not wait_port(should_listen=True):
+    if not wait_managed_listener():
         # Avoid leaving a crashing KeepAlive job behind on validation failure.
         run(['launchctl', 'bootout', service()], check=False)
         print('WARNING: 启动后18585未监听；已尝试卸载失败服务，请检查 stderr.log', file=sys.stderr)
-        raise RuntimeError('启动后未检测到监听端口')
+        raise RuntimeError('启动后未验证到受 launchd 管理的监听进程')
     print('SERVICE_STARTED')
 
 
-def stop(p):
+def stop(p, *, confirm_idle=False):
+    if not confirm_idle:
+        raise RuntimeError('停止服务必须指定 --confirm-idle，确认全部上传已结束')
     if not is_loaded():
         print('SERVICE_ALREADY_STOPPED')
         return
@@ -265,7 +352,7 @@ def activate(p, sha, confirm_idle):
     if not confirm_idle:
         raise RuntimeError('必须显式提供 --confirm-idle，确认所有上传已结束')
     target = rel_sha(p, sha)
-    old = link_target(p['current'])
+    old = installed_link(p, 'current')
     if old == target:
         print(f'ALREADY_ACTIVE {sha}')
         return
@@ -273,7 +360,7 @@ def activate(p, sha, confirm_idle):
     if not loaded and not port_available():
         raise RuntimeError('检测到未受本服务管理的18585进程，拒绝切换')
     if loaded:
-        stop(p)
+        stop(p, confirm_idle=confirm_idle)
     try:
         atomic_link(p, 'current', target)
         if loaded:
@@ -296,10 +383,11 @@ def activate(p, sha, confirm_idle):
 
 
 def status(p):
-    current = link_target(p['current'])
-    previous = link_target(p['previous'])
+    current = installed_link(p, 'current')
+    previous = installed_link(p, 'previous')
     print('service_loaded=', is_loaded())
     print('port_18585_listening=', not port_available())
+    print('port_18585_managed=', managed_listener())
     print('current_sha=', current.name if current else 'NONE')
     print('previous_sha=', previous.name if previous else 'NONE')
     print('config_exists=', p['config'].exists())
@@ -312,63 +400,67 @@ def uninstall(p, confirm_idle):
     if not confirm_idle:
         raise RuntimeError('必须提供 --confirm-idle，避免中断正在上传的分片')
     if is_loaded():
-        stop(p)
+        stop(p, confirm_idle=confirm_idle)
     p['plist'].unlink(missing_ok=True)
     p['cli'].unlink(missing_ok=True)
     p['run'].unlink(missing_ok=True)
+    p['manager'].unlink(missing_ok=True)
     print('UNINSTALLED service definitions only; releases, config, CA and logs retained')
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='R2 Relay macOS 用户级 LaunchAgent 管理器')
     sub = parser.add_subparsers(dest='command', required=True)
-    for name in ('install', 'update'):
-        cmd = sub.add_parser(name, help='按固定 SHA 预安装；不会中断当前服务')
-        cmd.add_argument('sha' if name == 'update' else '--sha', default='HEAD' if name == 'install' else None)
-        cmd.add_argument('--repo', type=Path, default=Path(__file__).resolve().parents[2])
-        if name == 'update':
-            cmd.add_argument('--activate', action='store_true')
-            cmd.add_argument('--confirm-idle', action='store_true')
+    installer = sub.add_parser('install', help='按固定 SHA 安装定义但不启动')
+    installer.add_argument('--sha', required=True)
+    installer.add_argument('--repo', type=Path, required=True)
+    updater = sub.add_parser('update', help='按固定 SHA 预装，默认不切换')
+    updater.add_argument('sha')
+    updater.add_argument('--repo', type=Path, required=True)
+    updater.add_argument('--activate', action='store_true')
+    updater.add_argument('--confirm-idle', action='store_true')
     for name in ('start', 'stop', 'restart', 'status', 'logs', 'rollback', 'activate', 'uninstall'):
         cmd = sub.add_parser(name)
-        if name in ('restart', 'rollback', 'activate', 'uninstall'):
+        if name in ('stop', 'restart', 'rollback', 'activate', 'uninstall'):
             cmd.add_argument('--confirm-idle', action='store_true')
         if name == 'activate':
             cmd.add_argument('sha')
     args = parser.parse_args(argv)
     ensure_macos()
     p = paths()
+    lock = operation_lock(p) if args.command not in ('status', 'logs') else nullcontext()
     try:
-        if args.command == 'install':
-            install(args, p)
-        elif args.command == 'update':
-            sha = stage_release(args.repo, args.sha, p)
-            if args.activate:
-                activate(p, sha, args.confirm_idle)
-            else:
-                print('STAGED_ONLY: 无中断；上线请执行 r2-relay activate SHA --confirm-idle')
-        elif args.command == 'activate':
-            activate(p, args.sha, args.confirm_idle)
-        elif args.command == 'rollback':
-            previous = link_target(p['previous'])
-            if not previous:
-                raise RuntimeError('没有上一个已记录版本')
-            activate(p, previous.name, args.confirm_idle)
-        elif args.command == 'start':
-            start(p)
-        elif args.command == 'stop':
-            stop(p)
-        elif args.command == 'restart':
-            if not args.confirm_idle:
-                raise RuntimeError('请先确认无在途上传，并添加 --confirm-idle')
-            stop(p)
-            start(p)
-        elif args.command == 'status':
-            status(p)
-        elif args.command == 'logs':
-            run(['tail', '-n', '100', '-f', p['logs'] / 'stderr.log'])
-        elif args.command == 'uninstall':
-            uninstall(p, args.confirm_idle)
+        with lock:
+            if args.command == 'install':
+                install(args, p)
+            elif args.command == 'update':
+                sha = stage_release(args.repo, args.sha, p)
+                if args.activate:
+                    activate(p, sha, args.confirm_idle)
+                else:
+                    print('STAGED_ONLY: 无中断；上线请执行 r2-relay activate SHA --confirm-idle')
+            elif args.command == 'activate':
+                activate(p, args.sha, args.confirm_idle)
+            elif args.command == 'rollback':
+                previous = installed_link(p, 'previous')
+                if not previous:
+                    raise RuntimeError('没有上一个已记录版本')
+                activate(p, previous.name, args.confirm_idle)
+            elif args.command == 'start':
+                start(p)
+            elif args.command == 'stop':
+                stop(p, confirm_idle=args.confirm_idle)
+            elif args.command == 'restart':
+                if not args.confirm_idle:
+                    raise RuntimeError('请先确认无在途上传，并添加 --confirm-idle')
+                stop(p, confirm_idle=True)
+                start(p)
+            elif args.command == 'status':
+                status(p)
+            elif args.command == 'logs':
+                run(['tail', '-n', '100', '-f', p['logs'] / 'stderr.log'])
+            elif args.command == 'uninstall':
+                uninstall(p, args.confirm_idle)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         return 1
