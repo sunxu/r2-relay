@@ -122,7 +122,8 @@ def operation_lock(p):
     flags = os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0)
     fd = os.open(p['data'] / '.manage.lock', flags, 0o600)
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_uid != os.getuid():
+        if (not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_uid != os.getuid()
+                or stat.S_IMODE(os.fstat(fd).st_mode) & 0o077):
             raise RuntimeError('管理锁文件不可信')
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -136,7 +137,7 @@ def operation_lock(p):
 def check_config(p):
     f = p['config']
     st = f.lstat()
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o600:
         raise RuntimeError(f'配置必须是当前用户拥有且不允许组/其他人访问的普通文件：{f}')
     if not (p['config_dir'].stat().st_mode & 0o077) == 0:
         raise RuntimeError('配置目录权限应为 0700')
@@ -399,13 +400,21 @@ def status(p):
 def uninstall(p, confirm_idle):
     if not confirm_idle:
         raise RuntimeError('必须提供 --confirm-idle，避免中断正在上传的分片')
+    for name in ('current', 'previous'):
+        link = p[name]
+        if link.exists() and not link.is_symlink():
+            raise RuntimeError(f'版本链接不是符号链接，拒绝卸载：{link}')
     if is_loaded():
         stop(p, confirm_idle=confirm_idle)
     p['plist'].unlink(missing_ok=True)
     p['cli'].unlink(missing_ok=True)
     p['run'].unlink(missing_ok=True)
     p['manager'].unlink(missing_ok=True)
-    print('UNINSTALLED service definitions only; releases, config, CA and logs retained')
+    # Keep release directories and secret material, but remove activation
+    # symlinks so a later clean install is possible.
+    p['current'].unlink(missing_ok=True)
+    p['previous'].unlink(missing_ok=True)
+    print('UNINSTALLED; releases, config, CA and logs retained')
 
 
 def main(argv=None):
