@@ -221,6 +221,25 @@ class MacManagerTests(unittest.TestCase):
         self.assertEqual(manager.installed_link(self.p, 'current'), previous)
         self.assertFalse(self.p['previous'].exists())
 
+    def test_uninstall_removes_links_but_keeps_releases_and_secrets(self):
+        target = self._fake_release('c' * 40)
+        self.p['data'].mkdir(parents=True, exist_ok=True)
+        self.p['current'].symlink_to(target)
+        for name in ('cli', 'run', 'manager', 'plist'):
+            self.p[name].parent.mkdir(parents=True, exist_ok=True)
+            self.p[name].touch()
+        with mock.patch.object(manager, 'is_loaded', return_value=False):
+            manager.uninstall(self.p, True)
+        self.assertTrue(target.exists())
+        self.assertTrue(self.p['config'].exists())
+        self.assertFalse(self.p['current'].is_symlink())
+        self.assertFalse(self.p['cli'].exists())
+
+    def test_config_requires_runner_compatible_0600(self):
+        self.p['config'].chmod(0o400)
+        with self.assertRaisesRegex(RuntimeError, '配置必须'):
+            manager.check_config(self.p)
+
 
 if __name__ == '__main__':
     unittest.main()
