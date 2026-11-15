@@ -76,7 +76,7 @@ r2-relay rollback --confirm-idle
 
 也可一次执行 `r2-relay update <SHA> --activate --confirm-idle`，但不推荐未经预检查直接用于生产。验证之后才能清理旧版本目录；管理器默认保留所有 release。
 
-卸载：`r2-relay uninstall --confirm-idle`，只删除 LaunchAgent 与命令入口，不删除版本、Token、证书和日志。不会停止旧的非托管 18585 进程。
+卸载：`r2-relay uninstall --confirm-idle`，删除 LaunchAgent、命令入口以及 current/previous 激活链接，但不删除历史版本目录、Token、证书和日志；可重新安装。不会停止旧的非托管 18585 进程。
 
 ## 安全测试与局限
 
