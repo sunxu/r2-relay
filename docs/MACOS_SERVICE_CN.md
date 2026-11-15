@@ -5,7 +5,7 @@
 ## 运行边界
 
 - 仅在当前用户登录的 macOS 图形会话中运行，用户注销或 Mac 睡眠后不保证上传继续。
-- `r2-relay install --sha <完整SHA> --repo <项目路径>` **只构建固定 Git commit 的独立 release、创建配置模板及 plist，绝不启动服务**。不碰现有 18585 进程。
+- `r2-relay install --sha <完整SHA> --repo <项目路径>` **只构建固定 Git commit 的独立 release、创建配置和私有 LaunchAgent 模板，绝不在 `~/Library/LaunchAgents` 发布自启配置，也不启动服务**。不碰现有 18585 进程。
 - `r2-relay update <SHA> --repo <项目路径>` **只预装**；需要 `--activate --confirm-idle` 才会主动切换并重启。
 - `stop/activate/restart/rollback/uninstall` 必须提供 `--confirm-idle`，由操作者确认没有在途上传。工具无法证明 VPS 上所有 R2 Worker 已完成。
 - 如果 18585 被非本 LaunchAgent 管理的进程占用，拒绝启动或切换；不执行 kill -9，不回退到 2 并发。
@@ -14,7 +14,7 @@
 - CLI 管理器独立复制到 `~/.local/share/r2-relay/manage.py`，不依赖源 Git checkout；操作使用排他锁，阻止同时升级和回滚。
 - 启动不仅检查端口存在，还核验监听 PID 与 `launchctl print` 记录的进程一致。
 - Token 存于 `~/.config/r2-relay/client.env` (0600)，不写入 LaunchAgent plist、Git、CLI 参数或日志。使用独立 VPS CA 与 mitmproxy CA，仍严格验证 TLS。
-- `stop` 会卸载 LaunchAgent；重新启动需 `start`。`restart` 不应在真实上传中执行。
+- `stop` 会卸载 LaunchAgent 并删除登录自启 plist；即使重新登录也不会自行启动，需重新执行 `start`。`restart` 不应在真实上传中执行。
 
 ## 首次安装（Mac 终端）
 
@@ -28,7 +28,7 @@ SHA="填入40位小写已验证SHA"
 python3.11 ops/macos/manage.py install --sha "$SHA" --repo "$PWD"
 ```
 
-安装过程将生成 `~/.local/bin/r2-relay`、`~/.local/bin/r2-relay-run`、`~/Library/LaunchAgents/com.sunxu.r2-relay.local.plist`。还会创建仅含占位 Token 的 `~/.config/r2-relay/client.env`；请编辑配置并放入正确的 VPS 根证书：
+安装过程将生成 `~/.local/bin/r2-relay`、`~/.local/bin/r2-relay-run`、`~/.local/share/r2-relay/agent.plist`（未启用模板）。**只有显式执行 `r2-relay start` 才会发布 `~/Library/LaunchAgents/com.sunxu.r2-relay.local.plist`，因此安装后重新登录也不会意外抢占已有 18585。** 还会创建仅含占位 Token 的 `~/.config/r2-relay/client.env`；请编辑配置并放入正确的 VPS 根证书：
 
 ```bash
 chmod 700 "$HOME/.config/r2-relay"
@@ -86,7 +86,7 @@ r2-relay rollback --confirm-idle
 python3 -m unittest discover -s tests -p test_macos_manage.py -v
 ```
 
-离线单元测试覆盖固定路径 venv、失败清理、CLI 独立性、并发管理锁、监听 PID 归属、非法 SHA/链接、更新失败回滚等。测试不触达 VPS、R2、GitHub 凭据，也不会启动真实 LaunchAgent。GitHub Actions 在 Linux 上只检查跨平台纯逻辑，**不能替代 macOS 实机验证**。更新/回滚不能无损恢复正在执行的 R2 PUT，因此不可把 `--confirm-idle` 当作自动“无在途上传”的判定。若源仓库有未提交改动，管理器拒绝构建；先把现有五并发代码冻结为 Git Commit 再安装。
+离线单元测试覆盖安装后不自动启动、停止后跨登录持续禁用、启动失败清除自启定义、固定路径 venv、失败清理、CLI 独立性、并发管理锁、监听 PID 归属、非法 SHA/链接、更新失败回滚等。测试不触达 VPS、R2、GitHub 凭据，也不会启动真实 LaunchAgent。GitHub Actions 在 Linux 上只检查跨平台纯逻辑，**不能替代 macOS 实机验证**。更新/回滚不能无损恢复正在执行的 R2 PUT，因此不可把 `--confirm-idle` 当作自动“无在途上传”的判定。若源仓库有未提交改动，管理器拒绝构建；先把现有五并发代码冻结为 Git Commit 再安装。
 
 ## 当前五并发部署特别注意
 
