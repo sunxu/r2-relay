@@ -37,3 +37,7 @@ python scripts/rc1_offline.py
 ```
 
 离线测试包含真实 TLS CONNECT；独立 [Runner 全栈工作流](.github/workflows/runner-fullstack.yml)还会启动真实 Caddy HTTPS `8443`、VPS 进程和独立 Mock R2 HTTP 服务。两类测试均不连接真实 Cloudflare R2，不能证明公网吞吐。
+
+## Mac 用户级服务管理（待实机验证）
+
+提供按固定 Commit SHA 预安装、LaunchAgent 启停、日志、确认空闲后升级/回滚的工具。不会自动替换当前 18585 进程；首次启用前须先冻结并核验五并发实测代码。详见 [Mac launchd 管理与部署手册](docs/MACOS_SERVICE_CN.md)。
