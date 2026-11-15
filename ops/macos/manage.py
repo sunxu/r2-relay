@@ -31,6 +31,7 @@ def paths():
         'home': home,
         'data': home / '.local/share/r2-relay',
         'manager': home / '.local/share/r2-relay/manage.py',
+        'plist_template': home / '.local/share/r2-relay/agent.plist',
         'releases': home / '.local/share/r2-relay/releases',
         'current': home / '.local/share/r2-relay/current',
         'previous': home / '.local/share/r2-relay/previous',
@@ -266,12 +267,54 @@ exec "$CURRENT/.venv/bin/mitmdump" \\
     p['run'].chmod(0o700)
 
 
+
+def agent_definition(p):
+    return {
+        'Label': LABEL,
+        'ProgramArguments': [str(p['run'])],
+        'RunAtLoad': True,
+        'KeepAlive': True,
+        'ThrottleInterval': 10,
+        'StandardOutPath': str(p['logs'] / 'stdout.log'),
+        'StandardErrorPath': str(p['logs'] / 'stderr.log'),
+    }
+
+
+def validate_agent_file(p, path):
+    if path.is_symlink() or not path.is_file() or path.stat().st_uid != os.getuid():
+        raise RuntimeError('LaunchAgent 定义不可信，拒绝覆盖或卸载')
+    with path.open('rb') as f:
+        if plistlib.load(f) != agent_definition(p):
+            raise RuntimeError('LaunchAgent 定义与受管理模板不一致')
+
+
+def enable_login_autostart(p):
+    """Publish the plist only at explicit start; install alone must not auto-start at login."""
+    validate_agent_file(p, p['plist_template'])
+    if p['plist'].exists() or p['plist'].is_symlink():
+        raise RuntimeError('LaunchAgent 文件已存在，拒绝覆盖')
+    p['plist'].parent.mkdir(parents=True, exist_ok=True)
+    temp = p['plist'].with_name(p['plist'].name + f'.tmp-{os.getpid()}')
+    try:
+        shutil.copyfile(p['plist_template'], temp)
+        temp.chmod(0o600)
+        os.replace(temp, p['plist'])
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def disable_login_autostart(p):
+    if p['plist'].exists() or p['plist'].is_symlink():
+        validate_agent_file(p, p['plist'])
+        p['plist'].unlink()
+
+
 def install(args, p):
     if p['current'].exists() or p['current'].is_symlink():
         raise RuntimeError('已有 current 版本链接；拒绝覆盖现有部署')
     if p['plist'].exists() or p['plist'].is_symlink() or is_loaded():
         raise RuntimeError('已有 LaunchAgent，拒绝覆盖；请先核实旧安装')
-    for name in ('cli', 'run', 'manager'):
+    for name in ('cli', 'run', 'manager', 'plist_template'):
         if p[name].exists() or p[name].is_symlink():
             raise RuntimeError(f'已存在管理文件，拒绝覆盖：{p[name]}')
     sha = stage_release(args.repo, args.sha, p)
@@ -304,17 +347,11 @@ R2_RELAY_HTTP2='1'
         f = p['logs'] / name
         f.touch(exist_ok=True)
         f.chmod(0o600)
-    data = {
-        'Label': LABEL,
-        'ProgramArguments': [str(p['run'])],
-        'RunAtLoad': True,
-        'KeepAlive': True,
-        'ThrottleInterval': 10,
-        'StandardOutPath': str(p['logs'] / 'stdout.log'),
-        'StandardErrorPath': str(p['logs'] / 'stderr.log'),
-    }
-    with p['plist'].open('wb') as f:
-        plistlib.dump(data, f)
+    # A staged install is inert even across logout/login. Only start()
+    # publishes a plist in ~/Library/LaunchAgents.
+    with p['plist_template'].open('wb') as f:
+        plistlib.dump(agent_definition(p), f)
+    p['plist_template'].chmod(0o600)
     atomic_link(p, 'current', rel_sha(p, sha))
     print(f'INSTALLED_NOT_STARTED {sha}')
     print(f'编辑 {p["config"]}，核对 CA；确认当前18585无上传后执行 r2-relay start')
@@ -324,29 +361,38 @@ def start(p):
     if is_loaded():
         raise RuntimeError('LaunchAgent 已加载，无需重复启动')
     check_config(p)
-    if not p['plist'].exists() or link_target(p['current']) is None:
+    if not p['plist_template'].exists() or installed_link(p, 'current') is None:
         raise RuntimeError('请先 install')
     if not port_available():
         raise RuntimeError('18585 已被其他进程占用；请先确认并安全关闭旧代理')
-    run(['launchctl', 'bootstrap', domain(), p['plist']])
-    if not wait_managed_listener():
-        # Avoid leaving a crashing KeepAlive job behind on validation failure.
-        run(['launchctl', 'bootout', service()], check=False)
-        print('WARNING: 启动后18585未监听；已尝试卸载失败服务，请检查 stderr.log', file=sys.stderr)
-        raise RuntimeError('启动后未验证到受 launchd 管理的监听进程')
+    enable_login_autostart(p)
+    try:
+        run(['launchctl', 'bootstrap', domain(), p['plist']])
+        if not wait_managed_listener():
+            raise RuntimeError('启动后未验证到受 launchd 管理的监听进程')
+    except (OSError, RuntimeError, subprocess.CalledProcessError):
+        if is_loaded():
+            run(['launchctl', 'bootout', service()], check=False)
+        disable_login_autostart(p)
+        print('WARNING: 启动失败，已移除登录自启定义；请检查 stderr.log', file=sys.stderr)
+        raise
     print('SERVICE_STARTED')
 
 
 def stop(p, *, confirm_idle=False):
     if not confirm_idle:
         raise RuntimeError('停止服务必须指定 --confirm-idle，确认全部上传已结束')
-    if not is_loaded():
+    if is_loaded():
+        # Fail closed when a foreign or modified plist occupies our label.
+        validate_agent_file(p, p['plist'])
+        run(['launchctl', 'bootout', service()])
+        disable_login_autostart(p)
+        if not wait_port(should_listen=False):
+            raise RuntimeError('服务已卸载，但18585仍被占用；请排查其他进程')
+        print('SERVICE_STOPPED')
+    else:
+        disable_login_autostart(p)
         print('SERVICE_ALREADY_STOPPED')
-        return
-    run(['launchctl', 'bootout', service()])
-    if not wait_port(should_listen=False):
-        raise RuntimeError('服务已卸载，但18585仍被占用；请排查其他进程')
-    print('SERVICE_STOPPED')
 
 
 def activate(p, sha, confirm_idle):
@@ -387,6 +433,7 @@ def status(p):
     current = installed_link(p, 'current')
     previous = installed_link(p, 'previous')
     print('service_loaded=', is_loaded())
+    print('login_autostart_enabled=', p['plist'].is_file() and not p['plist'].is_symlink())
     print('port_18585_listening=', not port_available())
     print('port_18585_managed=', managed_listener())
     print('current_sha=', current.name if current else 'NONE')
@@ -404,9 +451,8 @@ def uninstall(p, confirm_idle):
         link = p[name]
         if link.exists() and not link.is_symlink():
             raise RuntimeError(f'版本链接不是符号链接，拒绝卸载：{link}')
-    if is_loaded():
-        stop(p, confirm_idle=confirm_idle)
-    p['plist'].unlink(missing_ok=True)
+    stop(p, confirm_idle=confirm_idle)
+    p['plist_template'].unlink(missing_ok=True)
     p['cli'].unlink(missing_ok=True)
     p['run'].unlink(missing_ok=True)
     p['manager'].unlink(missing_ok=True)
