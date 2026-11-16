@@ -1,7 +1,6 @@
 """Validated TOML configuration for the local R2 upload cache buffer."""
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 import os
