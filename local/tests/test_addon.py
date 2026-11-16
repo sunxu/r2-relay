@@ -1,9 +1,11 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from mitmproxy import http
 
 from r2relay_local.addon import R2RelayAddon
+from r2relay_local.config import Settings
 from r2relay_local.relay import RelayUnavailable, UpstreamResult
 
 URL = "https://abc.r2.cloudflarestorage.com/b/k?uploadId=x&partNumber=1"
@@ -74,7 +76,14 @@ async def test_other_traffic_never_uses_relay():
 
 
 def test_large_or_unknown_upload_is_preemptively_streamed():
-    addon = R2RelayAddon(StubRelay(), max_part_bytes=10)
+    addon = R2RelayAddon(
+        StubRelay(),
+        settings=Settings(
+            max_part_bytes=10,
+            global_budget_bytes=20,
+            source=Path("test-config.toml"),
+        ),
+    )
     for length in (11, None):
         f = flow(body=b"hello", length=length)
         addon.requestheaders(f)
@@ -82,3 +91,32 @@ def test_large_or_unknown_upload_is_preemptively_streamed():
     f = flow(body=b"hello", length=5)
     addon.requestheaders(f)
     assert f.request.stream is False
+
+
+
+def test_global_buffer_budget_is_reserved_and_released():
+    addon = R2RelayAddon(
+        StubRelay(),
+        settings=Settings(
+            max_part_bytes=10,
+            global_budget_bytes=10,
+            source=Path("test-config.toml"),
+        ),
+    )
+    first = flow(body=b"12345678", length=8)
+    addon.requestheaders(first)
+    assert first.request.stream is False
+    assert addon.reserved_bytes == 8
+
+    over_budget = flow(body=b"123", length=3)
+    addon.requestheaders(over_budget)
+    assert over_budget.request.stream is True
+    assert addon.reserved_bytes == 8
+
+    addon.error(first)
+    assert addon.reserved_bytes == 0
+
+    after_release = flow(body=b"123", length=3)
+    addon.requestheaders(after_release)
+    assert after_release.request.stream is False
+    assert addon.reserved_bytes == 3

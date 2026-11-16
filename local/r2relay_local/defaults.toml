@@ -1,0 +1,5 @@
+schema_version = 1
+
+[upload]
+max_part_mib = 128
+global_buffer_mib = 1024

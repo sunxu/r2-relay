@@ -6,16 +6,24 @@ import os
 
 from mitmproxy import http
 
+from .config import Settings, load_settings
 from .relay import RelayClient, RelayUnavailable, RelayOutcomeUnknown, is_upload_part
 
 LOG = logging.getLogger("r2relay.local")
 
 
 class R2RelayAddon:
-    def __init__(self, relay: RelayClient, *, max_part_bytes: int = 32 * 1024 * 1024):
+    def __init__(self, relay: RelayClient, *, settings: Settings | None = None):
         self.relay = relay
-        self.max_part_bytes = max_part_bytes
-        self.global_budget_bytes = int(os.environ.get("R2_RELAY_BUFFER_BUDGET", str(512 * 1024 * 1024)))
+        self.settings = settings or load_settings()
+        self.max_part_bytes = self.settings.max_part_bytes
+        self.global_budget_bytes = self.settings.global_budget_bytes
+        LOG.info(
+            "upload buffer config loaded source=%s max_part_mib=%d global_buffer_mib=%d",
+            self.settings.source,
+            self.settings.max_part_mib,
+            self.settings.global_buffer_mib,
+        )
         self.reserved_bytes = 0
         self.reservations: dict[int, int] = {}
 

@@ -19,8 +19,8 @@ python -m r2relay_local
 
 ## 行为
 
-- Content-Length 已知且不超过 32 MiB，且全局缓冲预算（默认 512 MiB）允许时，完整读取分片并计算 MD5。
-- 未知长度、超上限或超预算请求不进入缓存，改走普通流式 R2 直传。
+- Content-Length 已知且不超过配置的单分片上限（默认 128 MiB），且全局缓冲预算（默认 1024 MiB）允许时，完整读取分片并计算 MD5。
+- 未知长度、超上限或超预算请求不进入缓存，改走普通流式 R2 直传。两个数值均由 `~/.config/r2-relay/config.toml` 管理，不再通过 `R2_RELAY_BUFFER_BUDGET` 环境变量设置。
 - VPS TCP 建连失败时直传；R2 真实业务 4xx/5xx 透传；上传任务已提交后通信断开时返回状态未知错误，避免立即竞争性直传。
 - VPS 磁盘明确以 HTTP 507 拒绝缓存写入（还未启动 R2 Worker）时，可安全回退直传。
 - 当前采用声明长度预算预留，真实高负载与恶意 HTTP 长度仍需外网/真实客户端验证。
@@ -41,3 +41,30 @@ python -m r2relay_local --listen-host 127.0.0.1 --listen-port 18585
 使用同一大小、不同内容（确保 MISS）的受控测试分片，分别在 HTTP/1.1 和 HTTP/2 下运行，至少各 3 次，记录 `relay_timing` 中的 `data_upload_ms`、`data_mbps`、`vps_http_version`。相同 MD5 第二次会变为 HIT，**无法**用于对照 Data 上传带宽。日志不输出 Token、签名 URL 或请求体。请使用独立测试任务，避免修改生产 Multipart 的有效分片。
 
 `data_mbps` 反映上传请求体到收到 VPS Data 确认的有效速度，包括 HTTPS/TCP、VPS 缓存写入及处理开销，不是纯网络链路带宽。签名过期后的 R2 HTTP 403 也可以用于测这段耗时，但不代表实际 R2 上传成功。
+
+
+## 上传缓存资源配置
+
+默认配置随安装包提供：`r2relay_local/defaults.toml`。首次配置时，在仓库根目录执行：
+
+```bash
+mkdir -p ~/.config/r2-relay
+cp local/r2relay_local/defaults.toml ~/.config/r2-relay/config.toml
+chmod 600 ~/.config/r2-relay/config.toml
+```
+
+配置内容：
+
+```toml
+schema_version = 1
+
+[upload]
+max_part_mib = 128
+global_buffer_mib = 1024
+```
+
+- `max_part_mib`：单个 UploadPart 进入缓存加速的最大请求体，默认 128 MiB。
+- `global_buffer_mib`：所有正在缓存的 UploadPart 共享的 Content-Length 预留预算，默认 1024 MiB。
+- 超过任一限制的请求仍由 mitmproxy 流式转发到原始 R2，不会被拒绝。
+- 修改配置后重启本地 R2 Relay（18585）进程生效。
+- 可用 `R2_RELAY_CONFIG=/absolute/path/config.toml` 指定另一份配置文件；该变量只指定配置文件路径，不承载数值配置。
