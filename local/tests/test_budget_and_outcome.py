@@ -1,16 +1,23 @@
+from pathlib import Path
+
 import pytest
 
-from mitmproxy import http
-
 from r2relay_local.addon import R2RelayAddon
+from r2relay_local.config import Settings
 from r2relay_local.relay import RelayOutcomeUnknown, UpstreamResult
 
 from test_addon import StubRelay, flow
 
 
-def test_reservations_prevent_exceeding_global_memory_budget(monkeypatch):
-    monkeypatch.setenv("R2_RELAY_BUFFER_BUDGET", "8")
-    addon = R2RelayAddon(StubRelay(), max_part_bytes=20)
+def test_reservations_prevent_exceeding_global_memory_budget():
+    addon = R2RelayAddon(
+        StubRelay(),
+        settings=Settings(
+            max_part_bytes=20,
+            global_budget_bytes=8,
+            source=Path("test-config.toml"),
+        ),
+    )
     first = flow(body=b"123456", length=6)
     second = flow(body=b"abcdef", length=6)
     addon.requestheaders(first)
@@ -34,9 +41,15 @@ async def test_unknown_outcome_never_bypasses_to_direct_r2():
 
 
 @pytest.mark.asyncio
-async def test_reserved_memory_released_after_real_r2_result(monkeypatch):
-    monkeypatch.setenv("R2_RELAY_BUFFER_BUDGET", "8")
-    addon = R2RelayAddon(StubRelay(UpstreamResult(200, [("ETag", '"x"')], b"")))
+async def test_reserved_memory_released_after_real_r2_result():
+    addon = R2RelayAddon(
+        StubRelay(UpstreamResult(200, [("ETag", '"x"')], b"")),
+        settings=Settings(
+            max_part_bytes=20,
+            global_budget_bytes=8,
+            source=Path("test-config.toml"),
+        ),
+    )
     sample = flow(body=b"abc", length=3)
     addon.requestheaders(sample)
     assert addon.reserved_bytes == 3
