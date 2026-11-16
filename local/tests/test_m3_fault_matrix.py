@@ -2,12 +2,14 @@
 import asyncio
 import base64
 import hashlib
+from pathlib import Path
 
 import httpx
 import pytest
 
 from r2relay_local.relay import RelayClient, RelayOutcomeUnknown, RelayUnavailable
 from r2relay_local.addon import R2RelayAddon
+from r2relay_local.config import Settings
 from test_addon import StubRelay, flow
 
 R2_URL = (
@@ -74,9 +76,15 @@ async def test_request_url_and_signed_headers_are_forwarded_exactly():
     assert not any(x[0].lower() == "connection" for x in captured[0]["headers"])
 
 
-def test_parallel_memory_reservations_remain_within_budget(monkeypatch):
-    monkeypatch.setenv("R2_RELAY_BUFFER_BUDGET", "1048576")
-    addon = R2RelayAddon(StubRelay(), max_part_bytes=512 * 1024)
+def test_parallel_memory_reservations_remain_within_budget():
+    addon = R2RelayAddon(
+        StubRelay(),
+        settings=Settings(
+            max_part_bytes=512 * 1024,
+            global_budget_bytes=1024 * 1024,
+            source=Path("test-config.toml"),
+        ),
+    )
     flows = [flow(body=b"", length=128 * 1024) for _ in range(24)]
     for candidate in flows:
         addon.requestheaders(candidate)
