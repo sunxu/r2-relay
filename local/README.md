@@ -49,7 +49,7 @@ python -m r2relay_local --listen-host 127.0.0.1 --listen-port 18585
 
 ```bash
 mkdir -p ~/.config/r2-relay
-cp local/r2relay_local/defaults.toml ~/.config/r2-relay/config.toml
+cp -n local/r2relay_local/defaults.toml ~/.config/r2-relay/config.toml
 chmod 600 ~/.config/r2-relay/config.toml
 ```
 
