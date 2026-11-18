@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -355,3 +356,108 @@ async def test_mac_download_fails_closed_when_large_object_exceeds_temp_budget(t
     finally:
         await coordinator.close()
         await transport.aclose()
+
+
+
+class _FakePartResponse:
+    status_code = 200
+
+    def __init__(self, number, digest):
+        self.headers = {
+            "content-length": "1",
+            "x-part-sha256": digest,
+            "x-part-number": str(number),
+        }
+
+    async def aiter_raw(self):
+        await asyncio.sleep(0.01)
+        yield b"x"
+
+
+class _ConcurrencyRelay:
+    poll_interval = 0.001
+    execution_timeout = 5
+
+    def __init__(self, part_count):
+        import hashlib
+
+        digest = hashlib.sha256(b"x").hexdigest()
+        self.manifests = {}
+        for task_id in ("file-a", "file-b"):
+            parts = [
+                {"part_number": number, "size": 1, "sha256": digest, "status": "READY"}
+                for number in range(1, part_count + 1)
+            ]
+            self.manifests[task_id] = {
+                "task_id": task_id,
+                "status": "COMPLETE",
+                "mode": "parts",
+                "status_code": 200,
+                "headers": [],
+                "total_size": part_count,
+                "expected_size": part_count,
+                "part_size_bytes": 1,
+                "part_count": part_count,
+                "ready_part_count": part_count,
+                "parts": parts,
+            }
+        self.active = 0
+        self.max_active = 0
+        self.active_by_file = {"file-a": 0, "file-b": 0}
+        self.max_by_file = {"file-a": 0, "file-b": 0}
+
+    async def download_manifest(self, task_id):
+        return self.manifests[task_id]
+
+    @asynccontextmanager
+    async def download_part_stream(self, task_id, number):
+        import hashlib
+
+        self.active += 1
+        self.active_by_file[task_id] += 1
+        self.max_active = max(self.max_active, self.active)
+        self.max_by_file[task_id] = max(
+            self.max_by_file[task_id], self.active_by_file[task_id]
+        )
+        try:
+            yield _FakePartResponse(number, hashlib.sha256(b"x").hexdigest())
+        finally:
+            self.active -= 1
+            self.active_by_file[task_id] -= 1
+
+    async def download_delete(self, task_id):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_two_downloads_enforce_16_per_file_and_32_global_part_concurrency(tmp_path):
+    relay = _ConcurrencyRelay(part_count=20)
+    coordinator = DownloadCoordinator(
+        relay,
+        local_settings(
+            tmp_path,
+            download_max_concurrency=16,
+            download_global_max_concurrency=32,
+            download_max_temp_bytes=64,
+        ),
+    )
+    deadline = asyncio.get_running_loop().time() + 5
+    try:
+        results = await asyncio.gather(
+            coordinator._download_large(
+                "file-a", relay.manifests["file-a"], deadline=deadline
+            ),
+            coordinator._download_large(
+                "file-b", relay.manifests["file-b"], deadline=deadline
+            ),
+        )
+        assert relay.max_active == 32
+        assert relay.max_by_file == {"file-a": 16, "file-b": 16}
+        assert all(result.size == 20 for result in results)
+        for result in results:
+            assert result.path is not None
+            assert result.path.read_bytes() == b"x" * 20
+            await result.cleanup()
+        assert coordinator.disk_budget.used == 0
+    finally:
+        await coordinator.close()
