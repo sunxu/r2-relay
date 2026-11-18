@@ -109,6 +109,8 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
         def __init__(self, relay, settings):
             self.closed = False
             self.remote_cleanup_failures = 0
+            self.disk_budget = SimpleNamespace(used=0)
+            self.memory_budget = SimpleNamespace(used=0)
             self.relay = relay
 
         async def download(self, url, headers):
@@ -139,4 +141,5 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
     assert report["mac_to_vps_http_versions"] == ["HTTP/2"]
     assert report["expected_sha256_match"] is True
     assert report["vps_task_cleanup_ok"] is True
+    assert report["local_temp_cleanup_ok"] is True
     assert report["signed_url_or_headers_logged"] is False
