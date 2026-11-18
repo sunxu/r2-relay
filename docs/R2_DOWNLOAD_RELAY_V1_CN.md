@@ -27,10 +27,10 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 ## 3. 请求和响应处理
 
 - **RLY-DL-001 GET 接管：** 所有发往 Cloudflare R2 S3 endpoint 的 GET 均由本地代理接管并交由 VPS 执行，不限于 GET Object。v1 沿用现有上传目标识别边界：HTTPS、目标端口 443（URL 未显式指定端口时按 443）、主机名以 .r2.cloudflarestorage.com 结尾。非目标域名和非目标端口的 GET 按普通代理透传；未来若要支持 R2 自定义域名，另行增加显式 allowlist 配置和验收。
-- **RLY-DL-002 原始请求：** 转发原始 URL、查询参数和必要请求头，不擅自改写 SigV4 签名内容。不设计签名 URL 权限缓存。
+- **RLY-DL-002 原始请求：** 转发原始 URL、查询参数和必要请求头，保留请求头多值语义；仅移除必须由 HTTP 客户端重新生成的 hop-by-hop 头。不得擅自修改 SigV4 签名相关 URL、查询参数、Host 或签名头。不设计签名 URL 权限缓存。
 - **RLY-DL-003 单次上游请求：** VPS 对每个原始 GET 只发起一次 R2 GET，不发起多个 Range 请求。
 - **RLY-DL-004 响应模式：** 实际响应体 <=24 MiB 时，Mac 使用内存；>24 MiB 时，VPS 生成 16 MiB Part，Mac 使用磁盘。204/304 等无响应体响应直接返回。3xx/4xx/5xx 保留真实状态、响应头和响应体，不得伪造成成功；不自动跟随重定向。
-- **RLY-DL-005 未知长度：** 缺少 Content-Length 时不得无限制缓冲内存。VPS 使用有界临时 spool；超过 24 MiB 转 Part 模式，最终不超过阈值则作为小响应返回。临时 spool 不得被读取接口当作 READY Part。
+- **RLY-DL-005 未知长度：** 缺少 Content-Length 时不得无限制缓冲内存。VPS 使用有界临时 spool；超过 24 MiB 时将已暂存前缀交给 Part writer 并继续生成 Part，最终不超过阈值则作为小响应返回。临时 spool 不得被读取接口当作 READY Part。
 
 ## 4. VPS Part 生成与任务管理
 
@@ -49,7 +49,7 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 
 ## 6. HTTP 语义
 
-- **RLY-DL-015 响应头：** 保留 VPS 从 R2 获得的真实状态码和端到端响应头；过滤 Connection、Transfer-Encoding、Keep-Alive、Upgrade 等 hop-by-hop 头。Content-Length 必须与实际字节数一致。Content-Encoding 必须与交付的原始字节一致，避免自动解压后仍保留旧编码/长度。
+- **RLY-DL-015 响应头：** 保留 VPS 从 R2 获得的真实状态码和端到端响应头；过滤 Connection、Transfer-Encoding、Keep-Alive、Upgrade 等 hop-by-hop 头。对于有响应体的响应，Content-Length 必须与实际返回字节数一致；304 等无响应体状态按 HTTP 语义保留 R2 提供的合法元数据头，不得人为生成响应体。重复端到端响应头应保留多值语义。Content-Encoding 必须与交付的原始字节一致，避免自动解压后仍保留旧编码/长度。
 - **RLY-DL-016 原始 Range：** 原始客户端的 Range、If-Range、If-None-Match 等条件请求原样交给 VPS/R2。R2 返回 206 时，对该 206 响应体分 Part；本地内部仍按 Part ID 取回，不使用 HTTP Range。最终保留真实状态和 Content-Range、ETag。多 Range 响应作为原始 multipart/byteranges 字节流处理，不自行重建边界。
 
 ## 7. 失败、清理和资源保护
@@ -103,7 +103,7 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 | DL-T21 | mitmproxy PoC | 1 GiB 磁盘响应在 HTTP/1.1/2 通过，内存不随文件大小线性增长 |
 | DL-T22 | 上传回归 | 既有 UploadPart 测试、默认配置和行为不变 |
 | DL-T23 | 全栈模拟 | aiohttp → mitmproxy → VPS HTTPS → Mock R2 覆盖小/大响应、失败和清理 |
-| DL-T24 | 真实 R2 | GET/Range GET、响应头、签名请求和故障行为单独记录 PASS_REAL；Mock 不替代真实验收 |
+| DL-T24 | 目标范围 | R2 HTTPS 443 域名命中接管；非目标域名/端口 GET 正常透传 |\n| DL-T25 | 真实 R2 | GET/Range GET、响应头、签名请求和故障行为单独记录 PASS_REAL；Mock 不替代真实验收 |
 
 ## 11. 实施阶段
 
