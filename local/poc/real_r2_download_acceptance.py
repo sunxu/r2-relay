@@ -58,7 +58,7 @@ def load_spec() -> dict:
         if (
             not isinstance(pair, list) or len(pair) != 2
             or not all(isinstance(value, str) for value in pair)
-            or any("\\r" in value or "\\n" in value for value in pair)
+            or any("\r" in value or "\n" in value for value in pair)
         ):
             raise ValueError("invalid request header pair")
         normalized.append((pair[0], pair[1]))
