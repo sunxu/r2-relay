@@ -70,6 +70,7 @@ class R2RelayAddon:
                     "transfer-encoding", "te", "trailer", "upgrade",
                 }
             ]
+            result = None
             try:
                 result = await self.downloads.download(req.pretty_url, original_headers)
                 token = await self.disk_responses.register(result)
@@ -85,6 +86,8 @@ class R2RelayAddon:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if result is not None and result.cleanup is not None:
+                    asyncio.get_running_loop().create_task(result.cleanup())
                 LOG.error("R2 GET download relay failed: %s", type(exc).__name__)
                 flow.response = http.Response.make(
                     status_code=502,
