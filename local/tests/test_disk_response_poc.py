@@ -43,7 +43,12 @@ def rss_bytes(pid: int) -> int:
     return 0
 
 
-async def serve_file(\n    reader: asyncio.StreamReader,\n    writer: asyncio.StreamWriter,\n    path: Path,\n    disconnected: asyncio.Event | None = None,\n) -> None:
+async def serve_file(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    path: Path,
+    disconnected: asyncio.Event | None = None,
+) -> None:
     try:
         await reader.readuntil(b"\r\n\r\n")
         size = path.stat().st_size
