@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import base64
 import hashlib
 import logging
@@ -121,6 +122,116 @@ class RelayClient:
             # After a connection is established, a lost acknowledgement is
             # ambiguous. The VPS might have started the R2 UploadPart already.
             raise RelayOutcomeUnknown(f"VPS request outcome unknown: {type(exc).__name__}") from exc
+
+    async def _download_request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        try:
+            response = await self.client.request(
+                method,
+                self.endpoint + path,
+                headers={"Authorization": f"Bearer {self.token}", **kwargs.pop("headers", {})},
+                **kwargs,
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            raise RelayOutcomeUnknown(
+                f"VPS 下载请求结果未知：{type(exc).__name__}"
+            ) from exc
+        if response.status_code >= 400:
+            raise RelayOutcomeUnknown(
+                f"VPS 下载 API 返回 HTTP {response.status_code}"
+            )
+        return response
+
+    async def download_create(
+        self, request_id: str, url: str, headers: list[tuple[str, str]]
+    ) -> dict:
+        response = await self._download_request(
+            "POST",
+            "/v1/downloads",
+            json={
+                "schema_version": 1,
+                "request_id": request_id,
+                "url": url,
+                "headers": [[key, value] for key, value in headers if key.lower() not in HOP_HEADERS],
+            },
+            timeout=15.0,
+        )
+        if response.status_code != 202:
+            raise RelayOutcomeUnknown("VPS 未接受下载任务")
+        try:
+            result = response.json()
+            if not result.get("task_id"):
+                raise ValueError("missing task_id")
+            return result
+        except (ValueError, TypeError) as exc:
+            raise RelayOutcomeUnknown("VPS 下载任务响应格式无效") from exc
+
+    async def download_manifest(self, task_id: str) -> dict:
+        response = await self._download_request(
+            "GET", f"/v1/downloads/{task_id}",
+            timeout=15.0,
+        )
+        try:
+            result = response.json()
+            if result.get("task_id") != task_id:
+                raise ValueError("task_id mismatch")
+            return result
+        except (ValueError, TypeError) as exc:
+            raise RelayOutcomeUnknown("VPS 下载 manifest 格式无效") from exc
+
+    @asynccontextmanager
+    async def download_part_stream(self, task_id: str, part_number: int):
+        try:
+            async with self.client.stream(
+                "GET",
+                self.endpoint + f"/v1/downloads/{task_id}/parts/{part_number}",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=httpx.Timeout(90.0, connect=15.0, read=90.0, write=30.0),
+            ) as response:
+                yield response
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            raise RelayOutcomeUnknown(
+                f"VPS Part 取回结果未知：{type(exc).__name__}"
+            ) from exc
+
+    async def download_body(self, task_id: str, *, max_bytes: int) -> bytes:
+        body = bytearray()
+        try:
+            async with self.client.stream(
+                "GET",
+                self.endpoint + f"/v1/downloads/{task_id}/body",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=httpx.Timeout(90.0, connect=15.0, read=90.0, write=30.0),
+            ) as response:
+                if response.status_code != 200:
+                    raise RelayOutcomeUnknown(
+                        f"VPS 小响应 API 返回 HTTP {response.status_code}"
+                    )
+                async for chunk in response.aiter_raw():
+                    if len(body) + len(chunk) > max_bytes:
+                        raise RelayOutcomeUnknown("VPS 小响应超过本地内存上限")
+                    body.extend(chunk)
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            raise RelayOutcomeUnknown(
+                f"VPS 小响应取回结果未知：{type(exc).__name__}"
+            ) from exc
+        return bytes(body)
+
+    async def download_delete(self, task_id: str) -> None:
+        try:
+            response = await self.client.request(
+                "DELETE",
+                self.endpoint + f"/v1/downloads/{task_id}",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=15.0,
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            raise RelayOutcomeUnknown(
+                f"VPS 下载清理确认未知：{type(exc).__name__}"
+            ) from exc
+        if response.status_code not in (200, 404):
+            raise RelayOutcomeUnknown(
+                f"VPS 下载清理 API 返回 HTTP {response.status_code}"
+            )
 
     async def upload(
         self, url: str, headers: list[tuple[str, str]], body: bytes
