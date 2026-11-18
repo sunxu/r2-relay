@@ -15,14 +15,14 @@
 - `vps_r2_https_preflight/prepare/start/ca_fingerprint`：固定 IP 自签名 HTTPS 8443 的准入、准备、启动和公钥指纹检查。
 - `vps_r2_deployment_status`：唯一权威统一只读部署状态入口。
 
-旧的 `deployment_inspect` 是 Legacy 兼容工具，不作为生产验收入口。
+旧版 `deployment_inspect` 已从仓库代码、Bootstrap 和文档中退役；`vps_r2_deployment_status` 直接调用固定的 root-only `r2_loopback_control.py` 验证器，不再依赖第二套 Inspector。历史 VPS 上已安装的旧文件或 MCP 工具注册不会由本次代码变更自动删除，须在单独获批的 VPS 维护窗口处理。
 
 ## 安全边界
 
 - MCP 层保持非特权运行；需要 root 权限的操作经 SO_PEERCRED 验证的 Unix Socket 调用 rootd 固定动作白名单。
 - 不提供任意 root shell、任意命令、任意仓库或任意文件路径。
 - 安装/部署仅接受固定仓库与完整 Commit SHA；生产 Release 由受控 Receiver 验证并切换。
-- 凭据和 Token 不进入 MCP 响应；统一状态检查仅读取 EnvironmentFile 元数据，不读取内容。
+- 凭据和 Token 不进入 MCP 响应。Root-only 服务验证器会在内存中读取并校验私有 EnvironmentFile 的必需键、Token 格式和配置边界，但不会返回文件内容或 Token，也不会修改文件。
 - 443 由现有 sing-box 使用，不允许 R2 Relay/Caddy 接管；R2 Relay API 仅监听 loopback 18085，Caddy 对外提供 8443。
 - 真实 R2 上传必须另有明确授权和独立测试 Bucket；当前没有把真实 R2 请求作为部署状态检查的一部分。
 
@@ -30,7 +30,7 @@
 
 1. 使用 `vps_r2_deployment_status` 作为唯一权威状态检查。
 2. 只有在明确部署变更已获授权时，才运行固定 Bootstrap/Receiver。
-3. 部署后再次调用统一状态检查，确认 Release SHA、EnvironmentFile、systemd release layout 与 SERVICE_VERIFY_PASS 一致。
+3. 部署后再次调用统一状态检查，确认 Release 指针与 commit marker、EnvironmentFile 权限及字段、systemd unit 模板和端口边界均通过 root-only 验证。
 4. 不要将 `RUNTIME_SMOKE_PASS` 或 `UNIFIED_DEPLOYMENT_STATUS_PASS` 解释为真实 R2 上传成功。
 
 历史安装、Runtime Smoke、Loopback Start 与 HTTPS 部署说明见：
