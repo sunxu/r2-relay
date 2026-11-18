@@ -1,8 +1,7 @@
-"""PoC addon: redirect one intercepted HTTPS request to a local disk file server.
+"""概念验证 addon：将一个被拦截的 HTTPS 请求转发到本机磁盘文件服务。
 
-The local server is the upstream HTTP body source. mitmproxy streams that upstream
-response to the original HTTPS client instead of constructing a large synthetic
-http.Response body in memory.
+本机文件服务作为上游 HTTP 响应体来源。mitmproxy 将该上游响应流式转发给
+原始 HTTPS 客户端，避免在内存中构造大型 http.Response 响应体。
 """
 from __future__ import annotations
 
