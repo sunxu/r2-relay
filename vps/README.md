@@ -71,4 +71,5 @@ wait_timeout_seconds = 30
 
 - 下载功能默认关闭；当前未部署 VPS，也没有修改现有 VPS 服务。
 - manifest 与幂等索引保存在进程内存。VPS 重启后旧 task_id 不恢复，启动时会清理下载目录中的孤儿数据。
+- 下载目录用 Linux 文件锁保证单 worker 独占；关停时先停止 writer、等待 reader 退出，再释放锁。
 - 生产启用前仍需先读取 VPS 磁盘容量，确定资源预算；不得凭空填入生产容量值。
