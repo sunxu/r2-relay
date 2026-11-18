@@ -72,8 +72,8 @@ def load_spec() -> dict:
         not isinstance(expected_headers, dict) or len(expected_headers) > 32
         or any(
             not isinstance(name, str) or not isinstance(value, str)
-            or not name or "\\r" in name or "\\n" in name
-            or "\\r" in value or "\\n" in value
+            or not name or "\r" in name or "\n" in name
+            or "\r" in value or "\n" in value
             for name, value in expected_headers.items()
         )
     ):
