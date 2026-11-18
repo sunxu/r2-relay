@@ -25,5 +25,5 @@ jobs:
           python-version: "3.11"
       - name: Install
         run: python -m pip install -e './local[test]' -e './vps[test]'
-      - name: Test local proxy and 1 GiB disk-response PoC (lazy loopback upstream)
+      - name: Test local proxy and 1 GiB disk-response PoC (CONNECT HTTP/1.1, lazy loopback)
         run: cd local && R2_POC_SIZE_MIB=1024 python -m pytest -q
