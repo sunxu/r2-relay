@@ -1,6 +1,6 @@
 import asyncio
 from pathlib import Path
-import socket
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -237,16 +237,16 @@ async def test_addon_rewrites_r2_get_to_loopback_and_streams_verified_result(tmp
         download_coordinator=downloads,
         disk_response_server=disk_server,
     )
-    request = http.Request.make(
-        "GET", R2_URL, headers={
-            "Authorization": "AWS4-HMAC-SHA256 signed",
-            "Range": "bytes=0-4",
-            "Cookie": "must-not-go-to-loopback",
-        },
+    request_headers = http.Headers()
+    request_headers["Authorization"] = "AWS4-HMAC-SHA256 signed"
+    request_headers["Range"] = "bytes=0-4"
+    request_headers["Cookie"] = "must-not-go-to-loopback"
+    request = SimpleNamespace(
+        method="GET", pretty_url=R2_URL, headers=request_headers,
+        scheme="https", host="abc.r2.cloudflarestorage.com", port=443,
+        path="/bucket/object?version=1",
     )
-    flow = http.HTTPFlow(None)
-    flow.request = request
-    flow.metadata = {}
+    flow = SimpleNamespace(request=request, metadata={}, response=None)
     try:
         await addon.request(flow)
         assert downloads.calls
