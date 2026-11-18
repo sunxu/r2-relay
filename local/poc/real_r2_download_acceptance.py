@@ -122,7 +122,8 @@ async def run() -> int:
         status_ok = result.status_code == spec["expected_status_code"]
         size_ok = actual_size == spec["expected_size"]
         digest_ok = actual_sha256 == spec["expected_sha256"]
-        passed = status_ok and size_ok and digest_ok
+        remote_cleanup_ok = coordinator.remote_cleanup_failures == 0
+        passed = status_ok and size_ok and digest_ok and remote_cleanup_ok
         actual_status = result.status_code
         http_versions = sorted(set(relay.download_http_versions))
         if result.cleanup is not None:
@@ -143,6 +144,7 @@ async def run() -> int:
             "expected_sha256_match": digest_ok,
             "size_match": size_ok,
             "status_match": status_ok,
+            "vps_task_cleanup_ok": remote_cleanup_ok,
             "mac_to_vps_http_versions": http_versions,
             "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
             "signed_url_or_headers_logged": False,
