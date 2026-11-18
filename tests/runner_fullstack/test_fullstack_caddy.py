@@ -263,6 +263,11 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
         }
         Path(os.environ["R2_RELAY_RUNNER_REPORT"]).write_text(
             json.dumps(result, sort_keys=True, indent=2) + "\n")
+    except Exception:
+        for name, logfile in logfiles.items():
+            if logfile.exists():
+                print(f"\n===== {name.upper()} LOG =====\n{logfile.read_text()[-12000:]}")
+        raise
     finally:
         for proc in reversed(procs):
             stop(proc)
