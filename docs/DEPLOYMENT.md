@@ -120,7 +120,7 @@ Windows 将 CA 文件路径替换为 Windows 路径。若应用原本使用自�
 ## 7. 运行、诊断与回滚
 
 - 本地停止：在运行代理的终端按 Ctrl+C；调用方移除显式代理设置即可恢复原上传路径。
-- VPS 状态：通过 ChatGPT 的 `vps_r2_deployment_status` 只读检查。旧第三方 `deployment_inspect` 为 Legacy，不作为生产验收依据。
+- VPS 状态：通过 ChatGPT 的 `vps_r2_deployment_status` 只读检查。旧版 `deployment_inspect` 已从仓库代码和 Bootstrap 中退役；历史 VPS 上的残留文件或工具注册需另行获批清理。
 - 不要手工修改 `/etc/r2-relay/vps.env` 权限或内容；不要将其复制到项目目录。
 - 生产部署由固定 SHA 的受控 GitHub Actions / Root Receiver 流程管理；部署前检查、备份和回滚回执见 [GitHub Actions VPS 部署说明](GITHUB_ACTIONS_DEPLOY_CN.md)。
 - 发生异常时先保存脱敏状态与日志，再按已审核部署流程回滚；不要通过任意 root shell、重启 sing-box 或改动 443 进行排障。
