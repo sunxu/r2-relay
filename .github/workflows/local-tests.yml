@@ -6,6 +6,7 @@ on:
       - "vps/**"
       - "ops/**"
       - "tests/**"
+      - "docs/**"
       - ".github/workflows/local-tests.yml"
   push:
     branches: [main]
