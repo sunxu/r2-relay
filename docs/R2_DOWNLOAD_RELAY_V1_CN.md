@@ -74,7 +74,7 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 
 当前 addon 使用完整 bytes 构造响应，不适合 GiB 文件。完整实现前必须验证：从 Mac 磁盘向客户端发送 1 GiB；不将完整文件读入 Python 内存；HTTP/1.1 和 HTTP/2 均通过；Content-Length/Content-Encoding/响应头正确；客户端中途断开可停止发送并清理文件。
 
-若 mitmproxy addon 无法可靠实现，评估受控 Loopback 文件响应服务或其他可验证方案；不得未经验证就认定 response stream 能直接充当任意磁盘文件响应源。Gate 0 不部署 VPS、不改变生产服务。
+若 Loopback 文件响应服务不能可靠满足 HTTP/1.1、HTTP/2、取消和清理要求，再评估其他可验证方案；不得未经验证就认定 response stream 能直接充当任意磁盘文件响应源。Gate 0 不部署 VPS、不改变生产服务。
 
 ## 10. 验收矩阵
 
