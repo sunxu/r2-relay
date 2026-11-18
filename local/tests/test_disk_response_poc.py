@@ -14,7 +14,7 @@ import pytest
 
 try:
     import psutil
-except ImportError:  # pragma: no cover - mitmproxy normally installs psutil
+except ImportError:  # pragma: no cover - mitmproxy 通常会安装 psutil
     psutil = None
 
 
@@ -81,7 +81,7 @@ async def wait_for_proxy(process: subprocess.Popen, port: int, cert: Path, log_p
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise RuntimeError(f"mitmdump exited early; log: {log_path.read_text(errors='replace')}")
+            raise RuntimeError(f"mitmdump 提前退出；日志：{log_path.read_text(errors='replace')}")
         if cert.is_file():
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.2):
@@ -89,14 +89,14 @@ async def wait_for_proxy(process: subprocess.Popen, port: int, cert: Path, log_p
             except OSError:
                 pass
         await asyncio.sleep(0.1)
-    raise TimeoutError(f"mitmdump did not become ready; log: {log_path.read_text(errors='replace')}")
+    raise TimeoutError(f"mitmdump 未能在限定时间内就绪；日志：{log_path.read_text(errors='replace')}")
 
 
 @pytest.mark.asyncio
 async def test_disk_backed_response_streams_through_mitmproxy_http11(tmp_path: Path) -> None:
     mitmdump = shutil.which("mitmdump")
     if not mitmdump:
-        pytest.skip("mitmdump executable is not installed")
+        pytest.skip("未安装 mitmdump 可执行文件")
 
     size_mib = int(os.environ.get("R2_POC_SIZE_MIB", "64"))
     assert size_mib >= 32
@@ -165,11 +165,11 @@ async def test_disk_backed_response_streams_through_mitmproxy_http11(tmp_path: P
                     assert response.http_version == "HTTP/1.1"
                     received = 0
                     async for chunk in response.aiter_raw():
-                        assert not any(chunk), "sparse source file should contain only zero bytes"
+                        assert not any(chunk), "稀疏测试文件应只包含零字节"
                         received += len(chunk)
                     assert received == expected_size
 
-                # A second request is intentionally abandoned after its first body chunk.
+                # 第二次请求在收到第一个响应数据块后主动断开。
                 async with client.stream("GET", "https://r2-poc.example/file") as response:
                     assert response.status_code == 200
                     async for chunk in response.aiter_raw():
@@ -181,11 +181,10 @@ async def test_disk_backed_response_streams_through_mitmproxy_http11(tmp_path: P
             await monitor
 
         peak_delta_mib = max(0, peak_rss - baseline_rss) / MIB
-        print(f"disk response PoC: size_mib={size_mib}, http=1.1, mitmdump_rss_delta_mib={peak_delta_mib:.1f}")
+        print(f"磁盘响应 PoC：文件大小={size_mib} MiB，协议=HTTP/1.1，mitmdump RSS 增量={peak_delta_mib:.1f} MiB")
         assert peak_delta_mib < 128, (
-            f"mitmdump RSS grew by {peak_delta_mib:.1f} MiB while relaying "
-            f"{size_mib} MiB; baseline={baseline_rss / MIB:.1f} MiB, "
-            f"peak={peak_rss / MIB:.1f} MiB"
+            f"转发 {size_mib} MiB 时 mitmdump RSS 增长 {peak_delta_mib:.1f} MiB；"
+            f"基线={baseline_rss / MIB:.1f} MiB，峰值={peak_rss / MIB:.1f} MiB"
         )
     finally:
         process.terminate()
