@@ -24,6 +24,7 @@ def test_vps_download_settings_are_loaded_from_toml(tmp_path):
         "max_cache_bytes = 1073741824\n"
         "min_free_bytes = 268435456\n"
         "max_active_tasks = 8\n"
+        "max_retained_tasks = 32\n"
         "max_waiters = 64\n"
         "wait_timeout_seconds = 30\n",
         encoding="utf-8",
