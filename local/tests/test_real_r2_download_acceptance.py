@@ -94,6 +94,11 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
     data["expected_status_code"] = 206
     data["expected_size"] = len(body)
     data["expected_sha256"] = hashlib.sha256(body).hexdigest()
+    data["headers"] = [["Range", f"bytes=0-{len(body) - 1}"]]
+    data["expected_headers"] = {
+        "content-range": f"bytes 0-{len(body) - 1}/{len(body)}",
+        "content-length": str(len(body)),
+    }
     path = tmp_path / "private.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     path.chmod(0o600)
@@ -120,7 +125,7 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
 
         async def download(self, url, headers):
             assert url == data["url"]
-            assert headers[0] == ("Range", "bytes=0-3")
+            assert headers[0] == ("Range", f"bytes=0-{len(body) - 1}")
 
             async def cleanup():
                 return None
@@ -128,7 +133,7 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
             return SimpleNamespace(
                 status_code=206,
                 headers=[
-                    ("Content-Range", "bytes 0-3/4"),
+                    ("Content-Range", f"bytes 0-{len(body) - 1}/{len(body)}"),
                     ("Content-Length", str(len(body))),
                 ],
                 body=body, path=None, cleanup=cleanup
