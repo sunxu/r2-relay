@@ -103,7 +103,8 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 | DL-T21 | mitmproxy PoC | 1 GiB 磁盘响应在 HTTP/1.1/2 通过，内存不随文件大小线性增长 |
 | DL-T22 | 上传回归 | 既有 UploadPart 测试、默认配置和行为不变 |
 | DL-T23 | 全栈模拟 | aiohttp → mitmproxy → VPS HTTPS → Mock R2 覆盖小/大响应、失败和清理 |
-| DL-T24 | 目标范围 | R2 HTTPS 443 域名命中接管；非目标域名/端口 GET 正常透传 |\n| DL-T25 | 真实 R2 | GET/Range GET、响应头、签名请求和故障行为单独记录 PASS_REAL；Mock 不替代真实验收 |
+| DL-T24 | 目标范围 | R2 HTTPS 443 域名命中接管；非目标域名/端口 GET 正常透传 |
+| DL-T25 | 真实 R2 | GET/Range GET、响应头、签名请求和故障行为单独记录 PASS_REAL；Mock 不替代真实验收 |
 
 ## 11. 实施阶段
 
