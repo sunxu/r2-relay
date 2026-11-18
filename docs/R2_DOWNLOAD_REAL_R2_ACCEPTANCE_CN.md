@@ -163,6 +163,63 @@ PYTHONPATH=local python local/poc/real_r2_download_acceptance.py
 
 脚本不会输出或记录签名 URL、请求头、Token 或底层异常文本。
 
+## 4.1 再经真实 mitmproxy 18585 走一次完整客户端链路
+
+上面的验收脚本直接调用 Mac RelayClient → VPS → R2，**不经过 mitmproxy**。Stage 2 的 mitmproxy 接管目前由 Mock R2 全栈 CI 验证。要把真实 R2 也走过本地代理，再做下面这项人工验收。
+
+先确认 Mac 的 `~/.config/r2-relay/config.toml` 已启用下载，并按本机真实资源填写预算，例如：
+
+```toml
+[download]
+enabled = true
+max_concurrency = 16
+global_max_concurrency = 32
+small_response_memory_mib = 32
+max_temp_mib = 4096
+temp_dir = "~/.cache/r2-relay/downloads"
+```
+
+这里的 4096 MiB 只是示例，不能在未检查 Mac 磁盘空间时照抄。VPS 的 `/etc/r2-relay/config.toml` 也必须配置并启用独立的 `[download]` 资源预算。
+
+在已安装当前 Stage 2 分支的仓库根目录，打开一个终端启动本地代理：
+
+```bash
+export R2_RELAY_VPS_URL="https://你的VPS地址:8443"
+export R2_RELAY_TOKEN="你的Relay Token"
+export R2_RELAY_VPS_CA_FILE="$HOME/.config/r2-relay/vps-ca.pem"
+export R2_RELAY_CONFIG="$HOME/.config/r2-relay/config.toml"
+export R2_RELAY_HTTP2=1
+python -m r2relay_local --listen-host 127.0.0.1 --listen-port 18585
+```
+
+首次启动后，mitmproxy 会生成本地客户端 CA 公共证书：`~/.mitmproxy/mitmproxy-ca-cert.pem`。不要分享或提交 CA 私钥。
+
+在另一个终端中恢复签名 URL 到当前 shell（不打印它），再经 18585 发起相同 Range GET：
+
+```bash
+export SPEC="$HOME/.config/r2-relay/private/real-get-spec.json"
+export SIGNED_URL="$(python3 - "$SPEC" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8"))["url"])
+PY
+)"
+curl --silent --show-error --fail \
+  --proxy http://127.0.0.1:18585 \
+  --cacert "$HOME/.mitmproxy/mitmproxy-ca-cert.pem" \
+  --range 0-26214399 \
+  --dump-header "$HOME/r2-relay-25mib-proxy.headers" \
+  --output "$HOME/r2-relay-25mib-proxy.bin" \
+  "$SIGNED_URL"
+unset SIGNED_URL
+
+STATUS="$(awk 'index($1, "HTTP") == 1 {code=$2} END {print code}' "$HOME/r2-relay-25mib-proxy.headers")"
+test "$STATUS" = "206"
+cmp -s "$SOURCE" "$HOME/r2-relay-25mib-proxy.bin"
+echo "mitmproxy real R2 GET: PASS (HTTP 206, 25 MiB, bytes identical)"
+```
+
+这一步同时验证：原始客户端 CONNECT → mitmproxy addon 接管 → VPS 下载 API → Cloudflare R2 → Mac Part 组装 → Loopback response streaming → 原始客户端。若代理返回 502，不要改为绕过代理直连来宣称通过；保留状态码和脱敏日志，定位接管或 VPS 错误。
+
 ## 5. 验收判定
 
 只有以下条件全部成立才算 `PASS_REAL`：
