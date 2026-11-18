@@ -378,7 +378,9 @@ class DownloadManager:
             task.writer_active = False
             async with task.condition:
                 task.condition.notify_all()
-            if task.delete_requested or task.status in {"FAILED", "CANCELLED"}:
+            if task.status in {"FAILED", "CANCELLED"}:
+                task.delete_requested = True
+            if task.delete_requested:
                 await self._remove_files(task)
 
     def manifest(self, task: DownloadTask) -> dict:
@@ -440,6 +442,8 @@ class DownloadManager:
             raise DownloadFailed("请求的 Part 不可用")
         task.active_readers += 1
         task.last_access = self.clock()
+        if task.status == "COMPLETE":
+            task.expires_at = task.last_access + self.settings.cache_ttl_seconds
         return task, task.directory / f"{part_number}.part", dict(part)
 
     async def acquire_body(self, task_id: str) -> tuple[DownloadTask, Path]:
@@ -451,11 +455,15 @@ class DownloadManager:
             raise DownloadConflict("该任务为分片响应，请按 Part 编号取回")
         task.active_readers += 1
         task.last_access = self.clock()
+        if task.status == "COMPLETE":
+            task.expires_at = task.last_access + self.settings.cache_ttl_seconds
         return task, task.directory / "body.bin"
 
     async def reader_finished(self, task: DownloadTask) -> None:
         task.active_readers = max(0, task.active_readers - 1)
         task.last_access = self.clock()
+        if task.status == "COMPLETE":
+            task.expires_at = task.last_access + self.settings.cache_ttl_seconds
         if task.delete_requested and not task.writer_active and task.active_readers == 0:
             await self._remove_files(task)
 
