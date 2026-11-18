@@ -155,6 +155,7 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
                 running.cancel()
             if active:
                 await asyncio.gather(*active, return_exceptions=True)
+            await app.state.downloads.close()
 
     app = FastAPI(title="R2 Relay VPS", lifespan=lifespan)
     cache_store = store or CacheStore(Path(os.environ.get("R2_RELAY_CACHE_DIR", "/var/lib/r2-relay/cache")))
