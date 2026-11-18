@@ -29,6 +29,24 @@ def http2_enabled() -> bool:
     return value == "1"
 
 
+def is_r2_get(method: str, url: str) -> bool:
+    """Match all GET requests to the same HTTPS R2 endpoint boundary as uploads."""
+    if method.upper() != "GET":
+        return False
+    try:
+        parts = urlsplit(url)
+        allowed_port = parts.port in (None, 443)
+    except ValueError:
+        return False
+    hostname = parts.hostname or ""
+    return (
+        parts.scheme == "https"
+        and allowed_port
+        and hostname.endswith(".r2.cloudflarestorage.com")
+        and hostname != ".r2.cloudflarestorage.com"
+    )
+
+
 def is_upload_part(method: str, url: str) -> bool:
     if method.upper() != "PUT":
         return False
