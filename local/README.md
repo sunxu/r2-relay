@@ -87,3 +87,11 @@ temp_dir = "~/.cache/r2-relay/downloads"
 - 本地代理启动时使用 mitmproxy `connection_strategy=lazy`：先让 addon 决定是否接管，再建立上游连接，避免已接管的 R2 GET/UploadPart 预先连接原始 R2 主机。
 - 修改配置后重启本地 R2 Relay（18585）进程生效。
 - 可用 `R2_RELAY_CONFIG=/absolute/path/config.toml` 指定另一份配置文件；该变量只指定配置文件路径，不承载数值配置。
+
+
+
+## 真实 Cloudflare R2 GET 验收
+
+Stage 2 的 Mock R2 全栈验收已覆盖 mitmproxy CONNECT、Caddy TLS/HTTP/2、VPS、16 MiB Part 组装和 Loopback 流式返回。真实 Cloudflare R2 验收必须在 VPS 下载服务部署并启用后，由操作者提供一条有效签名 GET 请求。
+
+操作步骤见 [真实 R2 GET 验收手册](../docs/R2_DOWNLOAD_REAL_R2_ACCEPTANCE_CN.md)。手册使用权限为 0600 的本地 JSON 请求描述文件；运行 `local/poc/real_r2_download_acceptance.py` 时只输出状态码、长度、SHA-256 和 HTTP 版本，不输出签名 URL 或请求头。该脚本不会在 CI 中运行，也不会部署或启用 VPS 下载服务。
