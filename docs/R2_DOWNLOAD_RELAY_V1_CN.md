@@ -80,31 +80,31 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 
 | ID | 场景 | 通过条件 |
 |---|---|---|
-| T22 | TOML | 四个参数均配置化；非法值 fail-closed；值为 16/24/16/32 |
-| T23 | 阈值 | 24 MiB 内存；24 MiB + 1 Byte 分片 |
-| T24 | 分片 | 25 MiB = 16+9 MiB；100 MiB = 7 Part |
-| T25 | 原子发布 | READY 后才可读；临时文件不可读 |
-| T26 | 等待 | 未 READY 等待；READY 返回完整片；失败/取消/超时明确结束 |
-| T27 | 单文件并发 | 同一任务最多 16 个传输中的 Part |
-| T28 | 全局并发 | 所有任务合计最多 32 个传输中的 Part |
-| T29 | 内存 | 小响应使用内存且受总预算限制 |
-| T30 | 大文件 | 1 GiB 不整体进内存，按偏移写入一个本地临时文件 |
-| T31 | 边下边取 | VPS 未完成对象时，本地可取 READY Part |
-| T32 | 完整返回 | 所有 Part 和任务 COMPLETE 前客户端未收到响应体 |
-| T33 | Range | 原始 Range 正确返回 206/Content-Range；内部使用 Part ID |
-| T34 | 状态码 | 204/304/重定向/403/404/5xx 语义正确，304 无响应体及其元数据头处理符合 HTTP 语义 |
-| T35 | 响应头 | 原始字节、Content-Encoding、Length、ETag 一致；逐跳头过滤 |
-| T36 | 未知长度 | 不无限缓冲；模式切换和最终长度正确 |
-| T37 | 上游失败 | 不发布半成品、不混合重试对象 |
-| T38 | Part 重试 | 只重取完整 READY Part，仍受 16/32 限制 |
-| T39 | TTL | 正常完成主动删除；600 秒空闲过期；活动读写不被删除 |
-| T40 | 幂等 | 创建重试不重复执行；删除重试安全 |
-| T41 | 资源 | VPS 磁盘/任务/等待者和 Mac 内存/临时空间均有界 |
-| T42 | mitmproxy PoC | 1 GiB 磁盘响应在 HTTP/1.1/2 通过，内存不随文件大小线性增长 |
-| T43 | 上传回归 | 既有 UploadPart 测试、默认配置和行为不变 |
-| T44 | 全栈模拟 | aiohttp → mitmproxy → VPS HTTPS → Mock R2 覆盖小/大响应、失败和清理 |
-| T45 | 目标范围 | R2 HTTPS 443 域名命中接管；非目标域名/端口 GET 正常透传 |
-| T46 | 真实 R2 | GET/Range GET、响应头、签名请求和故障行为单独记录 PASS_REAL；Mock 不替代真实验收 |
+| DL-T01 | TOML | 四个参数均配置化；非法值 fail-closed；值为 16/24/16/32 |
+| DL-T02 | 阈值 | 24 MiB 内存；24 MiB + 1 Byte 分片 |
+| DL-T03 | 分片 | 25 MiB = 16+9 MiB；100 MiB = 7 Part |
+| DL-T04 | 原子发布 | READY 后才可读；临时文件不可读 |
+| DL-T05 | 等待 | 未 READY 等待；READY 返回完整片；失败/取消/超时明确结束 |
+| DL-T06 | 单文件并发 | 同一任务最多 16 个传输中的 Part |
+| DL-T07 | 全局并发 | 所有任务合计最多 32 个传输中的 Part |
+| DL-T08 | 内存 | 小响应使用内存且受总预算限制 |
+| DL-T09 | 大文件 | 1 GiB 不整体进内存，按偏移写入一个本地临时文件 |
+| DL-T10 | 边下边取 | VPS 未完成对象时，本地可取 READY Part |
+| DL-T11 | 完整返回 | 所有 Part 和任务 COMPLETE 前客户端未收到响应体 |
+| DL-T12 | Range | 原始 Range 正确返回 206/Content-Range；内部使用 Part ID |
+| DL-T13 | 状态码 | 204/304/重定向/403/404/5xx 语义正确，304 无响应体及其元数据头处理符合 HTTP 语义 |
+| DL-T14 | 响应头 | 原始字节、Content-Encoding、Length、ETag 一致；逐跳头过滤 |
+| DL-T15 | 未知长度 | 不无限缓冲；模式切换和最终长度正确 |
+| DL-T16 | 上游失败 | 不发布半成品、不混合重试对象 |
+| DL-T17 | Part 重试 | 只重取完整 READY Part，仍受 16/32 限制 |
+| DL-T18 | TTL | 正常完成主动删除；600 秒空闲过期；活动读写不被删除 |
+| DL-T19 | 幂等 | 创建重试不重复执行；删除重试安全 |
+| DL-T20 | 资源 | VPS 磁盘/任务/等待者和 Mac 内存/临时空间均有界 |
+| DL-T21 | mitmproxy PoC | 1 GiB 磁盘响应在 HTTP/1.1/2 通过，内存不随文件大小线性增长 |
+| DL-T22 | 上传回归 | 既有 UploadPart 测试、默认配置和行为不变 |
+| DL-T23 | 全栈模拟 | aiohttp → mitmproxy → VPS HTTPS → Mock R2 覆盖小/大响应、失败和清理 |
+| DL-T24 | 目标范围 | R2 HTTPS 443 域名命中接管；非目标域名/端口 GET 正常透传 |
+| DL-T25 | 真实 R2 | GET/Range GET、响应头、签名请求和故障行为单独记录 PASS_REAL；Mock 不替代真实验收 |
 
 ## 11. 实施阶段
 
