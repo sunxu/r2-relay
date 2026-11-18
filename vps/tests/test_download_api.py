@@ -530,7 +530,7 @@ async def test_upstream_exception_manifest_does_not_expose_signed_url(tmp_path):
     manifest = manager.manifest(task)
     assert manifest["status"] == "FAILED"
     assert secret not in str(manifest)
-    assert manifest["error"]["message"] == "R2 下载失败；详细信息仅保留在受控服务端日志中"
+    assert manifest["error"]["message"] == "R2 下载失败；底层异常详情未向客户端公开"
     await manager.close()
 
 
@@ -552,3 +552,29 @@ async def test_download_directory_is_exclusive_to_one_worker(tmp_path):
         download_settings=settings(), download_root=root,
     )
     await second.state.downloads.close()
+
+
+
+@pytest.mark.asyncio
+async def test_signed_host_must_match_r2_url_host(tmp_path):
+    app = create_app(
+        CacheStore(tmp_path / "upload"), token="test",
+        download_settings=settings(), download_root=tmp_path / "downloads",
+    )
+    auth = {"Authorization": "Bearer test"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/v1/downloads",
+            headers=auth,
+            json={
+                "schema_version": 1,
+                "request_id": "host-mismatch",
+                "url": R2_URL,
+                "headers": [["Host", "attacker.example"]],
+            },
+        )
+        assert response.status_code == 400
+        assert "Host" in response.json()["detail"]
+    await app.state.downloads.close()
