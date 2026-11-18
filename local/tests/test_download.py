@@ -9,7 +9,7 @@ from mitmproxy import http
 from r2relay_local.addon import R2RelayAddon
 from r2relay_local.config import Settings
 from r2relay_local.disk_response import DiskResponseServer
-from r2relay_local.download import DownloadCoordinator, DownloadResult
+from r2relay_local.download import DownloadCapacityError, DownloadCoordinator, DownloadResult
 from r2relay_local.relay import RelayClient, is_r2_get
 from r2relay_vps.app import create_app
 from r2relay_vps.cache import CacheStore
@@ -347,7 +347,7 @@ async def test_mac_download_fails_closed_when_large_object_exceeds_temp_budget(t
         local_settings(tmp_path, download_max_temp_bytes=24 * MIB),
     )
     try:
-        with pytest.raises(Exception, match="超过 Mac 临时磁盘预算"):
+        with pytest.raises(DownloadCapacityError, match="超过 Mac 临时磁盘预算"):
             await coordinator.download(R2_URL, [])
         assert not app.state.downloads.tasks
         assert not list(coordinator.root.glob("r2-download-*.bin"))
