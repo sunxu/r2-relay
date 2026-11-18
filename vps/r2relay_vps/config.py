@@ -19,6 +19,7 @@ class DownloadSettings:
     max_cache_bytes: int
     min_free_bytes: int
     max_active_tasks: int
+    max_retained_tasks: int
     max_waiters: int
     wait_timeout_seconds: int
 
@@ -58,6 +59,7 @@ def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
         "max_cache_bytes": (0, 2**63 - 1),
         "min_free_bytes": (0, 2**63 - 1),
         "max_active_tasks": (0, 4096),
+        "max_retained_tasks": (0, 65536),
         "max_waiters": (0, 65536),
         "wait_timeout_seconds": (1, 300),
     }
@@ -71,7 +73,7 @@ def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
     if threshold < part_size:
         raise ValueError("download.split_threshold_mib cannot be smaller than part_size_mib")
     if enabled:
-        for key in ("max_cache_bytes", "min_free_bytes", "max_active_tasks", "max_waiters"):
+        for key in ("max_cache_bytes", "min_free_bytes", "max_active_tasks", "max_retained_tasks", "max_waiters"):
             if section[key] <= 0:
                 raise ValueError(f"download.{key} must be positive when download.enabled=true")
 
@@ -83,6 +85,7 @@ def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
         max_cache_bytes=section["max_cache_bytes"],
         min_free_bytes=section["min_free_bytes"],
         max_active_tasks=section["max_active_tasks"],
+        max_retained_tasks=section["max_retained_tasks"],
         max_waiters=section["max_waiters"],
         wait_timeout_seconds=section["wait_timeout_seconds"],
     )
