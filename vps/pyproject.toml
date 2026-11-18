@@ -15,6 +15,9 @@ test = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2"]
 where = ["."]
 include = ["r2relay_vps*"]
 
+[tool.setuptools.package-data]
+r2relay_vps = ["defaults.toml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
