@@ -1,8 +1,8 @@
 # R2 Download Relay v1 技术需求与验收标准
 
-- 需求编号：RLY-020～020
+- 需求编号：RLY-020～RLY-039
 - 跟踪任务：[Issue #63](https://github.com/sunxu/r2-relay/issues/63)
-- 状态：Owner 已确认设计基线；尚未实现、尚未部署 VPS。
+- 状态：仓库负责人已确认设计基线；Stage 0 PoC 已通过；下载业务尚未实现、尚未部署 VPS。
 - 原则：下载是独立能力，不改变现有 UploadPart PUT 上传行为。
 
 ## 1. 目标
@@ -11,7 +11,7 @@
 
 只在 VPS → Mac 并发。R2 → VPS 只发起一次 GET，不做 R2 Range 并发。每个原始 GET 创建独立任务；v1 不做跨请求任务合并或对象去重。
 
-## 2. Owner 已确认参数和配置
+## 2. 仓库负责人已确认的参数和配置
 
 | 参数 | 值 | 配置位置 | 使用方 |
 |---|---:|---|---|
@@ -72,9 +72,9 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 
 ## 9. Gate 0：mitmproxy 磁盘响应 PoC（实现前置门槛）
 
-当前 addon 使用完整 bytes 构造响应，不适合 GiB 文件。完整实现前必须验证：从 Mac 磁盘向客户端发送 1 GiB；不将完整文件读入 Python 内存；HTTP/1.1 和 HTTP/2 均通过；Content-Length/Content-Encoding/响应头正确；客户端中途断开可停止发送并清理文件。
+当前 addon 使用完整 bytes 构造响应，不适合 GiB 文件。已完成的 Gate 0 PoC 验证：从 Mac 本地磁盘经 Loopback 文件服务向原始客户端发送 1 GiB；在现有 regular HTTP proxy + CONNECT 模式下使用 HTTP/1.1；验证 Content-Length、完整字节数、客户端中途断开传播，以及 mitmdump RSS 增量。当前 CI 实测 RSS 增量为 0.3 MiB，低于 128 MiB 上限。
 
-若 Loopback 文件响应服务不能可靠满足 HTTP/1.1、HTTP/2、取消和清理要求，再评估其他可验证方案；不得未经验证就认定 response stream 能直接充当任意磁盘文件响应源。Gate 0 不部署 VPS、不改变生产服务。
+现有 regular CONNECT 路径的客户端侧协议验收限定为 HTTP/1.1；Mac RelayClient → VPS 的 HTTP/2 是独立链路，必须在后续下载全栈测试中单独验证，不能把客户端 CONNECT 的 HTTP/1.1 结果解释为 HTTP/2 已通过。Loopback 文件响应服务 PoC 已通过 Gate 0；不得据此认定完整下载中继已经实现。Gate 0 不部署 VPS、不改变生产服务。
 
 ## 10. 验收矩阵
 
@@ -100,15 +100,15 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 | DL-T18 | TTL | 正常完成主动删除；600 秒空闲过期；活动读写不被删除 |
 | DL-T19 | 幂等 | 创建重试不重复执行；删除重试安全 |
 | DL-T20 | 资源 | VPS 磁盘/任务/等待者和 Mac 内存/临时空间均有界 |
-| DL-T21 | mitmproxy PoC | 1 GiB 磁盘响应在 HTTP/1.1/2 通过，内存不随文件大小线性增长 |
+| DL-T21 | mitmproxy PoC | 1 GiB 磁盘响应在 regular CONNECT HTTP/1.1 下通过；客户端断开可传递到文件服务；mitmdump RSS 增量低于 128 MiB。RelayClient → VPS HTTP/2 在后续下载全栈测试中单独验收 |
 | DL-T22 | 上传回归 | 既有 UploadPart 测试、默认配置和行为不变 |
-| DL-T23 | 全栈模拟 | aiohttp → mitmproxy → VPS HTTPS → Mock R2 覆盖小/大响应、失败和清理 |
+| DL-T23 | 全栈模拟 | aiohttp → mitmproxy → VPS HTTPS → Mock R2 覆盖小/大响应、失败和清理；Mac RelayClient → VPS HTTP/2 单独验证 |
 | DL-T24 | 目标范围 | R2 HTTPS 443 域名命中接管；非目标域名/端口 GET 正常透传 |
 | DL-T25 | 真实 R2 | GET/Range GET、响应头、签名请求和故障行为单独记录 PASS_REAL；Mock 不替代真实验收 |
 
 ## 11. 实施阶段
 
-1. Stage 0：mitmproxy 磁盘响应 PoC，先过 T42。
+1. Stage 0：mitmproxy 磁盘响应 PoC，已通过 DL-T21（对应仓库总验收 T31）。
 2. Stage 1：VPS 任务状态、单 GET、流式 Part、manifest、等待式 Part API、TTL 和磁盘保护。
 3. Stage 2：Mac GET 接管、TOML、16/32 调度、小响应内存和大响应磁盘组装。
 4. Stage 3：HTTP 语义、失败恢复、删除、Mock R2 全栈和上传回归。

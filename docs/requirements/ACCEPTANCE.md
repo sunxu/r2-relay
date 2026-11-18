@@ -58,8 +58,8 @@
 | T28 | RLY-034/016 | 真实状态、端到端头、Range 和编码语义保留，hop-by-hop 头过滤。 |
 | T29 | RLY-036/018 | 上游失败不发布半成品；正常完成主动删除；600 秒空闲 TTL 兜底；活动读写不被清理。 |
 | T30 | RLY-038 | VPS 磁盘与任务准入、本地内存预算和等待者数量有界。 |
-| T31 | Gate 0 / T42 | 1 GiB 本地磁盘响应在 HTTP/1.1、HTTP/2 下不整体进入 Python 内存。 |
+| T31 | Gate 0 / DL-T21 | 1 GiB 本地磁盘响应在 regular CONNECT HTTP/1.1 下不整体进入 Python 内存；客户端断开可传递到 Loopback 文件服务；mitmdump RSS 增量低于 128 MiB。RelayClient → VPS HTTP/2 在后续下载全栈测试中单独验收。 |
 | T32 | RLY-039 | 现有上传路径、默认配置和既有测试全部回归通过。 |
 | T33 | R2 real acceptance | 真实 R2 GET/Range GET 与故障场景 PASS_REAL；Mock 只能标记 PASS_SIMULATED。 |
 
-详细测试矩阵见 [R2_DOWNLOAD_RELAY_V1_CN.md](R2_DOWNLOAD_RELAY_V1_CN.md)。
+详细测试矩阵见 [R2_DOWNLOAD_RELAY_V1_CN.md](R2_DOWNLOAD_RELAY_V1_CN.md)。Gate 0 的 1 GiB PoC 已通过；该结果不代表下载业务实现或真实 R2 验收通过。
