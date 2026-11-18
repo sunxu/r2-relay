@@ -84,6 +84,8 @@ class R2RelayAddon:
                 req.headers["Host"] = f"127.0.0.1:{self.disk_responses.port}"
                 req.headers["Connection"] = "close"
             except asyncio.CancelledError:
+                if result is not None and result.cleanup is not None:
+                    await result.cleanup()
                 raise
             except Exception as exc:
                 if result is not None and result.cleanup is not None:
