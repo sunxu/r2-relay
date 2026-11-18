@@ -1,0 +1,521 @@
+"""独立的 R2 GET 下载任务、磁盘分片与原子发布实现。"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import os
+import secrets
+import shutil
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import AsyncIterator
+from urllib.parse import urlsplit
+
+import httpx
+
+from .config import DownloadSettings
+
+HOP_HEADERS = {
+    "connection", "keep-alive", "proxy-connection", "transfer-encoding",
+    "te", "trailer", "upgrade", "proxy-authenticate", "proxy-authorization",
+}
+
+
+class DownloadError(Exception):
+    status_code = 502
+
+
+class DownloadDisabled(DownloadError):
+    status_code = 503
+
+
+class DownloadCapacity(DownloadError):
+    status_code = 503
+
+
+class DownloadNotFound(DownloadError):
+    status_code = 404
+
+
+class DownloadConflict(DownloadError):
+    status_code = 409
+
+
+class DownloadWaitTimeout(DownloadError):
+    status_code = 504
+
+
+class DownloadFailed(DownloadError):
+    status_code = 502
+
+
+def validate_r2_get_url(url: str) -> None:
+    try:
+        parts = urlsplit(url)
+        valid_port = parts.port in (None, 443)
+    except ValueError as exc:
+        raise ValueError("R2 GET URL 端口无效") from exc
+    host = parts.hostname or ""
+    if (
+        parts.scheme != "https"
+        or not valid_port
+        or not host.endswith(".r2.cloudflarestorage.com")
+        or host == ".r2.cloudflarestorage.com"
+        or parts.username is not None
+        or parts.password is not None
+    ):
+        raise ValueError("仅允许 HTTPS 443 的 Cloudflare R2 S3 endpoint")
+
+
+def filter_hop_headers(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    nominated = set()
+    for key, value in headers:
+        if key.lower() == "connection":
+            nominated.update(part.strip().lower() for part in value.split(",") if part.strip())
+    blocked = HOP_HEADERS | nominated
+    return [(key, value) for key, value in headers if key.lower() not in blocked]
+
+
+async def _raw_chunks(response: httpx.Response) -> AsyncIterator[bytes]:
+    if response.is_stream_consumed:
+        if response.content:
+            yield response.content
+        return
+    async for chunk in response.aiter_raw():
+        if chunk:
+            yield chunk
+
+
+@dataclass
+class DownloadTask:
+    task_id: str
+    request_id: str
+    fingerprint: str
+    url: str
+    request_headers: list[tuple[str, str]]
+    directory: Path
+    created_at: float
+    last_access: float
+    status: str = "QUEUED"
+    mode: str | None = None
+    status_code: int | None = None
+    response_headers: list[tuple[str, str]] = field(default_factory=list)
+    expected_size: int | None = None
+    total_size: int = 0
+    stored_bytes: int = 0
+    parts: list[dict] = field(default_factory=list)
+    error: dict | None = None
+    expires_at: float | None = None
+    writer_active: bool = False
+    active_readers: int = 0
+    waiters: int = 0
+    delete_requested: bool = False
+    worker: asyncio.Task | None = None
+    condition: asyncio.Condition = field(default_factory=asyncio.Condition)
+
+
+class PartWriter:
+    """将连续字节流写成完整 Part；只有 fsync + 原子改名后才发布 READY。"""
+
+    def __init__(self, manager: "DownloadManager", task: DownloadTask):
+        self.manager = manager
+        self.task = task
+        self.number = 1
+        self.size = 0
+        self.digest = hashlib.sha256()
+        self.file = None
+        self.tmp_path: Path | None = None
+
+    async def _open(self) -> None:
+        if self.file is None:
+            self.tmp_path = self.task.directory / f"{self.number}.part.tmp"
+            self.file = self.tmp_path.open("xb")
+
+    async def write(self, data: bytes, *, reserve: bool = True) -> None:
+        offset = 0
+        while offset < len(data):
+            await self._open()
+            take = min(
+                len(data) - offset,
+                self.manager.settings.part_size_bytes - self.size,
+            )
+            piece = data[offset:offset + take]
+            if reserve:
+                await self.manager.reserve(self.task, len(piece))
+            else:
+                self.manager.check_disk_reserve(len(piece))
+            await asyncio.to_thread(self.file.write, piece)
+            self.digest.update(piece)
+            self.size += len(piece)
+            self.task.total_size += len(piece)
+            offset += len(piece)
+            if self.size == self.manager.settings.part_size_bytes:
+                await self._publish()
+
+    async def _publish(self) -> None:
+        if self.file is None or self.tmp_path is None or self.size == 0:
+            return
+        await asyncio.to_thread(self.file.flush)
+        await asyncio.to_thread(os.fsync, self.file.fileno())
+        self.file.close()
+        final_path = self.task.directory / f"{self.number}.part"
+        os.replace(self.tmp_path, final_path)
+        directory_fd = os.open(self.task.directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        self.task.parts.append({
+            "part_number": self.number,
+            "size": self.size,
+            "sha256": self.digest.hexdigest(),
+            "status": "READY",
+        })
+        self.number += 1
+        self.size = 0
+        self.digest = hashlib.sha256()
+        self.file = None
+        self.tmp_path = None
+        async with self.task.condition:
+            self.task.condition.notify_all()
+
+    async def finish(self) -> None:
+        if self.file is not None:
+            await self._publish()
+
+    async def abort(self) -> None:
+        if self.file is not None:
+            self.file.close()
+            self.file = None
+        if self.tmp_path is not None:
+            self.tmp_path.unlink(missing_ok=True)
+            self.tmp_path = None
+
+
+class DownloadManager:
+    def __init__(
+        self,
+        root: Path,
+        settings: DownloadSettings,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+        clock=time.time,
+    ):
+        self.root = Path(root)
+        self.settings = settings
+        self.transport = transport
+        self.clock = clock
+        self.tasks: dict[str, DownloadTask] = {}
+        self.request_index: dict[str, str] = {}
+        self.used_bytes = 0
+        self.waiter_count = 0
+        self.lock = asyncio.Lock()
+        if settings.enabled:
+            self.root.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def _fingerprint(url: str, headers: list[tuple[str, str]]) -> str:
+        raw = json.dumps([url, headers], ensure_ascii=False, separators=(",", ":")).encode()
+        return hashlib.sha256(raw).hexdigest()
+
+    async def create(self, request_id: str, url: str, headers: list[tuple[str, str]]) -> DownloadTask:
+        if not self.settings.enabled:
+            raise DownloadDisabled("VPS 下载中继尚未启用；需先配置磁盘预算和任务上限")
+        validate_r2_get_url(url)
+        if not request_id or len(request_id) > 128:
+            raise ValueError("request_id 必须为 1～128 个字符")
+        headers = filter_hop_headers(headers)
+        fingerprint = self._fingerprint(url, headers)
+        async with self.lock:
+            existing_id = self.request_index.get(request_id)
+            if existing_id:
+                existing = self.tasks.get(existing_id)
+                if existing is not None:
+                    if existing.fingerprint != fingerprint:
+                        raise DownloadConflict("request_id 已用于不同的 URL 或请求头")
+                    return existing
+            active = sum(1 for item in self.tasks.values()
+                         if item.status in {"QUEUED", "RECEIVING"})
+            if active >= self.settings.max_active_tasks:
+                raise DownloadCapacity("VPS 下载活动任务数已达上限")
+            task_id = secrets.token_urlsafe(24)
+            directory = self.root / task_id
+            directory.mkdir(mode=0o700)
+            now = self.clock()
+            task = DownloadTask(
+                task_id=task_id, request_id=request_id, fingerprint=fingerprint,
+                url=url, request_headers=headers, directory=directory,
+                created_at=now, last_access=now,
+            )
+            self.tasks[task_id] = task
+            self.request_index[request_id] = task_id
+            task.worker = asyncio.create_task(self._run(task))
+            return task
+
+    def check_disk_reserve(self, incoming: int) -> None:
+        free = shutil.disk_usage(self.root).free
+        if free - incoming < self.settings.min_free_bytes:
+            raise OSError("下载缓存磁盘空间低于配置的剩余空间保护值")
+
+    async def reserve(self, task: DownloadTask, amount: int) -> None:
+        async with self.lock:
+            if self.used_bytes + amount > self.settings.max_cache_bytes:
+                raise OSError("下载缓存达到配置的磁盘预算上限")
+            self.check_disk_reserve(amount)
+            self.used_bytes += amount
+            task.stored_bytes += amount
+
+    async def _run(self, task: DownloadTask) -> None:
+        task.writer_active = True
+        task.status = "RECEIVING"
+        async with task.condition:
+            task.condition.notify_all()
+        writer: PartWriter | None = None
+        body_file = None
+        body_tmp = task.directory / "body.tmp"
+        try:
+            timeout = httpx.Timeout(120.0, connect=15.0, read=120.0, write=30.0)
+            async with httpx.AsyncClient(
+                transport=self.transport, follow_redirects=False,
+                timeout=timeout, trust_env=False,
+            ) as client:
+                async with client.stream(
+                    "GET", task.url, headers=task.request_headers
+                ) as response:
+                    task.status_code = response.status_code
+                    task.response_headers = filter_hop_headers(list(response.headers.multi_items()))
+                    raw_length = response.headers.get("content-length")
+                    if raw_length is not None:
+                        try:
+                            task.expected_size = int(raw_length)
+                            if task.expected_size < 0:
+                                raise ValueError
+                        except ValueError:
+                            raise ValueError("R2 返回了无效的 Content-Length")
+
+                    bodyless = response.status_code in (204, 304) or 100 <= response.status_code < 200
+                    known_large = (
+                        not bodyless
+                        and task.expected_size is not None
+                        and task.expected_size > self.settings.split_threshold_bytes
+                    )
+                    if known_large:
+                        task.mode = "parts"
+                        writer = PartWriter(self, task)
+                    else:
+                        task.mode = "small"
+                        body_file = body_tmp.open("xb")
+
+                    if not bodyless:
+                        async for chunk in _raw_chunks(response):
+                            if not chunk:
+                                continue
+                            if writer is not None:
+                                await writer.write(chunk)
+                                continue
+
+                            if task.total_size + len(chunk) <= self.settings.split_threshold_bytes:
+                                await self.reserve(task, len(chunk))
+                                await asyncio.to_thread(body_file.write, chunk)
+                                task.total_size += len(chunk)
+                                continue
+
+                            # 未知长度或错误声明长度的响应越过阈值：
+                            # 将有界 spool 前缀转入 Part writer，再继续消费上游流。
+                            body_file.flush()
+                            body_file.close()
+                            body_file = None
+                            task.mode = "parts"
+                            writer = PartWriter(self, task)
+                            with body_tmp.open("rb") as prefix:
+                                while True:
+                                    prefix_chunk = await asyncio.to_thread(
+                                        prefix.read, 1024 * 1024
+                                    )
+                                    if not prefix_chunk:
+                                        break
+                                    await writer.write(prefix_chunk, reserve=False)
+                            body_tmp.unlink(missing_ok=True)
+                            await writer.write(chunk)
+
+                    if writer is not None:
+                        await writer.finish()
+                    elif body_file is not None:
+                        await asyncio.to_thread(body_file.flush)
+                        await asyncio.to_thread(os.fsync, body_file.fileno())
+                        body_file.close()
+                        body_file = None
+                        os.replace(body_tmp, task.directory / "body.bin")
+
+                    if (
+                        not bodyless
+                        and task.expected_size is not None
+                        and task.expected_size != task.total_size
+                    ):
+                        raise ValueError(
+                            f"R2 响应长度不匹配：声明 {task.expected_size}，实际 {task.total_size}"
+                        )
+
+            task.status = "COMPLETE"
+            task.last_access = self.clock()
+            task.expires_at = task.last_access + self.settings.cache_ttl_seconds
+        except asyncio.CancelledError:
+            task.status = "CANCELLED"
+            task.error = {"type": "Cancelled", "message": "下载任务已取消"}
+            raise
+        except Exception as exc:
+            task.status = "FAILED"
+            task.error = {"type": type(exc).__name__, "message": str(exc)}
+            task.expires_at = self.clock()
+        finally:
+            if body_file is not None:
+                body_file.close()
+            if writer is not None and writer.file is not None:
+                await writer.abort()
+            task.writer_active = False
+            async with task.condition:
+                task.condition.notify_all()
+            if task.delete_requested or task.status in {"FAILED", "CANCELLED"}:
+                await self._remove_files(task)
+
+    def manifest(self, task: DownloadTask) -> dict:
+        return {
+            "task_id": task.task_id,
+            "request_id": task.request_id,
+            "status": task.status,
+            "mode": task.mode,
+            "status_code": task.status_code,
+            "headers": [[key, value] for key, value in task.response_headers],
+            "total_size": task.total_size,
+            "expected_size": task.expected_size,
+            "part_size_bytes": self.settings.part_size_bytes,
+            "part_count": len(task.parts),
+            "parts": [dict(part) for part in task.parts],
+            "error": task.error,
+            "expires_at": task.expires_at,
+        }
+
+    def get(self, task_id: str) -> DownloadTask:
+        task = self.tasks.get(task_id)
+        if task is None:
+            raise DownloadNotFound("下载任务不存在或已过期")
+        return task
+
+    async def _wait(self, task: DownloadTask, predicate, *, part_number: int | None = None) -> None:
+        async with task.condition:
+            if predicate():
+                return
+            if self.waiter_count >= self.settings.max_waiters:
+                raise DownloadCapacity("VPS Part 等待连接数已达上限")
+            self.waiter_count += 1
+            task.waiters += 1
+            try:
+                await asyncio.wait_for(
+                    task.condition.wait_for(predicate),
+                    timeout=self.settings.wait_timeout_seconds,
+                )
+            except asyncio.TimeoutError as exc:
+                raise DownloadWaitTimeout("等待 Part 就绪超时") from exc
+            finally:
+                self.waiter_count -= 1
+                task.waiters -= 1
+        if task.status in {"FAILED", "CANCELLED"}:
+            raise DownloadFailed("R2 上游下载失败或已取消")
+
+    async def acquire_part(self, task_id: str, part_number: int) -> tuple[DownloadTask, Path, dict]:
+        task = self.get(task_id)
+        if part_number < 1:
+            raise DownloadNotFound("Part 编号必须从 1 开始")
+
+        def ready() -> bool:
+            return any(p["part_number"] == part_number and p["status"] == "READY"
+                       for p in task.parts) or task.status in {"COMPLETE", "FAILED", "CANCELLED"}
+
+        await self._wait(task, ready, part_number=part_number)
+        part = next((p for p in task.parts if p["part_number"] == part_number), None)
+        if part is None or task.status in {"FAILED", "CANCELLED"}:
+            raise DownloadFailed("请求的 Part 不可用")
+        task.active_readers += 1
+        task.last_access = self.clock()
+        return task, task.directory / f"{part_number}.part", dict(part)
+
+    async def acquire_body(self, task_id: str) -> tuple[DownloadTask, Path]:
+        task = self.get(task_id)
+        await self._wait(task, lambda: task.status in {"COMPLETE", "FAILED", "CANCELLED"})
+        if task.status != "COMPLETE":
+            raise DownloadFailed("R2 上游下载失败或已取消")
+        if task.mode != "small":
+            raise DownloadConflict("该任务为分片响应，请按 Part 编号取回")
+        task.active_readers += 1
+        task.last_access = self.clock()
+        return task, task.directory / "body.bin"
+
+    async def reader_finished(self, task: DownloadTask) -> None:
+        task.active_readers = max(0, task.active_readers - 1)
+        task.last_access = self.clock()
+        if task.delete_requested and not task.writer_active and task.active_readers == 0:
+            await self._remove_files(task)
+
+    async def stream_file(self, task: DownloadTask, path: Path) -> AsyncIterator[bytes]:
+        try:
+            with path.open("rb") as stream:
+                while True:
+                    chunk = await asyncio.to_thread(stream.read, 1024 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            await self.reader_finished(task)
+
+    async def _remove_files(self, task: DownloadTask) -> None:
+        if task.writer_active or task.active_readers:
+            return
+        async with self.lock:
+            if task.writer_active or task.active_readers:
+                return
+            shutil.rmtree(task.directory, ignore_errors=True)
+            self.used_bytes = max(0, self.used_bytes - task.stored_bytes)
+            task.stored_bytes = 0
+            task.parts.clear()
+
+    async def delete(self, task_id: str) -> None:
+        task = self.get(task_id)
+        task.delete_requested = True
+        if task.worker is not None and not task.worker.done():
+            task.worker.cancel()
+            await asyncio.gather(task.worker, return_exceptions=True)
+        if not task.writer_active and task.active_readers == 0:
+            await self._remove_files(task)
+        self.tasks.pop(task_id, None)
+        self.request_index.pop(task.request_id, None)
+
+    async def cleanup(self) -> int:
+        now = self.clock()
+        expired = [
+            task for task in tuple(self.tasks.values())
+            if task.expires_at is not None
+            and now >= task.expires_at
+            and not task.writer_active
+            and task.active_readers == 0
+            and task.waiters == 0
+        ]
+        for task in expired:
+            await self._remove_files(task)
+            self.tasks.pop(task.task_id, None)
+            self.request_index.pop(task.request_id, None)
+        return len(expired)
+
+    def metrics(self) -> dict:
+        return {
+            "enabled": self.settings.enabled,
+            "task_count": len(self.tasks),
+            "active_task_count": sum(
+                task.status in {"QUEUED", "RECEIVING"} for task in self.tasks.values()
+            ),
+            "ready_part_count": sum(len(task.parts) for task in self.tasks.values()),
+            "cached_bytes": self.used_bytes,
+            "active_readers": sum(task.active_readers for task in self.tasks.values()),
+            "waiters": self.waiter_count,
+        }
