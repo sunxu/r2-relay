@@ -112,7 +112,7 @@ async def test_small_r2_error_body_and_end_to_end_headers_are_preserved(tmp_path
         assert manifest["status"] == "COMPLETE"
         assert manifest["mode"] == "small"
         assert manifest["status_code"] == 403
-        assert ["ETag", '"r2-error"'] in manifest["headers"]
+        assert ["etag", '"r2-error"'] in manifest["headers"]
         assert not any(k.lower() == "x-private-hop" for k, _ in manifest["headers"])
         assert sum(k.lower() == "set-cookie" for k, _ in manifest["headers"]) == 2
         result = await client.get(
