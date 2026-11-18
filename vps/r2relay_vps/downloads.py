@@ -53,7 +53,7 @@ class DownloadFailed(DownloadError):
     status_code = 502
 
 
-def validate_r2_get_url(url: str) -> None:
+def validate_r2_get_url(url: str, headers: list[tuple[str, str]] | None = None) -> None:
     try:
         parts = urlsplit(url)
         valid_port = parts.port in (None, 443)
@@ -69,6 +69,9 @@ def validate_r2_get_url(url: str) -> None:
         or parts.password is not None
     ):
         raise ValueError("仅允许 HTTPS 443 的 Cloudflare R2 S3 endpoint")
+    signed_hosts = [value for key, value in (headers or []) if key.lower() == "host"]
+    if any(value.lower() != host.lower() for value in signed_hosts):
+        raise ValueError("R2 GET 请求中的 Host 必须与 URL 主机名一致")
 
 
 def filter_hop_headers(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -275,10 +278,14 @@ class DownloadManager:
     async def create(self, request_id: str, url: str, headers: list[tuple[str, str]]) -> DownloadTask:
         if not self.settings.enabled:
             raise DownloadDisabled("VPS 下载中继尚未启用；需先配置磁盘预算和任务上限")
-        validate_r2_get_url(url)
         if not request_id or len(request_id) > 128:
             raise ValueError("request_id 必须为 1～128 个字符")
+        if len(url) > 16384:
+            raise ValueError("R2 GET URL 长度超过 16 KiB")
+        if len(headers) > 128 or sum(len(k) + len(v) for k, v in headers) > 65536:
+            raise ValueError("R2 GET 请求头数量或总长度超过限制")
         headers = filter_hop_headers(headers)
+        validate_r2_get_url(url, headers)
         fingerprint = self._fingerprint(url, headers)
         async with self.lock:
             existing_id = self.request_index.get(request_id)
@@ -425,7 +432,7 @@ class DownloadManager:
             # HTTP client exception strings may include a signed URL.
             task.error = {
                 "type": type(exc).__name__,
-                "message": "R2 下载失败；详细信息仅保留在受控服务端日志中",
+                "message": "R2 下载失败；底层异常详情未向客户端公开",
             }
             task.expires_at = self.clock()
         finally:
