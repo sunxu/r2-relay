@@ -6,7 +6,6 @@ import shutil
 import socket
 import ssl
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -44,7 +43,7 @@ def rss_bytes(pid: int) -> int:
     return 0
 
 
-async def serve_file(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, path: Path) -> None:
+async def serve_file(\n    reader: asyncio.StreamReader,\n    writer: asyncio.StreamWriter,\n    path: Path,\n    disconnected: asyncio.Event | None = None,\n) -> None:
     try:
         await reader.readuntil(b"\r\n\r\n")
         size = path.stat().st_size
@@ -63,7 +62,8 @@ async def serve_file(reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                 writer.write(chunk)
                 await writer.drain()
     except (BrokenPipeError, ConnectionResetError, asyncio.IncompleteReadError):
-        pass
+        if disconnected is not None:
+            disconnected.set()
     finally:
         writer.close()
         try:
@@ -102,8 +102,9 @@ async def test_disk_backed_response_streams_through_mitmproxy_http11(tmp_path: P
 
     origin_port = free_port()
     proxy_port = free_port()
+    disconnected = asyncio.Event()
     origin = await asyncio.start_server(
-        lambda reader, writer: serve_file(reader, writer, source_file),
+        lambda reader, writer: serve_file(reader, writer, source_file, disconnected),
         "127.0.0.1",
         origin_port,
     )
@@ -162,11 +163,20 @@ async def test_disk_backed_response_streams_through_mitmproxy_http11(tmp_path: P
                         assert not any(chunk), "sparse source file should contain only zero bytes"
                         received += len(chunk)
                     assert received == expected_size
+
+                # A second request is intentionally abandoned after its first body chunk.
+                async with client.stream("GET", "https://r2-poc.example/file") as response:
+                    assert response.status_code == 200
+                    async for chunk in response.aiter_raw():
+                        assert chunk
+                        break
+                await asyncio.wait_for(disconnected.wait(), timeout=15)
         finally:
             stop_monitor.set()
             await monitor
 
         peak_delta_mib = max(0, peak_rss - baseline_rss) / MIB
+        print(f"disk response PoC: size_mib={size_mib}, http=1.1, mitmdump_rss_delta_mib={peak_delta_mib:.1f}")
         assert peak_delta_mib < 128, (
             f"mitmdump RSS grew by {peak_delta_mib:.1f} MiB while relaying "
             f"{size_mib} MiB; baseline={baseline_rss / MIB:.1f} MiB, "
