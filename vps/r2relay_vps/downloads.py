@@ -587,12 +587,40 @@ class DownloadManager:
         return removed
 
     async def close(self) -> None:
-        if self._process_lock is not None:
-            try:
-                fcntl.flock(self._process_lock.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._process_lock.close()
-                self._process_lock = None
+        # Stop every upstream writer before releasing the exclusive directory
+        # lock; otherwise a second worker could erase files still being written.
+        async with self.lock:
+            tasks = tuple(self.tasks.values())
+            for task in tasks:
+                task.delete_requested = True
+            workers = [task.worker for task in tasks
+                       if task.worker is not None and not task.worker.done()]
+        for worker in workers:
+            worker.cancel()
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+
+        # The ASGI server should drain active responses before lifespan shutdown.
+        # Keep the process lock held if a reader fails to close in time.
+        deadline = asyncio.get_running_loop().time() + 30.0
+        while any(task.active_readers for task in tasks):
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(
+                    "VPS 下载仍有活动文件读取；为避免跨进程删除，保留独占目录锁"
+                )
+            await asyncio.sleep(0.05)
+
+        async with self.lock:
+            for task in tasks:
+                self._remove_files_locked(task)
+                self.tasks.pop(task.task_id, None)
+                self.request_index.pop(task.request_id, None)
+            if self._process_lock is not None:
+                try:
+                    fcntl.flock(self._process_lock.fileno(), fcntl.LOCK_UN)
+                finally:
+                    self._process_lock.close()
+                    self._process_lock = None
 
     def metrics(self) -> dict:
         return {
