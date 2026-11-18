@@ -146,50 +146,48 @@ class DownloadCoordinator:
         offset = (number - 1) * part_size_bytes
         if number < 1 or size <= 0 or size > part_size_bytes:
             raise DownloadRelayError("VPS manifest 中的 Part 尺寸无效")
-
         if shutil.disk_usage(self.root).free < size:
             raise DownloadCapacityError("Mac 临时磁盘可用空间不足")
+
         last_error: Exception | None = None
-            for attempt in range(3):
-                digest = hashlib.sha256()
-                received = 0
-                try:
-                    async with self.global_semaphore, per_file_semaphore:
-                        async with self.relay.download_part_stream(task_id, number) as response:
-                            if response.status_code != 200:
-                                raise DownloadRelayError(
-                                    f"VPS Part API 返回 HTTP {response.status_code}"
-                                )
-                            raw_size = response.headers.get("content-length")
-                            if raw_size is not None and int(raw_size) != size:
-                                raise DownloadRelayError("Part HTTP Content-Length 与 manifest 不一致")
-                            if response.headers.get("x-part-sha256") != expected_hash:
-                                raise DownloadRelayError("Part HTTP SHA-256 与 manifest 不一致")
-                            if response.headers.get("x-part-number") != str(number):
-                                raise DownloadRelayError("VPS 返回了错误的 Part 编号")
-                            async for chunk in response.aiter_raw():
-                                if not chunk:
-                                    continue
-                                if received + len(chunk) > size:
-                                    raise DownloadRelayError("Part 响应超过 manifest 声明长度")
-                                await asyncio.to_thread(os.pwrite, fd, chunk, offset + received)
-                                digest.update(chunk)
-                                received += len(chunk)
-                    if received != size:
-                        raise DownloadRelayError("Part 响应未完整传输")
-                    if digest.hexdigest() != expected_hash:
-                        raise DownloadRelayError("Part SHA-256 校验失败")
-                    held_parts[number] = size
-                    return
-                except (httpx.TransportError, httpx.TimeoutException, DownloadRelayError, ValueError) as exc:
-                    last_error = exc
-                    if attempt < 2:
-                        await asyncio.sleep((0.15, 0.5)[attempt])
-            raise DownloadRelayError(
-                f"Part {number} 在 3 次尝试后仍未成功：{type(last_error).__name__ if last_error else 'Unknown'}"
-            )
-        finally:
-            pass
+        for attempt in range(3):
+            digest = hashlib.sha256()
+            received = 0
+            try:
+                async with self.global_semaphore, per_file_semaphore:
+                    async with self.relay.download_part_stream(task_id, number) as response:
+                        if response.status_code != 200:
+                            raise DownloadRelayError(
+                                f"VPS Part API 返回 HTTP {response.status_code}"
+                            )
+                        raw_size = response.headers.get("content-length")
+                        if raw_size is not None and int(raw_size) != size:
+                            raise DownloadRelayError("Part HTTP Content-Length 与 manifest 不一致")
+                        if response.headers.get("x-part-sha256") != expected_hash:
+                            raise DownloadRelayError("Part HTTP SHA-256 与 manifest 不一致")
+                        if response.headers.get("x-part-number") != str(number):
+                            raise DownloadRelayError("VPS 返回了错误的 Part 编号")
+                        async for chunk in response.aiter_raw():
+                            if not chunk:
+                                continue
+                            if received + len(chunk) > size:
+                                raise DownloadRelayError("Part 响应超过 manifest 声明长度")
+                            await asyncio.to_thread(os.pwrite, fd, chunk, offset + received)
+                            digest.update(chunk)
+                            received += len(chunk)
+                if received != size:
+                    raise DownloadRelayError("Part 响应未完整传输")
+                if digest.hexdigest() != expected_hash:
+                    raise DownloadRelayError("Part SHA-256 校验失败")
+                held_parts[number] = size
+                return
+            except (httpx.TransportError, httpx.TimeoutException, DownloadRelayError, ValueError) as exc:
+                last_error = exc
+                if attempt < 2:
+                    await asyncio.sleep((0.15, 0.5)[attempt])
+        raise DownloadRelayError(
+            f"Part {number} 在 3 次尝试后仍未成功：{type(last_error).__name__ if last_error else 'Unknown'}"
+        )
 
     async def _download_large(self, task_id: str, manifest: dict) -> DownloadResult:
         fd, raw_path = tempfile.mkstemp(prefix="r2-download-", suffix=".bin", dir=self.root)
@@ -240,20 +238,20 @@ class DownloadCoordinator:
 
                 if can_fetch:
                     for part in manifest.get("parts", []):
-                    number = int(part["part_number"])
-                    if (
-                        part.get("status") == "READY"
-                        and number not in fetched
-                        and number not in inflight
-                        and len(inflight) < self.settings.download_max_concurrency
-                    ):
-                        inflight[number] = asyncio.create_task(
-                            self._fetch_one_part(
-                                task_id, part, fd,
-                                int(manifest["part_size_bytes"]),
-                                per_file_semaphore, held_parts,
+                        number = int(part["part_number"])
+                        if (
+                            part.get("status") == "READY"
+                            and number not in fetched
+                            and number not in inflight
+                            and len(inflight) < self.settings.download_max_concurrency
+                        ):
+                            inflight[number] = asyncio.create_task(
+                                self._fetch_one_part(
+                                    task_id, part, fd,
+                                    int(manifest["part_size_bytes"]),
+                                    per_file_semaphore, held_parts,
+                                )
                             )
-                        )
 
                 for number, task in tuple(inflight.items()):
                     if task.done():
