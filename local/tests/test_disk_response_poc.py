@@ -12,6 +12,11 @@ from pathlib import Path
 import httpx
 import pytest
 
+try:
+    import psutil
+except ImportError:  # pragma: no cover - mitmproxy normally installs psutil
+    psutil = None
+
 
 LOCAL_ROOT = Path(__file__).resolve().parents[1]
 ADDON = LOCAL_ROOT / "poc" / "disk_response_addon.py"
@@ -25,12 +30,16 @@ def free_port() -> int:
 
 
 def rss_bytes(pid: int) -> int:
+    if psutil is not None:
+        try:
+            return int(psutil.Process(pid).memory_info().rss)
+        except psutil.Error:
+            return 0
     status = Path(f"/proc/{pid}/status")
-    if not status.exists():
-        return 0
-    for line in status.read_text().splitlines():
-        if line.startswith("VmRSS:"):
-            return int(line.split()[1]) * 1024
+    if status.exists():
+        for line in status.read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) * 1024
     return 0
 
 
