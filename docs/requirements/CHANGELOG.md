@@ -46,3 +46,17 @@
 - 将 R2 Download Relay v1 的需求编号范围明确为 RLY-020～RLY-039。
 - 记录 Gate 0：1 GiB Loopback 磁盘响应 PoC 已通过；regular CONNECT 客户端侧使用 HTTP/1.1，RSS 增量实测 0.3 MiB，客户端断开可传递至文件服务。
 - 明确 Mac RelayClient → VPS 的 HTTP/2 属于独立链路，须在后续下载全栈测试中单独验收，不将 CONNECT HTTP/1.1 结果误记为 HTTP/2 通过。
+
+
+## v1.8 — 2026-11-19
+- 新增独立的 VPS 下载任务 API、16 MiB 原子 Part writer、manifest、READY 等待式读取、小响应 body API、幂等删除和空闲 TTL 清理。
+- VPS 下载配置改为 TOML；默认关闭，启用前必须按实际磁盘容量填写缓存预算、剩余空间、活动/保留任务及等待者上限。
+- 明确 VPS 重启后旧下载任务不恢复，启动时清理孤儿下载目录，避免恢复不完整对象。
+- 修正下载验收矩阵中 RLY 编号映射。
+
+
+## v1.9 — 2026-11-19
+- Stage 1 代码审查加固：原样构造 GET 请求以避免 HTTPX 默认请求头干扰签名；校验签名 Host 与 URL 主机名一致。
+- 修复全局等待者计数跨任务并发竞争、Part 失败状态映射和 reader 与 TTL/删除之间的竞态。
+- 下载目录增加 Linux 单进程独占锁，关停时先取消 writer、等待 reader 结束再释放锁。
+- 限制 URL 与请求头输入规模；manifest 不回显底层异常文本，降低签名 URL 泄露风险。

@@ -1,0 +1,14 @@
+schema_version = 1
+
+# 下载功能默认关闭。启用前必须按 VPS 实际磁盘容量填写磁盘预算与任务上限。
+[download]
+enabled = false
+part_size_mib = 16
+split_threshold_mib = 24
+cache_ttl_seconds = 600
+max_cache_bytes = 0
+min_free_bytes = 0
+max_active_tasks = 0
+max_retained_tasks = 0
+max_waiters = 0
+wait_timeout_seconds = 30
