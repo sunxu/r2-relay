@@ -1,6 +1,7 @@
 """Mitmproxy addon. In default mode, request() runs after full body buffering."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
