@@ -109,6 +109,7 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
         ("proxy", ["mitmdump", "--mode", "regular", "--listen-host", "127.0.0.1",
                    "--listen-port", str(proxy_port), "--set",
                    f"confdir={tmp_path / 'mitmconf'}", "--set", "upstream_cert=false",
+                   "--set", "connection_strategy=lazy",
                    "--allow-hosts", r"(.*\.r2\.cloudflarestorage\.com(:443)?|127\.0\.0\.1(:[0-9]+)?)$",
                    "-s", str(root / "local" / "addon_entry.py")]),
     ]
@@ -188,6 +189,10 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
         outputs[3].flush()
         proxy_log = logfiles["proxy"].read_text()
         assert "download_relay_http_version=HTTP/2" in proxy_log
+        assert "/parts/1" in proxy_log and "/parts/2" in proxy_log
+        # The addon must rewrite to the VPS/loopback before mitmproxy opens
+        # any connection to the original R2 host.
+        assert "server connect acct.r2.cloudflarestorage.com" not in proxy_log
 
         # Hit/miss accounting goes through real Caddy TLS and HTTP/2.
         async with httpx.AsyncClient(http2=True, verify=str(cert), trust_env=False) as http:
