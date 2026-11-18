@@ -84,5 +84,6 @@ temp_dir = "~/.cache/r2-relay/downloads"
 - 所有发往 Cloudflare R2 S3 endpoint 的 GET 在下载启用后由本地代理接管；原始 URL、Range/条件请求头和签名头交给 VPS。VPS 不可用或下载失败时返回明确 502，不静默直连 R2。
 - Mac 只并发取回 VPS 已 READY 的 Part：单文件最多 16、所有任务合计最多 32。每片验证长度和 SHA-256 后直接写入一个任务级文件；所有 Part 完成且 VPS 任务 COMPLETE 后才返回原始响应。
 - 大文件通过仅监听 `127.0.0.1` 的 Loopback 文件响应服务交给 mitmproxy，并开启 response streaming；不把完整大文件读入 Python 内存。
+- 本地代理启动时使用 mitmproxy `connection_strategy=lazy`：先让 addon 决定是否接管，再建立上游连接，避免已接管的 R2 GET/UploadPart 预先连接原始 R2 主机。
 - 修改配置后重启本地 R2 Relay（18585）进程生效。
 - 可用 `R2_RELAY_CONFIG=/absolute/path/config.toml` 指定另一份配置文件；该变量只指定配置文件路径，不承载数值配置。
