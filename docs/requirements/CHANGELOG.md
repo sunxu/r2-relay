@@ -67,3 +67,10 @@
 - Stage 2 Mac 客户端新增下载协调器、16/32 共享并发调度、READY Part SHA-256 校验、单文件 pwrite 组装和小响应内存/大响应磁盘预算。
 - 新增仅监听 127.0.0.1 的响应服务，通过 mitmproxy response streaming 返回已验证的本地内存/磁盘响应。
 - Mac 下载默认关闭；内存和临时磁盘预算必须显式配置，不猜测设备容量。
+
+
+## v2.1 — 2026-11-19
+- Runner 全栈验收扩展为真实进程 GET 下载：25 MiB Range 206、单次 Mock R2 GET、16 MiB + 9 MiB Part、签名请求头标记、SHA-256、Loopback response streaming。
+- 在 Mac → VPS 下载 API 上验证 HTTP/2。
+- mitmproxy 设置 `connection_strategy=lazy`，避免 addon 接管前先连接原始 R2 主机；Runner 断言没有原始 R2 预连接。
+- 增加两文件并发测试，明确验证单文件最多 16、全局最多 32 个 Part 同时传输。
