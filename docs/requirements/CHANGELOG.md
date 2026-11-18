@@ -74,3 +74,8 @@
 - 在 Mac → VPS 下载 API 上验证 HTTP/2。
 - mitmproxy 设置 `connection_strategy=lazy`，避免 addon 接管前先连接原始 R2 主机；Runner 断言没有原始 R2 预连接。
 - 增加两文件并发测试，明确验证单文件最多 16、全局最多 32 个 Part 同时传输。
+
+
+## v2.2 — 2026-11-19
+- 增加手动真实 Cloudflare R2 GET 验收脚本与中文手册；从权限 0600 的本地私有 spec 读取签名 URL/请求头，不输出敏感内容。
+- 真实验收要求状态码、响应长度、SHA-256 和 Mac → VPS HTTP 版本符合预期，并在报告 PASS_REAL 前完成本地临时资源清理。
