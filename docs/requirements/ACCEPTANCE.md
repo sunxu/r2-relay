@@ -49,17 +49,17 @@
 
 | 测试 ID | 需求 | 场景与通过条件 |
 |---|---|---|
-| DL-T01 | RLY-DL-001/002 | 所有 R2 GET 均由本地代理接管并由 VPS 执行，原始 URL/请求头保留。 |
-| DL-T02 | RLY-DL-004 | <=24 MiB 使用本地内存；>24 MiB 使用 Part/本地磁盘。 |
-| DL-T03 | RLY-DL-006/007/008 | VPS 从 R2 响应流直接生成 16 MiB Part；仅原子发布的完整 Part 可读取。 |
-| DL-T04 | RLY-DL-009 | 未 READY Part 等待；READY 后完整返回；等待不占全局数据传输名额。 |
-| DL-T05 | RLY-DL-011 | 单文件最多 16、所有任务全局最多 32 个 Part 同时传输，均由 TOML 配置。 |
-| DL-T06 | RLY-DL-013/014 | 本地大文件使用单个磁盘临时文件按偏移写入；全部校验且 VPS COMPLETE 后才向原始客户端返回。 |
-| DL-T07 | RLY-DL-015/016 | 真实状态、端到端头、Range 和编码语义保留，hop-by-hop 头过滤。 |
-| DL-T08 | RLY-DL-017/018 | 上游失败不发布半成品；正常完成主动删除；600 秒空闲 TTL 兜底；活动读写不被清理。 |
-| DL-T09 | RLY-DL-019 | VPS 磁盘与任务准入、本地内存预算和等待者数量有界。 |
-| DL-T10 | Gate 0 / DL-T21 | 1 GiB 本地磁盘响应在 HTTP/1.1、HTTP/2 下不整体进入 Python 内存。 |
-| DL-T11 | RLY-DL-020 | 现有上传路径、默认配置和既有测试全部回归通过。 |
-| DL-T12 | R2 real acceptance | 真实 R2 GET/Range GET 与故障场景 PASS_REAL；Mock 只能标记 PASS_SIMULATED。 |
+| T22 | RLY-020/002 | 所有 R2 GET 均由本地代理接管并由 VPS 执行，原始 URL/请求头保留。 |
+| T23 | RLY-023 | <=24 MiB 使用本地内存；>24 MiB 使用 Part/本地磁盘。 |
+| T24 | RLY-025/007/008 | VPS 从 R2 响应流直接生成 16 MiB Part；仅原子发布的完整 Part 可读取。 |
+| T25 | RLY-028 | 未 READY Part 等待；READY 后完整返回；等待不占全局数据传输名额。 |
+| T26 | RLY-030 | 单文件最多 16、所有任务全局最多 32 个 Part 同时传输，均由 TOML 配置。 |
+| T27 | RLY-032/014 | 本地大文件使用单个磁盘临时文件按偏移写入；全部校验且 VPS COMPLETE 后才向原始客户端返回。 |
+| T28 | RLY-034/016 | 真实状态、端到端头、Range 和编码语义保留，hop-by-hop 头过滤。 |
+| T29 | RLY-036/018 | 上游失败不发布半成品；正常完成主动删除；600 秒空闲 TTL 兜底；活动读写不被清理。 |
+| T30 | RLY-038 | VPS 磁盘与任务准入、本地内存预算和等待者数量有界。 |
+| T31 | Gate 0 / T42 | 1 GiB 本地磁盘响应在 HTTP/1.1、HTTP/2 下不整体进入 Python 内存。 |
+| T32 | RLY-039 | 现有上传路径、默认配置和既有测试全部回归通过。 |
+| T33 | R2 real acceptance | 真实 R2 GET/Range GET 与故障场景 PASS_REAL；Mock 只能标记 PASS_SIMULATED。 |
 
 详细测试矩阵见 [R2_DOWNLOAD_RELAY_V1_CN.md](R2_DOWNLOAD_RELAY_V1_CN.md)。
