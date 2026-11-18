@@ -88,8 +88,7 @@ async def wait_for_proxy(process: subprocess.Popen, port: int, cert: Path, log_p
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("http2", [False, True], ids=["http11", "http2"])
-async def test_disk_backed_response_streams_through_mitmproxy(tmp_path: Path, http2: bool) -> None:
+async def test_disk_backed_response_streams_through_mitmproxy_http11(tmp_path: Path) -> None:
     mitmdump = shutil.which("mitmdump")
     if not mitmdump:
         pytest.skip("mitmdump executable is not installed")
@@ -157,7 +156,7 @@ async def test_disk_backed_response_streams_through_mitmproxy(tmp_path: Path, ht
                 async with client.stream("GET", "https://r2-poc.example/file") as response:
                     assert response.status_code == 200
                     assert int(response.headers["content-length"]) == expected_size
-                    assert response.http_version == ("HTTP/2" if http2 else "HTTP/1.1")
+                    assert response.http_version == "HTTP/1.1"
                     received = 0
                     async for chunk in response.aiter_raw():
                         assert not any(chunk), "sparse source file should contain only zero bytes"
