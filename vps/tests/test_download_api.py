@@ -22,6 +22,7 @@ def settings(**overrides):
         max_cache_bytes=128 * MIB,
         min_free_bytes=1,
         max_active_tasks=4,
+        max_retained_tasks=16,
         max_waiters=8,
         wait_timeout_seconds=3,
     )
