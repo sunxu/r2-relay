@@ -24,6 +24,10 @@ def valid_spec():
         "expected_status_code": 206,
         "expected_size": 4,
         "expected_sha256": "0" * 64,
+        "expected_headers": {
+            "content-range": "bytes 0-3/4",
+            "content-length": "4",
+        },
     }
 
 
@@ -51,6 +55,7 @@ def test_real_r2_spec_loads_only_from_exact_0600_file(tmp_path, monkeypatch):
         ("expected_status_code", 99),
         ("expected_size", -1),
         ("expected_sha256", "not-a-digest"),
+        ("expected_headers", {"content-range": "bad" + chr(10) + "header"}),
         ("headers", [["Authorization", "bad" + chr(10) + "header"]]),
     ],
 )
@@ -121,7 +126,12 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
                 return None
 
             return SimpleNamespace(
-                status_code=206, body=body, path=None, cleanup=cleanup
+                status_code=206,
+                headers=[
+                    ("Content-Range", "bytes 0-3/4"),
+                    ("Content-Length", str(len(body))),
+                ],
+                body=body, path=None, cleanup=cleanup
             )
 
         async def close(self):
@@ -140,6 +150,10 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
     assert report["http_status"] == 206
     assert report["mac_to_vps_http_versions"] == ["HTTP/2"]
     assert report["expected_sha256_match"] is True
+    assert report["expected_headers_match"] is True
+    assert report["header_checks"] == {
+        "content-range": True, "content-length": True
+    }
     assert report["vps_task_cleanup_ok"] is True
     assert report["local_temp_cleanup_ok"] is True
     assert report["signed_url_or_headers_logged"] is False
