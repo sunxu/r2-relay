@@ -60,8 +60,10 @@ curl --silent --show-error --fail \
 
 STATUS="$(awk 'index($1, "HTTP") == 1 {code=$2} END {print code}' "$BASE_HEADERS")"
 test "$STATUS" = "206"
+grep -qi '^Content-Range: bytes 0-26214399/26214400' "$BASE_HEADERS"
+grep -qi '^Content-Length: 26214400' "$BASE_HEADERS"
 cmp -s "$SOURCE" "$BASELINE"
-echo "Direct R2 baseline: PASS (HTTP 206, 25 MiB, bytes identical)"
+echo "Direct R2 baseline: PASS (HTTP 206, Content-Range/Length, bytes identical)"
 ```
 
 如果直接 R2 基线不是 HTTP 206，或 `cmp` 失败，先不要测 Relay；先排查 URL、权限、对象和 Range 行为。
@@ -75,17 +77,29 @@ export SPEC="$HOME/.config/r2-relay/private/real-get-spec.json"
 mkdir -p "$(dirname "$SPEC")"
 umask 077
 
-python3 - "$SOURCE" "$SPEC" <<'PY'
+python3 - "$SOURCE" "$SPEC" "$BASE_HEADERS" <<'PY'
 import hashlib, json, os, sys
-source, target = sys.argv[1], sys.argv[2]
+source, target, headers_path = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(source, "rb") as f:
     digest = hashlib.file_digest(f, "sha256").hexdigest()
+response_headers = {}
+for line in open(headers_path, encoding="latin-1"):
+    if ":" in line and not line.startswith("HTTP/"):
+        name, value = line.split(":", 1)
+        response_headers[name.strip().lower()] = value.strip()
+expected_headers = {
+    "content-range": "bytes 0-26214399/26214400",
+    "content-length": "26214400",
+}
+if "etag" in response_headers:
+    expected_headers["etag"] = response_headers["etag"]
 data = {
     "url": os.environ["SIGNED_URL"],
     "headers": [["Range", "bytes=0-26214399"]],
     "expected_status_code": 206,
     "expected_size": 25 * 1024 * 1024,
     "expected_sha256": digest,
+    "expected_headers": expected_headers,
 }
 with open(target, "w", encoding="utf-8") as f:
     json.dump(data, f)
@@ -215,8 +229,10 @@ unset SIGNED_URL
 
 STATUS="$(awk 'index($1, "HTTP") == 1 {code=$2} END {print code}' "$HOME/r2-relay-25mib-proxy.headers")"
 test "$STATUS" = "206"
+grep -qi '^Content-Range: bytes 0-26214399/26214400' "$HOME/r2-relay-25mib-proxy.headers"
+grep -qi '^Content-Length: 26214400' "$HOME/r2-relay-25mib-proxy.headers"
 cmp -s "$SOURCE" "$HOME/r2-relay-25mib-proxy.bin"
-echo "mitmproxy real R2 GET: PASS (HTTP 206, 25 MiB, bytes identical)"
+echo "mitmproxy real R2 GET: PASS (HTTP 206, Content-Range/Length, bytes identical)"
 ```
 
 这一步同时验证：原始客户端 CONNECT → mitmproxy addon 接管 → VPS 下载 API → Cloudflare R2 → Mac Part 组装 → Loopback response streaming → 原始客户端。若代理返回 502，不要改为绕过代理直连来宣称通过；保留状态码和脱敏日志，定位接管或 VPS 错误。
