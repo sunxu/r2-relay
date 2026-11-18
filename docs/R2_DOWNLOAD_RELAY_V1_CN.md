@@ -100,9 +100,9 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 | DL-T18 | TTL | 正常完成主动删除；600 秒空闲过期；活动读写不被删除 |
 | DL-T19 | 幂等 | 创建重试不重复执行；删除重试安全 |
 | DL-T20 | 资源 | VPS 磁盘/任务/等待者和 Mac 内存/临时空间均有界 |
-| DL-T21 | mitmproxy PoC | 1 GiB 磁盘响应在 HTTP/1.1/2 通过，内存不随文件大小线性增长 |
+| DL-T21 | mitmproxy PoC | 1 GiB 磁盘响应在 regular CONNECT HTTP/1.1 下通过，内存不随文件大小线性增长；RelayClient → VPS HTTP/2 单独验证 |
 | DL-T22 | 上传回归 | 既有 UploadPart 测试、默认配置和行为不变 |
-| DL-T23 | 全栈模拟 | aiohttp → mitmproxy → VPS HTTPS → Mock R2 覆盖小/大响应、失败和清理 |
+| DL-T23 | 全栈模拟 | aiohttp → mitmproxy → VPS HTTPS → Mock R2 覆盖小/大响应、失败和清理；Mac RelayClient → VPS HTTP/2 单独验证 |
 | DL-T24 | 目标范围 | R2 HTTPS 443 域名命中接管；非目标域名/端口 GET 正常透传 |
 | DL-T25 | 真实 R2 | GET/Range GET、响应头、签名请求和故障行为单独记录 PASS_REAL；Mock 不替代真实验收 |
 
