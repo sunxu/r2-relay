@@ -146,7 +146,7 @@ async def run() -> int:
         remote_cleanup_ok = coordinator.remote_cleanup_failures == 0
         actual_status = result.status_code
         http_versions = sorted(set(relay.download_http_versions))
-        http2_ok = "HTTP/2" in http_versions
+        http2_ok = bool(http_versions) and all(version == "HTTP/2" for version in http_versions)
         local_path = result.path
         if result.cleanup is not None:
             await result.cleanup()
