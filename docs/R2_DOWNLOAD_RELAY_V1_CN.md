@@ -26,7 +26,7 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 
 ## 3. 请求和响应处理
 
-- **RLY-DL-001 GET 接管：** 所有发往配置目标 R2 服务的 GET 均由本地代理接管并交由 VPS 执行，不限于 GET Object。
+- **RLY-DL-001 GET 接管：** 所有发往 Cloudflare R2 S3 endpoint 的 GET 均由本地代理接管并交由 VPS 执行，不限于 GET Object。v1 沿用现有上传目标识别边界：HTTPS、目标端口 443（URL 未显式指定端口时按 443）、主机名以 .r2.cloudflarestorage.com 结尾。非目标域名和非目标端口的 GET 按普通代理透传；未来若要支持 R2 自定义域名，另行增加显式 allowlist 配置和验收。
 - **RLY-DL-002 原始请求：** 转发原始 URL、查询参数和必要请求头，不擅自改写 SigV4 签名内容。不设计签名 URL 权限缓存。
 - **RLY-DL-003 单次上游请求：** VPS 对每个原始 GET 只发起一次 R2 GET，不发起多个 Range 请求。
 - **RLY-DL-004 响应模式：** 实际响应体 <=24 MiB 时，Mac 使用内存；>24 MiB 时，VPS 生成 16 MiB Part，Mac 使用磁盘。204/304 等无响应体响应直接返回。3xx/4xx/5xx 保留真实状态、响应头和响应体，不得伪造成成功；不自动跟随重定向。
