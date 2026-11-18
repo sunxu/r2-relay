@@ -265,7 +265,7 @@ async def test_request_idempotency_and_request_scope_validation(tmp_path):
 
         conflict = await create(
             client, auth, request_id="same",
-            url="https://evil.example.com/object",
+            url="https://abc.r2.cloudflarestorage.com/bucket/other?x=2",
         )
         assert conflict.status_code == 409
 
@@ -277,7 +277,7 @@ async def test_request_idempotency_and_request_scope_validation(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_download_capacity_and_part_waiter_limit(tmp_path):
+async def test_download_active_task_capacity_is_enforced(tmp_path):
     started = asyncio.Event()
     release = asyncio.Event()
 
@@ -311,3 +311,136 @@ async def test_download_capacity_and_part_waiter_limit(tmp_path):
         release.set()
         manifest = await wait_complete(client, first.json()["task_id"], auth)
         assert manifest["status"] == "COMPLETE"
+
+
+
+@pytest.mark.asyncio
+async def test_ready_part_is_available_while_upstream_is_still_receiving(tmp_path):
+    first_ready = asyncio.Event()
+    release_second = asyncio.Event()
+    first = b"a" * (16 * MIB)
+    second = b"b" * (9 * MIB)
+
+    class SlowLargeStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield first
+            first_ready.set()
+            await release_second.wait()
+            yield second
+
+        async def aclose(self):
+            return None
+
+    def upstream(_request):
+        return httpx.Response(
+            200,
+            headers={"Content-Length": str(len(first) + len(second))},
+            stream=SlowLargeStream(),
+        )
+
+    app = create_app(
+        CacheStore(tmp_path / "upload"), token="test",
+        download_transport=httpx.MockTransport(upstream),
+        download_settings=settings(max_waiters=1),
+        download_root=tmp_path / "downloads",
+    )
+    auth = {"Authorization": "Bearer test"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        created = await create(client, auth)
+        task_id = created.json()["task_id"]
+        await asyncio.wait_for(first_ready.wait(), timeout=3)
+        for _ in range(300):
+            manifest = (await client.get(f"/v1/downloads/{task_id}", headers=auth)).json()
+            if manifest["part_count"] >= 1:
+                break
+            await asyncio.sleep(0.002)
+        assert manifest["status"] == "RECEIVING"
+        assert manifest["parts"][0]["status"] == "READY"
+
+        first_part = await client.get(
+            f"/v1/downloads/{task_id}/parts/1", headers=auth
+        )
+        assert first_part.status_code == 200
+        assert first_part.content == first
+
+        waiting = asyncio.create_task(client.get(
+            f"/v1/downloads/{task_id}/parts/2", headers=auth
+        ))
+        await asyncio.sleep(0.02)
+        assert not waiting.done()
+
+        overflow = await client.get(
+            f"/v1/downloads/{task_id}/parts/3", headers=auth
+        )
+        assert overflow.status_code == 503
+
+        release_second.set()
+        second_part = await waiting
+        assert second_part.status_code == 200
+        assert second_part.content == second
+        final = await wait_complete(client, task_id, auth)
+        assert final["status"] == "COMPLETE"
+
+
+@pytest.mark.asyncio
+async def test_delete_waits_for_active_part_reader_before_removing_files(tmp_path):
+    body = b"q" * (25 * MIB)
+
+    app = create_app(
+        CacheStore(tmp_path / "upload"), token="test",
+        download_transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, content=body)
+        ),
+        download_settings=settings(), download_root=tmp_path / "downloads",
+    )
+    manager = app.state.downloads
+    task = await manager.create("reader-delete", R2_URL, [])
+    for _ in range(500):
+        if task.status in {"COMPLETE", "FAILED"}:
+            break
+        await asyncio.sleep(0.002)
+    assert task.status == "COMPLETE"
+
+    reader_task, path, _part = await manager.acquire_part(task.task_id, 1)
+    generator = manager.stream_file(reader_task, path)
+    first_chunk = await anext(generator)
+    assert first_chunk
+    await manager.delete(task.task_id)
+    assert path.exists()
+    await generator.aclose()
+    assert not task.directory.exists()
+    assert manager.used_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_completed_download_expires_after_idle_ttl(tmp_path):
+    now = [100.0]
+    app = create_app(
+        CacheStore(tmp_path / "upload"), token="test",
+        download_transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, content=b"short")
+        ),
+        download_settings=settings(cache_ttl_seconds=10),
+        download_root=tmp_path / "downloads",
+    )
+    manager = app.state.downloads
+    manager.clock = lambda: now[0]
+    task = await manager.create("ttl", R2_URL, [])
+    for _ in range(500):
+        if task.status in {"COMPLETE", "FAILED"}:
+            break
+        await asyncio.sleep(0.002)
+    assert task.status == "COMPLETE"
+    assert task.expires_at == 110.0
+
+    # A read refreshes the idle expiry window.
+    acquired, path = await manager.acquire_body(task.task_id)
+    assert path.read_bytes() == b"short"
+    await manager.reader_finished(acquired)
+    assert task.expires_at == 110.0
+    now[0] = 111.0
+    assert await manager.cleanup() == 1
+    assert task.task_id not in manager.tasks
+    assert manager.used_bytes == 0
