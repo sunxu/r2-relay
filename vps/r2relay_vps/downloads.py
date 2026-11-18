@@ -329,6 +329,7 @@ class DownloadManager:
                             body_file = None
                             task.mode = "parts"
                             writer = PartWriter(self, task)
+                            task.total_size = 0
                             with body_tmp.open("rb") as prefix:
                                 while True:
                                     prefix_chunk = await asyncio.to_thread(
@@ -481,7 +482,9 @@ class DownloadManager:
             task.parts.clear()
 
     async def delete(self, task_id: str) -> None:
-        task = self.get(task_id)
+        task = self.tasks.get(task_id)
+        if task is None:
+            return
         task.delete_requested = True
         if task.worker is not None and not task.worker.done():
             task.worker.cancel()
