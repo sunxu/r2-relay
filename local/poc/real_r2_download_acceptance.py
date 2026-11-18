@@ -123,6 +123,13 @@ async def run() -> int:
         size_ok = actual_size == spec["expected_size"]
         digest_ok = actual_sha256 == spec["expected_sha256"]
         passed = status_ok and size_ok and digest_ok
+        if result.cleanup is not None:
+            await result.cleanup()
+        result = None
+        await coordinator.close()
+        coordinator = None
+        await relay.close()
+        relay = None
         report = {
             "schema": "r2_relay_real_get_acceptance_v1",
             "status": "PASS_REAL" if passed else "FAIL_REAL",
