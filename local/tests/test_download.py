@@ -279,3 +279,79 @@ async def test_addon_rewrites_r2_get_to_loopback_and_streams_verified_result(tmp
         await addon.done()
     assert downloads.closed
     assert relay.closed
+
+
+
+class UnknownLengthStream(httpx.AsyncByteStream):
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            yield chunk
+
+    async def aclose(self):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_mac_unknown_length_download_waits_for_complete_then_assembles(tmp_path):
+    body = b"u" * (25 * MIB)
+
+    def upstream(_request):
+        return httpx.Response(
+            200,
+            stream=UnknownLengthStream([body[:16 * MIB], body[16 * MIB:]]),
+        )
+
+    app = create_app(
+        CacheStore(tmp_path / "upload-cache"),
+        token="download-test-token",
+        download_transport=httpx.MockTransport(upstream),
+        download_settings=vps_settings(),
+        download_root=tmp_path / "vps-downloads",
+    )
+    transport = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://vps.test"
+    )
+    relay = RelayClient(
+        "https://vps.test", "download-test-token",
+        client=transport, execution_timeout=10, poll_interval=0.002,
+    )
+    coordinator = DownloadCoordinator(relay, local_settings(tmp_path))
+    try:
+        result = await coordinator.download(R2_URL, [])
+        assert result.path is not None
+        assert result.size == len(body)
+        assert result.path.read_bytes() == body
+        await result.cleanup()
+        assert coordinator.disk_budget.used == 0
+    finally:
+        await coordinator.close()
+        await transport.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mac_download_fails_closed_when_large_object_exceeds_temp_budget(tmp_path):
+    body = b"z" * (25 * MIB)
+    app = make_vps(tmp_path, body)
+    transport = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://vps.test"
+    )
+    relay = RelayClient(
+        "https://vps.test", "download-test-token",
+        client=transport, execution_timeout=10, poll_interval=0.002,
+    )
+    coordinator = DownloadCoordinator(
+        relay,
+        local_settings(tmp_path, download_max_temp_bytes=24 * MIB),
+    )
+    try:
+        with pytest.raises(Exception, match="超过 Mac 临时磁盘预算"):
+            await coordinator.download(R2_URL, [])
+        assert not app.state.downloads.tasks
+        assert not list(coordinator.root.glob("r2-download-*.bin"))
+        assert coordinator.disk_budget.used == 0
+    finally:
+        await coordinator.close()
+        await transport.aclose()
