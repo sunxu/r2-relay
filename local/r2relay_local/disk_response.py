@@ -105,7 +105,7 @@ class DiskResponseServer:
             if not path.startswith("/download/"):
                 raise ValueError("本地下载路由无效")
             token = path.removeprefix("/download/")
-            result = self.routes.get(token)
+            result = self.routes.pop(token, None)
             if result is None:
                 writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 await writer.drain()
@@ -126,8 +126,8 @@ class DiskResponseServer:
             # 原始客户端可能中途断开；无论如何都要释放本地响应资源。
             pass
         finally:
-            if token is not None and result is not None:
-                await self.discard(token)
+            if result is not None and result.cleanup is not None:
+                await result.cleanup()
             self.writers.discard(writer)
             writer.close()
             try:
