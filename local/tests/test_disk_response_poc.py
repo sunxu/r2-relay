@@ -149,7 +149,7 @@ async def test_disk_backed_response_streams_through_mitmproxy_http11(tmp_path: P
             async with httpx.AsyncClient(
                 proxy=f"http://127.0.0.1:{proxy_port}",
                 verify=ssl.create_default_context(cafile=str(cert)),
-                http2=http2,
+                http2=False,
                 trust_env=False,
                 timeout=httpx.Timeout(180.0, connect=15.0),
             ) as client:
