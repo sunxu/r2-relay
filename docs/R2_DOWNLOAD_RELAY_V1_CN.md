@@ -92,7 +92,7 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 | DL-T10 | 边下边取 | VPS 未完成对象时，本地可取 READY Part |
 | DL-T11 | 完整返回 | 所有 Part 和任务 COMPLETE 前客户端未收到响应体 |
 | DL-T12 | Range | 原始 Range 正确返回 206/Content-Range；内部使用 Part ID |
-| DL-T13 | 状态码 | 204/304/重定向/403/404/5xx 语义正确 |
+| DL-T13 | 状态码 | 204/304/重定向/403/404/5xx 语义正确，304 无响应体及其元数据头处理符合 HTTP 语义 |
 | DL-T14 | 响应头 | 原始字节、Content-Encoding、Length、ETag 一致；逐跳头过滤 |
 | DL-T15 | 未知长度 | 不无限缓冲；模式切换和最终长度正确 |
 | DL-T16 | 上游失败 | 不发布半成品、不混合重试对象 |
