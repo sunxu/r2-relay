@@ -34,6 +34,7 @@ def test_vps_download_settings_are_loaded_from_toml(tmp_path):
     assert settings.split_threshold_bytes == 24 * 1024 * 1024
     assert settings.max_cache_bytes == 1024 * 1024 * 1024
     assert settings.max_active_tasks == 8
+    assert settings.max_retained_tasks == 32
 
 
 @pytest.mark.parametrize(
