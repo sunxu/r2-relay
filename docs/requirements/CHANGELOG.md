@@ -40,3 +40,9 @@
 - 四个参数全部由 TOML 配置管理；本地完整取回和验证后才向原始客户端返回。
 - 新增 mitmproxy 大文件磁盘响应 PoC Gate，未通过前不进入完整下载实现。
 - 明确本需求不授权 VPS 部署。
+
+
+## v1.7 — 2026-11-19
+- 将 R2 Download Relay v1 的需求编号范围明确为 RLY-020～RLY-039。
+- 记录 Gate 0：1 GiB Loopback 磁盘响应 PoC 已通过；regular CONNECT 客户端侧使用 HTTP/1.1，RSS 增量实测 0.3 MiB，客户端断开可传递至文件服务。
+- 明确 Mac RelayClient → VPS 的 HTTP/2 属于独立链路，须在后续下载全栈测试中单独验收，不将 CONNECT HTTP/1.1 结果误记为 HTTP/2 通过。
