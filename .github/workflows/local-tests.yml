@@ -4,6 +4,8 @@ on:
     paths:
       - "local/**"
       - "vps/**"
+      - "ops/**"
+      - "tests/**"
       - ".github/workflows/local-tests.yml"
   push:
     branches: [main]
