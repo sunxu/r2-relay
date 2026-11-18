@@ -175,7 +175,7 @@ PYTHONPATH=local python local/poc/real_r2_download_acceptance.py
 - 比对预期 HTTP 状态码、响应长度和 SHA-256。
 - 输出 `PASS_REAL` 或 `FAIL_REAL`，同时记录 Mac → VPS 实际协商的 HTTP 版本。
 
-脚本不会输出或记录签名 URL、请求头、Token 或底层异常文本。
+脚本不会输出或记录签名 URL、请求头、Token 或底层异常文本。`PASS_REAL` 强制要求 Mac → VPS 实际协商 HTTP/2。
 
 ## 4.1 再经真实 mitmproxy 18585 走一次完整客户端链路
 
@@ -244,7 +244,7 @@ echo "mitmproxy real R2 GET: PASS (HTTP 206, Content-Range/Length, bytes identic
 1. R2 返回状态码与预期一致（例如 Range GET 为 206）。
 2. 实际响应体长度与预期一致。
 3. 响应体 SHA-256 与独立计算的预期值一致。
-4. Mac → VPS 下载请求正常完成；若要求 HTTP/2，报告中的版本必须包含 `HTTP/2`。
+4. Mac → VPS 下载请求正常完成，报告中的 `http2_ok` 必须为 true，协商版本必须包含 `HTTP/2`。
 5. VPS 下载任务 DELETE 成功（或已不存在）；报告中的 `vps_task_cleanup_ok` 和 `local_temp_cleanup_ok` 均为 true；本地临时文件和内存/磁盘预算在响应消费完成后释放。
 
 此脚本直接验证 RelayClient → VPS → 真实 R2，不经过 mitmproxy 的原始客户端接管层。mitmproxy GET 接管、Loopback response streaming 和不提前连接原始 R2 主机，已由隔离 Mock R2 的 Runner 全栈测试覆盖；如需对真实业务应用做最终验收，还必须让该应用经本地 18585 代理发起同一类真实 GET。
