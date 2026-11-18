@@ -23,7 +23,14 @@ class UploadBufferConfigTests(unittest.TestCase):
             path.write_text(
                 "schema_version = 1\n[upload]\n"
                 "max_part_mib = 64\n"
-                "global_buffer_mib = 256\n",
+                "global_buffer_mib = 256\n"
+                "[download]\n"
+                "enabled = true\n"
+                "max_concurrency = 16\n"
+                "global_max_concurrency = 32\n"
+                "small_response_memory_mib = 64\n"
+                "max_temp_mib = 4096\n"
+                'temp_dir = "~/r2-download-test"\n',
                 encoding="utf-8",
             )
             settings = load_settings(path)
@@ -41,6 +48,9 @@ class UploadBufferConfigTests(unittest.TestCase):
             "schema_version = 1\n[upload]\nmax_part_mib = 2048\nglobal_buffer_mib = 1024\n",
             "schema_version = 1\n[upload]\nunknown = 1\n",
             "schema_version = 2\n",
+            "schema_version = 1\n[download]\nenabled = true\nsmall_response_memory_mib = 8\nmax_temp_mib = 128\n",
+            "schema_version = 1\n[download]\nenabled = true\nsmall_response_memory_mib = 24\nmax_temp_mib = 16\n",
+            "schema_version = 1\n[download]\nmax_concurrency = 33\nglobal_max_concurrency = 32\n",
         )
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"
