@@ -12,9 +12,12 @@ from urllib.parse import parse_qs, urlsplit
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .cache import CacheStore, MD5_PATTERN
+from .config import DownloadSettings, load_download_settings
+from .downloads import DownloadError, DownloadManager
 from .worker import R2Worker
 
 LOG = logging.getLogger('r2relay.vps')
@@ -32,6 +35,13 @@ class Prepare(BaseModel):
     md5: str
     size: int = Field(ge=0)
     r2_request: R2Request
+
+
+class DownloadCreate(BaseModel):
+    schema_version: int = 1
+    request_id: str
+    url: str
+    headers: list[tuple[str, str]] = Field(default_factory=list)
 
 
 class State:
@@ -124,7 +134,11 @@ class State:
 
 def create_app(store: CacheStore | None = None, token: str | None = None,
                r2_transport: httpx.AsyncBaseTransport | None = None,
-               retry_delays: tuple[float, ...] = (2, 4, 8)) -> FastAPI:
+               retry_delays: tuple[float, ...] = (2, 4, 8),
+               download_transport: httpx.AsyncBaseTransport | None = None,
+               download_settings: DownloadSettings | None = None,
+               download_root: Path | None = None,
+               download_config_path: Path | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         task = asyncio.create_task(_cleanup_loop(app.state.relay))
@@ -143,9 +157,17 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
                 await asyncio.gather(*active, return_exceptions=True)
 
     app = FastAPI(title="R2 Relay VPS", lifespan=lifespan)
-    state = State(store or CacheStore(Path(os.environ.get("R2_RELAY_CACHE_DIR", "/var/lib/r2-relay/cache"))),
+    cache_store = store or CacheStore(Path(os.environ.get("R2_RELAY_CACHE_DIR", "/var/lib/r2-relay/cache")))
+    state = State(cache_store,
                   token if token is not None else os.environ.get("R2_RELAY_TOKEN", ""),
                   R2Worker(transport=r2_transport, delays=retry_delays))
+    settings = download_settings or load_download_settings(download_config_path)
+    downloads = DownloadManager(
+        download_root or Path("/var/lib/r2-relay/downloads"), settings,
+        transport=download_transport,
+    )
+    state.downloads = downloads
+    app.state.downloads = downloads
     if not state.token:
         raise RuntimeError("R2_RELAY_TOKEN must be configured")
     app.state.relay = state
@@ -271,6 +293,64 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
         return {"status": "STAGED", "md5": entry.md5, "size": entry.size,
                 "execution_id": execution_id}
 
+    @app.post("/v1/downloads", status_code=202)
+    async def create_download(p: DownloadCreate, authorization: str | None = Header(default=None)):
+        authorize(authorization)
+        if p.schema_version != 1:
+            raise HTTPException(status_code=400, detail="unsupported download schema_version")
+        try:
+            task = await downloads.create(p.request_id, p.url, p.headers)
+        except DownloadError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"task_id": task.task_id, "status": task.status, "request_id": task.request_id}
+
+    @app.get("/v1/downloads/{task_id}")
+    async def download_manifest(task_id: str, authorization: str | None = Header(default=None)):
+        authorize(authorization)
+        try:
+            return downloads.manifest(downloads.get(task_id))
+        except DownloadError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    @app.get("/v1/downloads/{task_id}/parts/{part_number}")
+    async def download_part(task_id: str, part_number: int,
+                            authorization: str | None = Header(default=None)):
+        authorize(authorization)
+        try:
+            task, path, part = await downloads.acquire_part(task_id, part_number)
+        except DownloadError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        return StreamingResponse(
+            downloads.stream_file(task, path),
+            media_type="application/octet-stream",
+            headers={
+                "Content-Length": str(part["size"]),
+                "X-Part-SHA256": part["sha256"],
+                "X-Part-Number": str(part["part_number"]),
+            },
+        )
+
+    @app.get("/v1/downloads/{task_id}/body")
+    async def download_body(task_id: str, authorization: str | None = Header(default=None)):
+        authorize(authorization)
+        try:
+            task, path = await downloads.acquire_body(task_id)
+        except DownloadError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        return StreamingResponse(
+            downloads.stream_file(task, path),
+            media_type="application/octet-stream",
+            headers={"Content-Length": str(task.total_size)},
+        )
+
+    @app.delete("/v1/downloads/{task_id}")
+    async def delete_download(task_id: str, authorization: str | None = Header(default=None)):
+        authorize(authorization)
+        await downloads.delete(task_id)
+        return {"status": "DELETED", "task_id": task_id}
+
     @app.get("/v1/metrics")
     async def metrics(authorization: str | None = Header(default=None)):
         authorize(authorization)
@@ -284,6 +364,7 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
                 1 for item in state.executions.values()
                 if item["status"] in ("QUEUED", "RUNNING", "RETRY_WAIT")
             ),
+            "downloads": downloads.metrics(),
         }
 
     @app.get("/v1/executions/{execution_id}")
@@ -302,3 +383,4 @@ async def _cleanup_loop(state: State) -> None:
         await asyncio.sleep(1)
         state.store.cleanup()
         state.prune()
+        await state.downloads.cleanup()
