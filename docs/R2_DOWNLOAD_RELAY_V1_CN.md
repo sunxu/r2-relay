@@ -2,7 +2,7 @@
 
 - 需求编号：RLY-020～RLY-039
 - 跟踪任务：[Issue #63](https://github.com/sunxu/r2-relay/issues/63)
-- 状态：仓库负责人已确认设计基线；Stage 0 PoC 已通过；下载业务尚未实现、尚未部署 VPS。
+- 状态：仓库负责人已确认设计基线；Stage 0 PoC 已通过；Stage 1 VPS 核心已进入实现 PR；尚未部署 VPS。
 - 原则：下载是独立能力，不改变现有 UploadPart PUT 上传行为。
 
 ## 1. 目标
@@ -22,7 +22,9 @@
 
 VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、cache_ttl_seconds=600。Mac 的 [download] 配置段包含 max_concurrency=16、global_max_concurrency=32，并与现有上传配置共存。
 
-四个参数必须通过 TOML 加载、严格校验，不得硬编码或要求通过环境变量维护。Token、VPS 地址、TLS CA 等凭据和连接信息继续按现有安全方式管理。VPS manifest 是每个任务 Part 布局的唯一权威来源。
+VPS 使用 /etc/r2-relay/config.toml；默认 enabled=false。启用前必须根据 VPS 实际磁盘检查填写 max_cache_bytes、min_free_bytes、max_active_tasks、max_retained_tasks 和 max_waiters，未填写有效正值时 fail-closed。当前不臆造这些容量值，也不授权部署。Mac 配置路径为 ~/.config/r2-relay/config.toml。
+
+四个核心参数必须通过 TOML 加载、严格校验，不得硬编码或要求通过环境变量维护。Token、VPS 地址、TLS CA 等凭据和连接信息继续按现有安全方式管理。VPS manifest 是每个任务 Part 布局的唯一权威来源。
 
 ## 3. 请求和响应处理
 
@@ -59,14 +61,23 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 - **RLY-038 资源保护：** VPS 必须限制缓存磁盘预算、最低剩余空间、活动任务、Part 等待者和等待时间；Mac 必须限制小响应总内存和临时目录空间。具体容量值根据 VPS 磁盘检查和 Mac 内存测试确定，不臆造。
 - **RLY-039 隔离：** 下载有独立 API、任务状态、缓存目录、调度器和指标；不复用上传 MD5 缓存键、上传执行记录或上传 TTL。现有上传配置和行为不变。
 
-## 8. 逻辑 API
+## 8. VPS 下载 API（Stage 1）
 
-最终 URL 和 JSON schema 在实现 PR 冻结，逻辑上包括：
-1. 创建任务：提交原始 GET URL/headers 与 request_id，返回 task_id 和初始元数据。
-2. 查询 manifest：响应状态/头、任务状态、长度、Part 布局和 READY 状态。
-3. 获取 Part：按 task_id + part_number 请求；未 READY 时等待，READY 时返回完整 Part 和校验信息。
-4. 获取小响应 body：仅用于 <=24 MiB。
-5. 删除/取消任务：幂等，不破坏正在写入或读取的数据。
+所有端点使用现有 Relay Bearer 鉴权，并由 VPS HTTPS 入口提供服务。请求创建后由 VPS 直接向 R2 发起一次 GET；不会自动跟随重定向，也不会向 R2 发起并发 Range 请求。
+
+| 方法与路径 | 用途 | 行为 |
+|---|---|---|
+| POST /v1/downloads | 创建下载任务 | JSON 提交 schema_version、request_id、url、headers；返回 202 和 task_id。相同 request_id 与相同请求内容重试时返回原任务；相同 request_id 对应不同请求返回 409。 |
+| GET /v1/downloads/{task_id} | 查询 manifest | 返回状态、R2 状态码、端到端响应头、实际/声明长度、Part 列表、每片状态与 SHA-256、错误和过期时间。 |
+| GET /v1/downloads/{task_id}/parts/{part_number} | 获取 Part | READY 立即流式返回；尚未 READY 时等待，等待有总量上限和超时；只返回完整发布的 Part。 |
+| GET /v1/downloads/{task_id}/body | 获取小响应 | 等待任务 COMPLETE 后流式返回，仅适用于 <=24 MiB 的 small 模式。 |
+| DELETE /v1/downloads/{task_id} | 删除/取消任务 | 幂等；不会在上游 writer 或活动 Part reader 使用文件时删除。 |
+
+Part 写入使用 N.part.tmp；完整写入、fsync 并计算 SHA-256 后原子改名为 N.part，manifest 才把状态改为 READY。未知 Content-Length 的响应先写入不超过阈值的临时 spool；一旦超过 24 MiB，已暂存前缀转入 Part writer，随后继续消费同一条 R2 响应流。
+
+任务状态包括 QUEUED、RECEIVING、COMPLETE、FAILED、CANCELLED；Part 状态包括 WRITING、READY、FAILED。上游失败时清除未完成文件和已发布的局部 Part，不允许把局部内容作为成功对象交付。
+
+下载任务 manifest 与幂等索引目前保存在 VPS 进程内存。VPS 重启后旧 task_id 不恢复；启动时清理下载目录中的孤儿文件，客户端必须重新创建任务。该行为避免把重启前的未完成对象误判为可用数据。
 
 所有 VPS API 沿用现有 Relay Bearer 鉴权和 HTTPS。签名 URL 权限缓存不属于 v1。
 
@@ -109,12 +120,12 @@ VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、c
 ## 11. 实施阶段
 
 1. Stage 0：mitmproxy 磁盘响应 PoC，已通过 DL-T21（对应仓库总验收 T31）。
-2. Stage 1：VPS 任务状态、单 GET、流式 Part、manifest、等待式 Part API、TTL 和磁盘保护。
+2. Stage 1：VPS 任务状态、单 GET、流式 Part、manifest、等待式 Part API、TTL 和磁盘保护（实现中，见 VPS 核心实现 PR）。
 3. Stage 2：Mac GET 接管、TOML、16/32 调度、小响应内存和大响应磁盘组装。
 4. Stage 3：HTTP 语义、失败恢复、删除、Mock R2 全栈和上传回归。
 5. Stage 4：真实 R2 验收和性能测量。
 
-每阶段通过独立 PR 和 CI。生产 VPS 部署必须另行取得 Owner 明确授权；本需求不授权部署。
+每阶段通过独立 PR 和 CI。生产 VPS 部署必须另行取得仓库负责人明确授权；本需求不授权部署。
 
 ## 12. v1 不做
 
