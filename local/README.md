@@ -1,6 +1,6 @@
 # 本地 Python HTTPS 代理（开发分支）
 
-程序由 `python -m r2relay_local` 启动 mitmdump，并加载项目自己的 Python addon。默认监听 `127.0.0.1:18585`；只有 `*.r2.cloudflarestorage.com` 的 CONNECT 进入 TLS MITM，其他 HTTPS 原样隧道转发。目标域名中的非 UploadPart 请求不会进入缓存逻辑。
+程序由 `python -m r2relay_local` 启动 mitmdump，并加载项目自己的 Python addon。默认监听 `127.0.0.1:18585`；只有 `*.r2.cloudflarestorage.com` 的 CONNECT 进入 TLS MITM，其他 HTTPS 原样隧道转发。下载默认关闭；下载启用时接管 R2 GET，并将响应改写到仅监听 loopback 的磁盘响应服务。mitmproxy allow-hosts 同时允许 R2 endpoint 和 `127.0.0.1:<port>`，否则本地 Loopback 响应无法送回原始客户端。
 
 ## 运行
 
@@ -94,4 +94,4 @@ temp_dir = "~/.cache/r2-relay/downloads"
 
 Stage 2 的 Mock R2 全栈验收已覆盖 mitmproxy CONNECT、Caddy TLS/HTTP/2、VPS、16 MiB Part 组装和 Loopback 流式返回。真实 Cloudflare R2 验收必须在 VPS 下载服务部署并启用后，由操作者提供一条有效签名 GET 请求。
 
-操作步骤见 [真实 R2 GET 验收手册](../docs/R2_DOWNLOAD_REAL_R2_ACCEPTANCE_CN.md)。手册使用权限为 0600 的本地 JSON 请求描述文件；运行 `local/poc/real_r2_download_acceptance.py` 时只输出状态码、长度、SHA-256 和 HTTP 版本，不输出签名 URL 或请求头。该脚本不会在 CI 中运行，也不会部署或启用 VPS 下载服务。
+操作步骤见 [真实 R2 GET 验收手册](../docs/R2_DOWNLOAD_REAL_R2_ACCEPTANCE_CN.md)。手册先建立 25 MiB 对象的 R2 直连 Range 基线，再使用权限为 0600 的本地 JSON 请求描述文件运行 `local/poc/real_r2_download_acceptance.py`。脚本只输出状态码、长度、SHA-256、HTTP 版本及 VPS/本地清理结果，不输出签名 URL 或请求头；`PASS_REAL` 要求远端任务删除成功且本地临时资源释放。脚本直接验证 RelayClient → VPS → R2；随后手册还要求用 curl 经本地 18585 再完成一次真实 mitmproxy GET。该脚本不会在 CI 中运行，也不会部署或启用 VPS 下载服务。
