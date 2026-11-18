@@ -32,6 +32,8 @@ def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
     """
     with DEFAULT_CONFIG.open("rb") as stream:
         data = tomllib.load(stream)
+    if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
+        raise ValueError("unsupported VPS Relay config schema_version")
     path = config_path or SYSTEM_CONFIG
     if path.is_file():
         with path.open("rb") as stream:
