@@ -467,3 +467,88 @@ async def test_retained_task_limit_bounds_completed_manifests(tmp_path):
         await wait_complete(client, first.json()["task_id"], auth)
         second = await create(client, auth, request_id="retained-two")
         assert second.status_code == 503
+
+
+
+@pytest.mark.asyncio
+async def test_signed_request_headers_are_forwarded_without_httpx_defaults(tmp_path):
+    captured = []
+
+    def upstream(request):
+        captured.append(request)
+        return httpx.Response(200, content=b"ok")
+
+    app = create_app(
+        CacheStore(tmp_path / "upload"), token="test",
+        download_transport=httpx.MockTransport(upstream),
+        download_settings=settings(), download_root=tmp_path / "downloads",
+    )
+    manager = app.state.downloads
+    task = await manager.create(
+        "signed-headers",
+        R2_URL + "&X-Amz-Signature=do-not-leak",
+        [
+            ("Host", "abc.r2.cloudflarestorage.com"),
+            ("Authorization", "AWS4-HMAC-SHA256 Credential=redacted"),
+            ("Range", "bytes=0-1"),
+            ("If-Match", '"etag-1"'),
+        ],
+    )
+    for _ in range(500):
+        if task.status in {"COMPLETE", "FAILED"}:
+            break
+        await asyncio.sleep(0.002)
+    assert task.status == "COMPLETE"
+    headers = captured[0].headers
+    assert headers["authorization"] == "AWS4-HMAC-SHA256 Credential=redacted"
+    assert headers["range"] == "bytes=0-1"
+    assert headers["if-match"] == '"etag-1"'
+    assert "accept-encoding" not in headers
+    assert "user-agent" not in headers
+    assert "connection" not in headers
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_upstream_exception_manifest_does_not_expose_signed_url(tmp_path):
+    secret = "X-Amz-Signature=super-secret-signature"
+
+    def upstream(_request):
+        raise httpx.ConnectError(f"connection failed {secret}")
+
+    app = create_app(
+        CacheStore(tmp_path / "upload"), token="test",
+        download_transport=httpx.MockTransport(upstream),
+        download_settings=settings(), download_root=tmp_path / "downloads",
+    )
+    manager = app.state.downloads
+    task = await manager.create("secret-url", R2_URL + "?" + secret, [])
+    for _ in range(500):
+        if task.status in {"COMPLETE", "FAILED"}:
+            break
+        await asyncio.sleep(0.002)
+    manifest = manager.manifest(task)
+    assert manifest["status"] == "FAILED"
+    assert secret not in str(manifest)
+    assert manifest["error"]["message"] == "R2 下载失败；详细信息仅保留在受控服务端日志中"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_download_directory_is_exclusive_to_one_worker(tmp_path):
+    root = tmp_path / "downloads"
+    first = create_app(
+        CacheStore(tmp_path / "upload-a"), token="test",
+        download_settings=settings(), download_root=root,
+    )
+    with pytest.raises(RuntimeError, match="另一个 worker"):
+        create_app(
+            CacheStore(tmp_path / "upload-b"), token="test",
+            download_settings=settings(), download_root=root,
+        )
+    await first.state.downloads.close()
+    second = create_app(
+        CacheStore(tmp_path / "upload-c"), token="test",
+        download_settings=settings(), download_root=root,
+    )
+    await second.state.downloads.close()
