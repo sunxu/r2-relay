@@ -109,7 +109,7 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
         ("proxy", ["mitmdump", "--mode", "regular", "--listen-host", "127.0.0.1",
                    "--listen-port", str(proxy_port), "--set",
                    f"confdir={tmp_path / 'mitmconf'}", "--set", "upstream_cert=false",
-                   "--allow-hosts", r".*\.r2\.cloudflarestorage\.com(:443)?$",
+                   "--allow-hosts", r"(.*\.r2\.cloudflarestorage\.com(:443)?|127\.0\.0\.1(:[0-9]+)?)$",
                    "-s", str(root / "local" / "addon_entry.py")]),
     ]
     envs = [mock_env, vps_env, dict(os.environ), proxy_env]
