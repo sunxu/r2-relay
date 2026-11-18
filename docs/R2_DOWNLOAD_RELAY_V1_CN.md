@@ -2,7 +2,7 @@
 
 - 需求编号：RLY-020～RLY-039
 - 跟踪任务：[Issue #63](https://github.com/sunxu/r2-relay/issues/63)
-- 状态：仓库负责人已确认设计基线；Stage 0 PoC 已通过；Stage 1 VPS 核心已进入实现 PR；尚未部署 VPS。
+- 状态：仓库负责人已确认设计基线；Stage 0 PoC 已通过；Stage 1 VPS 核心已合并（PR #66，45 项 VPS 测试及 7 个 Actions 流程通过）；Stage 2 Mac 客户端实现中（Draft PR #67）；尚未部署 VPS。
 - 原则：下载是独立能力，不改变现有 UploadPart PUT 上传行为。
 
 ## 1. 目标
@@ -120,8 +120,8 @@ Part 写入使用 N.part.tmp；完整写入、fsync 并计算 SHA-256 后原子�
 ## 11. 实施阶段
 
 1. Stage 0：mitmproxy 磁盘响应 PoC，已通过 DL-T21（对应仓库总验收 T31）。
-2. Stage 1：VPS 任务状态、单 GET、流式 Part、manifest、等待式 Part API、TTL 和磁盘保护（实现中，见 VPS 核心实现 PR）。
-3. Stage 2：Mac GET 接管、TOML、16/32 调度、小响应内存和大响应磁盘组装。
+2. Stage 1：VPS 任务状态、单 GET、流式 Part、manifest、等待式 Part API、TTL 和磁盘保护（已合并 PR #66；VPS 45 项测试及 7 个 Actions 流程通过；未部署）。
+3. Stage 2：Mac GET 接管、TOML、16/32 调度、小响应内存和大响应磁盘组装（实现中，见 Draft PR #67）。
 4. Stage 3：HTTP 语义、失败恢复、删除、Mock R2 全栈和上传回归。
 5. Stage 4：真实 R2 验收和性能测量。
 
