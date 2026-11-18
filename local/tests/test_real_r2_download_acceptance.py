@@ -1,3 +1,5 @@
+import asyncio
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -76,3 +78,63 @@ def test_real_r2_hash_result_supports_memory_and_disk(tmp_path):
     path.write_bytes(body)
     disk_result = SimpleNamespace(body=None, path=path)
     assert MODULE.hash_result(disk_result) == (size, digest)
+
+
+
+def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
+    tmp_path, monkeypatch, capsys
+):
+    data = valid_spec()
+    body = b"real-r2-acceptance-fixture"
+    data["expected_status_code"] = 206
+    data["expected_size"] = len(body)
+    data["expected_sha256"] = hashlib.sha256(body).hexdigest()
+    path = tmp_path / "private.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    path.chmod(0o600)
+
+    monkeypatch.setenv("R2_RELAY_REAL_GET_SPEC", str(path))
+    monkeypatch.setenv("R2_RELAY_VPS_URL", "https://relay.example:8443")
+    monkeypatch.setenv("R2_RELAY_TOKEN", "test-token")
+
+    class FakeRelay:
+        def __init__(self, endpoint, token):
+            self.download_http_versions = ["HTTP/2", "HTTP/2"]
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class FakeCoordinator:
+        def __init__(self, relay, settings):
+            self.closed = False
+            self.relay = relay
+
+        async def download(self, url, headers):
+            assert url == data["url"]
+            assert headers[0] == ("Range", "bytes=0-3")
+
+            async def cleanup():
+                return None
+
+            return SimpleNamespace(
+                status_code=206, body=body, path=None, cleanup=cleanup
+            )
+
+        async def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(
+        MODULE, "load_settings", lambda: SimpleNamespace(download_enabled=True)
+    )
+    monkeypatch.setattr(MODULE, "RelayClient", FakeRelay)
+    monkeypatch.setattr(MODULE, "DownloadCoordinator", FakeCoordinator)
+
+    exit_code = asyncio.run(MODULE.run())
+    report = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert report["status"] == "PASS_REAL"
+    assert report["http_status"] == 206
+    assert report["mac_to_vps_http_versions"] == ["HTTP/2"]
+    assert report["expected_sha256_match"] is True
+    assert report["signed_url_or_headers_logged"] is False
