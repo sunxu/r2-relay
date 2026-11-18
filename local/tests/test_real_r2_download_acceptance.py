@@ -49,7 +49,7 @@ def test_real_r2_spec_loads_only_from_exact_0600_file(tmp_path, monkeypatch):
         ("expected_status_code", 99),
         ("expected_size", -1),
         ("expected_sha256", "not-a-digest"),
-        ("headers", [["Authorization", "bad\\nheader"]]),
+        ("headers", [["Authorization", "bad" + chr(10) + "header"]]),
     ],
 )
 def test_real_r2_spec_rejects_invalid_fields(tmp_path, monkeypatch, field, value):
