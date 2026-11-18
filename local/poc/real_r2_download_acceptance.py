@@ -123,6 +123,8 @@ async def run() -> int:
         size_ok = actual_size == spec["expected_size"]
         digest_ok = actual_sha256 == spec["expected_sha256"]
         passed = status_ok and size_ok and digest_ok
+        actual_status = result.status_code
+        http_versions = sorted(set(relay.download_http_versions))
         if result.cleanup is not None:
             await result.cleanup()
         result = None
@@ -133,7 +135,7 @@ async def run() -> int:
         report = {
             "schema": "r2_relay_real_get_acceptance_v1",
             "status": "PASS_REAL" if passed else "FAIL_REAL",
-            "http_status": result.status_code,
+            "http_status": actual_status,
             "expected_status": spec["expected_status_code"],
             "actual_size": actual_size,
             "expected_size": spec["expected_size"],
@@ -141,7 +143,7 @@ async def run() -> int:
             "expected_sha256_match": digest_ok,
             "size_match": size_ok,
             "status_match": status_ok,
-            "mac_to_vps_http_versions": sorted(set(relay.download_http_versions)),
+            "mac_to_vps_http_versions": http_versions,
             "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
             "signed_url_or_headers_logged": False,
         }
