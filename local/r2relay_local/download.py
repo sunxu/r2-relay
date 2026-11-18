@@ -100,7 +100,10 @@ class DownloadCoordinator:
         size = int(manifest["total_size"])
         if size > 24 * 1024 * 1024:
             raise DownloadRelayError("VPS 将大响应错误标记为 small 模式")
-        await self.memory_budget.acquire(size)
+        await asyncio.wait_for(
+            self.memory_budget.acquire(size),
+            timeout=self.relay.execution_timeout,
+        )
         try:
             async with self.global_semaphore:
                 body = await self.relay.download_body(task_id, max_bytes=24 * 1024 * 1024)
@@ -189,7 +192,9 @@ class DownloadCoordinator:
             f"Part {number} 在 3 次尝试后仍未成功：{type(last_error).__name__ if last_error else 'Unknown'}"
         )
 
-    async def _download_large(self, task_id: str, manifest: dict) -> DownloadResult:
+    async def _download_large(
+        self, task_id: str, manifest: dict, *, deadline: float
+    ) -> DownloadResult:
         fd, raw_path = tempfile.mkstemp(prefix="r2-download-", suffix=".bin", dir=self.root)
         path = Path(raw_path)
         os.fchmod(fd, 0o600)
@@ -201,6 +206,8 @@ class DownloadCoordinator:
         reserved_total = 0
         try:
             while True:
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise DownloadRelayError("等待 VPS 分片和本地取回超时")
                 manifest = await self.relay.download_manifest(task_id)
                 status = manifest["status"]
                 if status in {"FAILED", "CANCELLED"}:
@@ -219,7 +226,11 @@ class DownloadCoordinator:
                     if reserved_total == 0:
                         if shutil.disk_usage(self.root).free < expected_size:
                             raise DownloadCapacityError("Mac 临时磁盘可用空间不足")
-                        await self.disk_budget.acquire(expected_size)
+                        remaining = deadline - asyncio.get_running_loop().time()
+                        await asyncio.wait_for(
+                            self.disk_budget.acquire(expected_size),
+                            timeout=max(0.001, remaining),
+                        )
                         reserved_total = expected_size
                 elif observed_size > self.settings.download_max_temp_bytes:
                     raise DownloadCapacityError("未知长度响应超过 Mac 临时磁盘预算")
@@ -233,7 +244,11 @@ class DownloadCoordinator:
                         raise DownloadCapacityError("大响应超过 Mac 临时磁盘预算")
                     if shutil.disk_usage(self.root).free < total_size_for_reserve:
                         raise DownloadCapacityError("Mac 临时磁盘可用空间不足")
-                    await self.disk_budget.acquire(total_size_for_reserve)
+                    remaining = deadline - asyncio.get_running_loop().time()
+                    await asyncio.wait_for(
+                        self.disk_budget.acquire(total_size_for_reserve),
+                        timeout=max(0.001, remaining),
+                    )
                     reserved_total = total_size_for_reserve
 
                 if can_fetch:
@@ -264,7 +279,11 @@ class DownloadCoordinator:
                     if int(manifest.get("ready_part_count", -1)) != len(parts):
                         raise DownloadRelayError("VPS 任务 COMPLETE，但仍有 Part 未 READY")
                     if inflight:
-                        await asyncio.gather(*inflight.values())
+                        remaining = deadline - asyncio.get_running_loop().time()
+                        await asyncio.wait_for(
+                            asyncio.gather(*inflight.values()),
+                            timeout=max(0.001, remaining),
+                        )
                         fetched.update(inflight)
                         inflight.clear()
                     if len(fetched) != len(parts):
@@ -348,7 +367,9 @@ class DownloadCoordinator:
                 if mode == "small" and status == "COMPLETE":
                     return await self._download_small(task_id, manifest)
                 if mode == "parts":
-                    return await self._download_large(task_id, manifest)
+                    return await self._download_large(
+                        task_id, manifest, deadline=deadline
+                    )
                 await asyncio.sleep(self.relay.poll_interval)
             raise DownloadRelayError("等待 VPS R2 GET 任务超时")
         except asyncio.CancelledError:
