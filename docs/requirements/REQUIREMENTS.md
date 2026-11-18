@@ -40,3 +40,14 @@
 
 ## 部署参数
 本地监听 `127.0.0.1:18585`，VPS HTTPS `:8443`（443 已占用）；VPS 地址、TLS 证书、Token、缓存容量与路径由部署环境提供，不提交真实密钥。
+
+
+## R2 Download Relay v1（独立能力）
+
+下载需求和验收基线单独维护，避免改变既有 UploadPart PUT 需求：
+
+- [R2 Download Relay v1 技术需求与验收标准](R2_DOWNLOAD_RELAY_V1_CN.md)
+- 跟踪任务：[Issue #63](https://github.com/sunxu/r2-relay/issues/63)
+- 状态：Owner 已确认设计；尚未实现、尚未部署。
+- 固定参数：VPS Part 大小 16 MiB、分片阈值严格大于 24 MiB；Mac 单文件并发 16、全局并发 32。四项均由 TOML 配置管理。
+- 下载与上传隔离：不改变现有上传 MD5 缓存、1800 秒上传 TTL 和上传配置默认值。
