@@ -150,6 +150,12 @@ class DownloadCoordinator:
         await self.disk_budget.acquire(size)
         retained = False
         try:
+            if shutil.disk_usage(self.root).free < size:
+                raise DownloadCapacityError("Mac 临时磁盘可用空间不足")
+        except BaseException:
+            await self.disk_budget.release(size)
+            raise
+        try:
             last_error: Exception | None = None
             for attempt in range(3):
                 digest = hashlib.sha256()
