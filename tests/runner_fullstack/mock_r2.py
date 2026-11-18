@@ -114,7 +114,7 @@ async def download_object(request: Request):
             "range": raw_range,
             "signed_marker": request.headers.get("x-test-signed-marker"),
             "authorization_present": bool(request.headers.get("authorization")),
-        }, sort_keys=True) + "\\n")
+        }, sort_keys=True) + "\n")
     return StreamingResponse(
         chunks(), status_code=206, headers=headers,
         media_type="application/octet-stream",
