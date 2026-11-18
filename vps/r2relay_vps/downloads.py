@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import json
 import os
@@ -221,11 +222,28 @@ class DownloadManager:
         self.used_bytes = 0
         self.waiter_count = 0
         self.lock = asyncio.Lock()
+        self._process_lock = None
         if settings.enabled:
-            self.root.mkdir(parents=True, exist_ok=True)
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if self.root.is_symlink():
+                raise RuntimeError("VPS 下载缓存目录不得是符号链接")
+            os.chmod(self.root, 0o700)
+            lock_path = self.root / ".process.lock"
+            self._process_lock = lock_path.open("a+b")
+            try:
+                fcntl.flock(self._process_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                self._process_lock.close()
+                self._process_lock = None
+                raise RuntimeError(
+                    "VPS 下载缓存目录已被另一个 worker 使用；下载管理器要求单进程独占"
+                ) from exc
+            os.chmod(lock_path, 0o600)
             # Task manifests are in-memory only. Remove orphaned task directories
             # from a previous process before accepting work and resetting budgets.
             for child in self.root.iterdir():
+                if child.name == ".process.lock":
+                    continue
                 if child.is_dir() and not child.is_symlink():
                     shutil.rmtree(child, ignore_errors=True)
                 elif child.is_file() or child.is_symlink():
@@ -296,8 +314,8 @@ class DownloadManager:
         try:
             timeout = httpx.Timeout(120.0, connect=15.0, read=120.0, write=30.0)
             async with httpx.AsyncClient(
-                transport=self.transport, follow_redirects=False,
-                timeout=timeout, trust_env=False,
+                transport=self.transport, headers=[],
+                follow_redirects=False, timeout=timeout, trust_env=False,
             ) as client:
                 async with client.stream(
                     "GET", task.url, headers=task.request_headers
@@ -386,7 +404,11 @@ class DownloadManager:
             raise
         except Exception as exc:
             task.status = "FAILED"
-            task.error = {"type": type(exc).__name__, "message": str(exc)}
+            # HTTP client exception strings may include a signed URL.
+            task.error = {
+                "type": type(exc).__name__,
+                "message": "R2 下载失败；详细信息仅保留在受控服务端日志中",
+            }
             task.expires_at = self.clock()
         finally:
             if body_file is not None:
@@ -429,10 +451,12 @@ class DownloadManager:
         async with task.condition:
             if predicate():
                 return
-            if self.waiter_count >= self.settings.max_waiters:
-                raise DownloadCapacity("VPS Part 等待连接数已达上限")
-            self.waiter_count += 1
-            task.waiters += 1
+            # 全局等待者上限跨任务共享，必须在管理器锁下预留名额。
+            async with self.lock:
+                if self.waiter_count >= self.settings.max_waiters:
+                    raise DownloadCapacity("VPS Part 等待连接数已达上限")
+                self.waiter_count += 1
+                task.waiters += 1
             try:
                 await asyncio.wait_for(
                     task.condition.wait_for(predicate),
@@ -441,7 +465,8 @@ class DownloadManager:
             except asyncio.TimeoutError as exc:
                 raise DownloadWaitTimeout("等待 Part 就绪超时") from exc
             finally:
-                self.waiter_count -= 1
+                async with self.lock:
+                    self.waiter_count -= 1
                 task.waiters -= 1
         if task.status in {"FAILED", "CANCELLED"}:
             raise DownloadFailed("R2 上游下载失败或已取消")
@@ -457,8 +482,10 @@ class DownloadManager:
 
         await self._wait(task, ready, part_number=part_number)
         part = next((p for p in task.parts if p["part_number"] == part_number), None)
-        if part is None or task.status in {"FAILED", "CANCELLED"}:
-            raise DownloadFailed("请求的 Part 不可用")
+        if task.status in {"FAILED", "CANCELLED"}:
+            raise DownloadFailed("R2 上游下载失败或已取消")
+        if part is None:
+            raise DownloadNotFound("请求的 Part 编号不存在")
         task.active_readers += 1
         task.last_access = self.clock()
         if task.status == "COMPLETE":
@@ -536,6 +563,14 @@ class DownloadManager:
             self.tasks.pop(task.task_id, None)
             self.request_index.pop(task.request_id, None)
         return len(expired)
+
+    async def close(self) -> None:
+        if self._process_lock is not None:
+            try:
+                fcntl.flock(self._process_lock.fileno(), fcntl.LOCK_UN)
+            finally:
+                self._process_lock.close()
+                self._process_lock = None
 
     def metrics(self) -> dict:
         return {
