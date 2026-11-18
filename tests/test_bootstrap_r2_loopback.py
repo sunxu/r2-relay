@@ -10,16 +10,13 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 
-def test_upgrade_scope_includes_both_legacy_inspectors():
+def test_upgrade_scope_contains_only_current_runtime_control_modules():
     assert set(module.FILES) == {
         "ops/r2_rootd.py",
         "ops/r2_loopback_control.py",
         "ops/r2relay_deploy_receiver.py",
         "ops/generic_vps_mcp.py",
-        "ops/deployment_inspect.py",
     }
-    assert module.FILES["ops/deployment_inspect.py"] == Path(
-        "/opt/r2-relay/scripts/deployment_inspect.py")
     assert module.SERVICES == ("r2-rootd.service", "r2-mcp.service")
 
 
