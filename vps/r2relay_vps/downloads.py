@@ -127,11 +127,19 @@ class PartWriter:
         self.digest = hashlib.sha256()
         self.file = None
         self.tmp_path: Path | None = None
+        self.part_record: dict | None = None
 
     async def _open(self) -> None:
         if self.file is None:
             self.tmp_path = self.task.directory / f"{self.number}.part.tmp"
             self.file = self.tmp_path.open("xb")
+            self.part_record = {
+                "part_number": self.number,
+                "size": 0,
+                "sha256": None,
+                "status": "WRITING",
+            }
+            self.task.parts.append(self.part_record)
 
     async def write(self, data: bytes, *, reserve: bool = True) -> None:
         offset = 0
@@ -167,17 +175,15 @@ class PartWriter:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
-        self.task.parts.append({
-            "part_number": self.number,
-            "size": self.size,
-            "sha256": self.digest.hexdigest(),
-            "status": "READY",
-        })
+        self.part_record["size"] = self.size
+        self.part_record["sha256"] = self.digest.hexdigest()
+        self.part_record["status"] = "READY"
         self.number += 1
         self.size = 0
         self.digest = hashlib.sha256()
         self.file = None
         self.tmp_path = None
+        self.part_record = None
         async with self.task.condition:
             self.task.condition.notify_all()
 
@@ -192,6 +198,9 @@ class PartWriter:
         if self.tmp_path is not None:
             self.tmp_path.unlink(missing_ok=True)
             self.tmp_path = None
+        if self.part_record is not None:
+            self.part_record["status"] = "FAILED"
+            self.part_record = None
 
 
 class DownloadManager:
@@ -404,6 +413,7 @@ class DownloadManager:
             "expected_size": task.expected_size,
             "part_size_bytes": self.settings.part_size_bytes,
             "part_count": len(task.parts),
+            "ready_part_count": sum(part["status"] == "READY" for part in task.parts),
             "parts": [dict(part) for part in task.parts],
             "error": task.error,
             "expires_at": task.expires_at,
@@ -535,7 +545,10 @@ class DownloadManager:
                 task.status in {"QUEUED", "RECEIVING"} for task in self.tasks.values()
             ),
             "retained_task_limit": self.settings.max_retained_tasks,
-            "ready_part_count": sum(len(task.parts) for task in self.tasks.values()),
+            "ready_part_count": sum(
+                part["status"] == "READY"
+                for task in self.tasks.values() for part in task.parts
+            ),
             "cached_bytes": self.used_bytes,
             "active_readers": sum(task.active_readers for task in self.tasks.values()),
             "waiters": self.waiter_count,
