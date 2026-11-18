@@ -64,6 +64,7 @@ class DownloadCoordinator:
         self.disk_budget = WeightedBudget(settings.download_max_temp_bytes)
         self.root = settings.download_temp_dir
         self.active: set[asyncio.Task] = set()
+        self.remote_cleanup_failures = 0
         self._closed = False
         self._process_lock = None
         if settings.download_enabled:
@@ -89,12 +90,14 @@ class DownloadCoordinator:
                 elif child.is_file() or child.is_symlink():
                     child.unlink(missing_ok=True)
 
-    async def _delete_remote(self, task_id: str) -> None:
+    async def _delete_remote(self, task_id: str) -> bool:
         try:
             await self.relay.download_delete(task_id)
+            return True
         except Exception:
-            # VPS 600 秒空闲 TTL 是清理兜底。
-            pass
+            # VPS 600 秒空闲 TTL 是清理兜底；记录失败供验收与指标使用。
+            self.remote_cleanup_failures += 1
+            return False
 
     async def _download_small(self, task_id: str, manifest: dict) -> DownloadResult:
         size = int(manifest["total_size"])
