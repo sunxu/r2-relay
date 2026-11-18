@@ -214,6 +214,13 @@ class DownloadManager:
         self.lock = asyncio.Lock()
         if settings.enabled:
             self.root.mkdir(parents=True, exist_ok=True)
+            # Task manifests are in-memory only. Remove orphaned task directories
+            # from a previous process before accepting work and resetting budgets.
+            for child in self.root.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child, ignore_errors=True)
+                elif child.is_file() or child.is_symlink():
+                    child.unlink(missing_ok=True)
 
     @staticmethod
     def _fingerprint(url: str, headers: list[tuple[str, str]]) -> str:
@@ -240,6 +247,8 @@ class DownloadManager:
                          if item.status in {"QUEUED", "RECEIVING"})
             if active >= self.settings.max_active_tasks:
                 raise DownloadCapacity("VPS 下载活动任务数已达上限")
+            if len(self.tasks) >= self.settings.max_retained_tasks:
+                raise DownloadCapacity("VPS 下载任务记录数已达上限，请等待 TTL 清理")
             task_id = secrets.token_urlsafe(24)
             directory = self.root / task_id
             directory.mkdir(mode=0o700)
@@ -525,6 +534,7 @@ class DownloadManager:
             "active_task_count": sum(
                 task.status in {"QUEUED", "RECEIVING"} for task in self.tasks.values()
             ),
+            "retained_task_limit": self.settings.max_retained_tasks,
             "ready_part_count": sum(len(task.parts) for task in self.tasks.values()),
             "cached_bytes": self.used_bytes,
             "active_readers": sum(task.active_readers for task in self.tasks.values()),
