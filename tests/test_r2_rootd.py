@@ -37,41 +37,64 @@ def test_fixed_command_argv(monkeypatch):
     assert all("sing-box" not in " ".join(c) for c in commands)
 
 
-def test_unified_deployment_status_uses_fixed_read_only_scripts(monkeypatch):
+def test_unified_deployment_status_uses_only_the_fixed_service_verifier(monkeypatch):
     calls = []
-    inspection = {"schema": "r2_relay_deployment_inspect_readonly_v2",
-                  "current_release": {"status": "VALID", "commit": "a" * 40},
-                  "files": {"/etc/r2-relay/vps.env": {"exists": True}},
-                  "systemd": {"release_layout": True}}
-    verification = {"status": "SERVICE_VERIFY_PASS", "release_commit": "a" * 40,
-                    "env_exists": True, "token_emitted": False}
+    verification = {
+        "status": "SERVICE_VERIFY_PASS",
+        "release_commit": "a" * 40,
+        "env_exists": True,
+        "service_state": "active",
+        "token_emitted": False,
+    }
+
     def fake(argv, timeout=180, max_output=2500):
         calls.append(argv)
-        payload = inspection if "deployment_inspect.py" in argv[1] else verification
-        return {"exit_code": 0, "stdout": __import__("json").dumps(payload), "stderr": ""}
+        return {"exit_code": 0, "stdout": __import__("json").dumps(verification), "stderr": ""}
+
     monkeypatch.setattr(daemon, "run", fake)
     result = daemon.execute("r2_deployment_status")
     assert result["schema"] == "r2_relay_unified_deployment_status_v1"
     assert result["status"] == "UNIFIED_DEPLOYMENT_STATUS_PASS"
     assert result["release_matches"] is True
     assert result["environment_file_exists"] is True
+    assert result["release_commit"] == "a" * 40
     assert result["modified"] is False and result["token_emitted"] is False
-    assert calls == [["/usr/bin/python3", "/opt/r2-relay/scripts/deployment_inspect.py"],
-                     ["/usr/bin/python3", "/usr/local/libexec/r2_loopback_control.py"]]
+    assert result["real_r2_tested"] is False
+    assert calls == [["/usr/bin/python3", "/usr/local/libexec/r2_loopback_control.py"]]
 
 
-def test_unified_deployment_status_fails_on_environment_conflict(monkeypatch):
-    inspection = {"current_release": {"status": "VALID", "commit": "a" * 40},
-                  "files": {"/etc/r2-relay/vps.env": {"exists": False}},
-                  "systemd": {"release_layout": True}}
-    verification = {"status": "SERVICE_VERIFY_PASS", "release_commit": "a" * 40,
-                    "env_exists": True, "token_emitted": False}
-    def fake(argv, timeout=180, max_output=2500):
-        payload = inspection if "deployment_inspect.py" in argv[1] else verification
-        return {"exit_code": 0, "stdout": __import__("json").dumps(payload), "stderr": ""}
-    monkeypatch.setattr(daemon, "run", fake)
+def test_unified_deployment_status_fails_closed_on_verification_failure(monkeypatch):
+    verification = {
+        "status": "LOOPBACK_CONTROL_FAILED",
+        "reason": "environment_file_missing",
+        "env_exists": False,
+        "token_emitted": False,
+    }
+
+    monkeypatch.setattr(
+        daemon, "run",
+        lambda argv, timeout=180, max_output=2500: {
+            "exit_code": 1,
+            "stdout": __import__("json").dumps(verification),
+            "stderr": "",
+        },
+    )
     result = daemon.execute("r2_deployment_status")
     assert result["status"] == "UNIFIED_DEPLOYMENT_STATUS_FAILED"
-    assert result["release_matches"] is True
+    assert result["release_matches"] is False
     assert result["environment_file_exists"] is False
+    assert result["reason"] == "environment_file_missing"
+    assert result["modified"] is False
+
+
+def test_unified_deployment_status_fails_closed_on_invalid_output(monkeypatch):
+    monkeypatch.setattr(
+        daemon, "run",
+        lambda argv, timeout=180, max_output=2500: {
+            "exit_code": 0, "stdout": "not-json", "stderr": "",
+        },
+    )
+    result = daemon.execute("r2_deployment_status")
+    assert result["status"] == "UNIFIED_DEPLOYMENT_STATUS_FAILED"
+    assert result["reason"] == "service_verification_output_invalid"
     assert result["modified"] is False
