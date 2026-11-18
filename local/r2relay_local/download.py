@@ -147,16 +147,9 @@ class DownloadCoordinator:
         if number < 1 or size <= 0 or size > part_size_bytes:
             raise DownloadRelayError("VPS manifest 中的 Part 尺寸无效")
 
-        await self.disk_budget.acquire(size)
-        retained = False
-        try:
-            if shutil.disk_usage(self.root).free < size:
-                raise DownloadCapacityError("Mac 临时磁盘可用空间不足")
-        except BaseException:
-            await self.disk_budget.release(size)
-            raise
-        try:
-            last_error: Exception | None = None
+        if shutil.disk_usage(self.root).free < size:
+            raise DownloadCapacityError("Mac 临时磁盘可用空间不足")
+        last_error: Exception | None = None
             for attempt in range(3):
                 digest = hashlib.sha256()
                 received = 0
@@ -187,7 +180,6 @@ class DownloadCoordinator:
                     if digest.hexdigest() != expected_hash:
                         raise DownloadRelayError("Part SHA-256 校验失败")
                     held_parts[number] = size
-                    retained = True
                     return
                 except (httpx.TransportError, httpx.TimeoutException, DownloadRelayError, ValueError) as exc:
                     last_error = exc
@@ -197,8 +189,7 @@ class DownloadCoordinator:
                 f"Part {number} 在 3 次尝试后仍未成功：{type(last_error).__name__ if last_error else 'Unknown'}"
             )
         finally:
-            if not retained:
-                await self.disk_budget.release(size)
+            pass
 
     async def _download_large(self, task_id: str, manifest: dict) -> DownloadResult:
         fd, raw_path = tempfile.mkstemp(prefix="r2-download-", suffix=".bin", dir=self.root)
@@ -209,6 +200,7 @@ class DownloadCoordinator:
         fetched: set[int] = set()
         per_file_semaphore = asyncio.Semaphore(self.settings.download_max_concurrency)
         succeeded = False
+        reserved_total = 0
         try:
             while True:
                 manifest = await self.relay.download_manifest(task_id)
@@ -218,7 +210,36 @@ class DownloadCoordinator:
                 if manifest.get("mode") not in (None, "parts"):
                     raise DownloadRelayError("VPS manifest 响应模式在下载期间发生变化")
 
-                for part in manifest.get("parts", []):
+                expected_size = manifest.get("expected_size")
+                observed_size = int(manifest.get("total_size", 0))
+                if expected_size is not None:
+                    expected_size = int(expected_size)
+                    if expected_size > self.settings.download_max_temp_bytes:
+                        raise DownloadCapacityError("大响应超过 Mac 临时磁盘预算")
+                    if observed_size > expected_size:
+                        raise DownloadRelayError("VPS 实际响应长度超过声明长度")
+                    if reserved_total == 0:
+                        if shutil.disk_usage(self.root).free < expected_size:
+                            raise DownloadCapacityError("Mac 临时磁盘可用空间不足")
+                        await self.disk_budget.acquire(expected_size)
+                        reserved_total = expected_size
+                elif observed_size > self.settings.download_max_temp_bytes:
+                    raise DownloadCapacityError("未知长度响应超过 Mac 临时磁盘预算")
+
+                # 未知长度响应先等 VPS COMPLETE，确定总长度后一次性预留，
+                # 避免多个未知长度任务各自占用部分预算而互相等待。
+                can_fetch = expected_size is not None or status == "COMPLETE"
+                if can_fetch and status == "COMPLETE" and reserved_total == 0:
+                    total_size_for_reserve = int(manifest["total_size"])
+                    if total_size_for_reserve > self.settings.download_max_temp_bytes:
+                        raise DownloadCapacityError("大响应超过 Mac 临时磁盘预算")
+                    if shutil.disk_usage(self.root).free < total_size_for_reserve:
+                        raise DownloadCapacityError("Mac 临时磁盘可用空间不足")
+                    await self.disk_budget.acquire(total_size_for_reserve)
+                    reserved_total = total_size_for_reserve
+
+                if can_fetch:
+                    for part in manifest.get("parts", []):
                     number = int(part["part_number"])
                     if (
                         part.get("status") == "READY"
@@ -281,7 +302,7 @@ class DownloadCoordinator:
                             return
                         released = True
                         path.unlink(missing_ok=True)
-                        await self.disk_budget.release(sum(held_parts.values()))
+                        await self.disk_budget.release(reserved_total)
 
                     return DownloadResult(
                         status_code=int(manifest["status_code"]),
@@ -303,8 +324,8 @@ class DownloadCoordinator:
                 os.close(fd)
             if not succeeded:
                 path.unlink(missing_ok=True)
-                if held_parts:
-                    await self.disk_budget.release(sum(held_parts.values()))
+                if reserved_total:
+                    await self.disk_budget.release(reserved_total)
 
     async def download(self, url: str, headers: list[tuple[str, str]]) -> DownloadResult:
         if not self.settings.download_enabled:
