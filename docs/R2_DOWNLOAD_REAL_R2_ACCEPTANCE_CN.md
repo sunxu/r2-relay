@@ -180,8 +180,8 @@ PYTHONPATH=local python local/poc/real_r2_download_acceptance.py
 完成后关闭下载功能或恢复原配置，并删除私有请求文件及本地基线文件：
 
 ```bash
-rm -f ~/.config/r2-relay/private/real-get-spec.json \\
-  "$HOME/r2-relay-25mib.bin" "$HOME/r2-relay-25mib-direct.bin" \\
+rm -f ~/.config/r2-relay/private/real-get-spec.json \
+  "$HOME/r2-relay-25mib.bin" "$HOME/r2-relay-25mib-direct.bin" \
   "$HOME/r2-relay-25mib-direct.headers"
 ```
 
