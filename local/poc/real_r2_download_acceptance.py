@@ -31,7 +31,7 @@ def load_spec() -> dict:
         raise ValueError("R2_RELAY_REAL_GET_SPEC is required")
     path = Path(raw_path).expanduser()
     info = path.stat()
-    if stat.S_IMODE(info.st_mode) & 0o077:
+    if stat.S_IMODE(info.st_mode) != 0o600:
         raise ValueError("private request spec must have mode 0600")
     data = json.loads(path.read_text(encoding="utf-8"))
     if set(data) != {
