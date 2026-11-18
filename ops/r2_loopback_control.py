@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Root-side verification/start for both the legacy and GitHub-release layouts."""
+"""Root-side verification/start for the GitHub-release layout."""
 from __future__ import annotations
 import argparse
 import json
@@ -15,7 +15,6 @@ from urllib.request import build_opener, ProxyHandler
 UNIT = Path("/etc/systemd/system/r2-relay-vps.service")
 RELEASES = Path("/opt/r2-relay-releases")
 CURRENT = Path("/opt/r2-relay-current")
-LEGACY_SOURCE = Path("/opt/r2-relay/deploy/vps.service")
 ENV_DIR = Path("/etc/r2-relay")
 ENV_FILE = ENV_DIR / "vps.env"
 CACHE = Path("/var/lib/r2-relay/cache")

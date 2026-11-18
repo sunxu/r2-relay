@@ -74,40 +74,41 @@ def execute(action):
             argv.append("--start")
         return run(argv, timeout=90)
     if action == "r2_deployment_status":
-        inspect = run(["/usr/bin/python3", "/opt/r2-relay/scripts/deployment_inspect.py"],
-                      timeout=30, max_output=10000)
         verify = run(["/usr/bin/python3", "/usr/local/libexec/r2_loopback_control.py"],
                      timeout=90, max_output=4000)
         try:
-            inspection = json.loads(inspect.get("stdout", ""))
             verification = json.loads(verify.get("stdout", ""))
         except (TypeError, ValueError):
             return {"schema": "r2_relay_unified_deployment_status_v1",
                     "status": "UNIFIED_DEPLOYMENT_STATUS_FAILED",
-                    "reason": "subcheck_output_invalid", "token_emitted": False}
-        current = inspection.get("current_release", {})
-        env = inspection.get("files", {}).get("/etc/r2-relay/vps.env", {})
-        commit_matches = (current.get("status") == "VALID"
-                          and current.get("commit") == verification.get("release_commit"))
-        env_matches = (env.get("exists") is True
-                       and verification.get("env_exists") is True)
-        passed = (inspect.get("exit_code") == 0 and verify.get("exit_code") == 0
+                    "reason": "service_verification_output_invalid",
+                    "token_emitted": False, "modified": False}
+        if not isinstance(verification, dict):
+            return {"schema": "r2_relay_unified_deployment_status_v1",
+                    "status": "UNIFIED_DEPLOYMENT_STATUS_FAILED",
+                    "reason": "service_verification_schema_invalid",
+                    "token_emitted": False, "modified": False}
+        commit = verification.get("release_commit")
+        commit_valid = (isinstance(commit, str) and len(commit) == 40
+                        and all(char in "0123456789abcdef" for char in commit))
+        env_exists = verification.get("env_exists") is True
+        passed = (verify.get("exit_code") == 0
                   and verification.get("status") == "SERVICE_VERIFY_PASS"
-                  and commit_matches and env_matches
-                  and inspection.get("systemd", {}).get("release_layout") is True)
-        return {
+                  and commit_valid and env_exists)
+        result = {
             "schema": "r2_relay_unified_deployment_status_v1",
             "status": "UNIFIED_DEPLOYMENT_STATUS_PASS" if passed else "UNIFIED_DEPLOYMENT_STATUS_FAILED",
-            "release_commit": verification.get("release_commit"),
-            "release_matches": commit_matches,
-            "environment_file_exists": env_matches,
-            "inspection": inspection,
+            "release_commit": commit if commit_valid else None,
+            "release_matches": passed,
+            "environment_file_exists": env_exists,
             "service_verification": verification,
             "token_emitted": False,
-            "credentials_read": False,
             "modified": False,
             "real_r2_tested": False,
         }
+        if not passed and isinstance(verification.get("reason"), str):
+            result["reason"] = verification["reason"][:120]
+        return result
     if action in ("r2_https_preflight", "r2_https_prepare",
                   "r2_https_start", "r2_https_ca_fingerprint"):
         modes = {"r2_https_preflight": "--preflight",

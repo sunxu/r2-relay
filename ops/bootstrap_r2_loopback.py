@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time trusted upgrade for R2 Relay inspection and runtime-control tools."""
+"""One-time trusted upgrade for R2 Relay root-side runtime-control tools."""
 from __future__ import annotations
 import argparse
 import grp
@@ -20,9 +20,6 @@ FILES = {
     "ops/r2_loopback_control.py": Path("/usr/local/libexec/r2_loopback_control.py"),
     "ops/r2relay_deploy_receiver.py": Path("/usr/local/libexec/r2relay_deploy_receiver.py"),
     "ops/generic_vps_mcp.py": Path("/opt/r2-mcp/generic_vps_mcp.py"),
-    # The legacy connector executes this fixed inspection module from the
-    # retained /opt/r2-relay tree. Keep it read-only and update it atomically.
-    "ops/deployment_inspect.py": Path("/opt/r2-relay/scripts/deployment_inspect.py"),
 }
 BACKUP_ROOT = Path("/var/backups/vps-mcp/r2-loopback-control-upgrade")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
