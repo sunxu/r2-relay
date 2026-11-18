@@ -35,7 +35,8 @@ def load_spec() -> dict:
         raise ValueError("private request spec must have mode 0600")
     data = json.loads(path.read_text(encoding="utf-8"))
     if set(data) != {
-        "url", "headers", "expected_status_code", "expected_size", "expected_sha256"
+        "url", "headers", "expected_status_code", "expected_size",
+        "expected_sha256", "expected_headers"
     }:
         raise ValueError("request spec has missing or unknown fields")
 
@@ -66,6 +67,17 @@ def load_spec() -> dict:
     status = data["expected_status_code"]
     size = data["expected_size"]
     digest = data["expected_sha256"]
+    expected_headers = data["expected_headers"]
+    if (
+        not isinstance(expected_headers, dict) or len(expected_headers) > 32
+        or any(
+            not isinstance(name, str) or not isinstance(value, str)
+            or not name or "\\r" in name or "\\n" in name
+            or "\\r" in value or "\\n" in value
+            for name, value in expected_headers.items()
+        )
+    ):
+        raise ValueError("expected_headers must be a map of safe header names and values")
     if type(status) is not int or not 200 <= status <= 599:
         raise ValueError("expected_status_code must be an HTTP response status")
     if type(size) is not int or size < 0:
@@ -78,6 +90,7 @@ def load_spec() -> dict:
         "expected_status_code": status,
         "expected_size": size,
         "expected_sha256": digest.lower(),
+        "expected_headers": {name.lower(): value for name, value in expected_headers.items()},
     }
 
 
@@ -122,6 +135,14 @@ async def run() -> int:
         status_ok = result.status_code == spec["expected_status_code"]
         size_ok = actual_size == spec["expected_size"]
         digest_ok = actual_sha256 == spec["expected_sha256"]
+        actual_headers = {}
+        for name, value in result.headers:
+            actual_headers.setdefault(name.lower(), []).append(value)
+        header_matches = {
+            name: expected in actual_headers.get(name, [])
+            for name, expected in spec["expected_headers"].items()
+        }
+        headers_ok = all(header_matches.values())
         remote_cleanup_ok = coordinator.remote_cleanup_failures == 0
         actual_status = result.status_code
         http_versions = sorted(set(relay.download_http_versions))
@@ -134,7 +155,7 @@ async def run() -> int:
             and coordinator.memory_budget.used == 0
         )
         passed = (
-            status_ok and size_ok and digest_ok
+            status_ok and size_ok and digest_ok and headers_ok
             and remote_cleanup_ok and local_temp_cleanup_ok
         )
         result = None
@@ -151,6 +172,8 @@ async def run() -> int:
             "expected_size": spec["expected_size"],
             "sha256": actual_sha256,
             "expected_sha256_match": digest_ok,
+            "expected_headers_match": headers_ok,
+            "header_checks": header_matches,
             "size_match": size_ok,
             "status_match": status_ok,
             "vps_task_cleanup_ok": remote_cleanup_ok,
