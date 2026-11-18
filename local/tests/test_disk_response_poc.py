@@ -4,6 +4,7 @@ import asyncio
 import os
 import shutil
 import socket
+import ssl
 import subprocess
 import tempfile
 import time
@@ -124,6 +125,7 @@ async def test_disk_backed_response_streams_through_mitmproxy(tmp_path: Path, ht
                 "--listen-host", "127.0.0.1",
                 "--listen-port", str(proxy_port),
                 "--set", f"confdir={confdir}",
+                "--set", "connection_strategy=lazy",
                 "-s", str(addon),
             ],
             env=env,
@@ -147,7 +149,7 @@ async def test_disk_backed_response_streams_through_mitmproxy(tmp_path: Path, ht
         try:
             async with httpx.AsyncClient(
                 proxy=f"http://127.0.0.1:{proxy_port}",
-                verify=str(cert),
+                verify=ssl.create_default_context(cafile=str(cert)),
                 http2=http2,
                 trust_env=False,
                 timeout=httpx.Timeout(180.0, connect=15.0),
