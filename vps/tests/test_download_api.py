@@ -437,11 +437,33 @@ async def test_completed_download_expires_after_idle_ttl(tmp_path):
     assert task.expires_at == 110.0
 
     # A read refreshes the idle expiry window.
+    now[0] = 105.0
     acquired, path = await manager.acquire_body(task.task_id)
     assert path.read_bytes() == b"short"
     await manager.reader_finished(acquired)
-    assert task.expires_at == 110.0
-    now[0] = 111.0
+    assert task.expires_at == 115.0
+    now[0] = 116.0
     assert await manager.cleanup() == 1
     assert task.task_id not in manager.tasks
     assert manager.used_bytes == 0
+
+
+
+@pytest.mark.asyncio
+async def test_retained_task_limit_bounds_completed_manifests(tmp_path):
+    app = create_app(
+        CacheStore(tmp_path / "upload"), token="test",
+        download_transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, content=b"ok")
+        ),
+        download_settings=settings(max_retained_tasks=1),
+        download_root=tmp_path / "downloads",
+    )
+    auth = {"Authorization": "Bearer test"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        first = await create(client, auth, request_id="retained-one")
+        await wait_complete(client, first.json()["task_id"], auth)
+        second = await create(client, auth, request_id="retained-two")
+        assert second.status_code == 503
