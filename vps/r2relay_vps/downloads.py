@@ -481,37 +481,50 @@ class DownloadManager:
                        for p in task.parts) or task.status in {"COMPLETE", "FAILED", "CANCELLED"}
 
         await self._wait(task, ready, part_number=part_number)
-        part = next((p for p in task.parts if p["part_number"] == part_number), None)
-        if task.status in {"FAILED", "CANCELLED"}:
-            raise DownloadFailed("R2 上游下载失败或已取消")
-        if part is None:
-            raise DownloadNotFound("请求的 Part 编号不存在")
-        task.active_readers += 1
-        task.last_access = self.clock()
-        if task.status == "COMPLETE":
-            task.expires_at = task.last_access + self.settings.cache_ttl_seconds
-        return task, task.directory / f"{part_number}.part", dict(part)
+        async with self.lock:
+            if self.tasks.get(task_id) is not task or task.delete_requested:
+                raise DownloadNotFound("下载任务不存在或已删除")
+            part = next((p for p in task.parts
+                         if p["part_number"] == part_number and p["status"] == "READY"), None)
+            if task.status in {"FAILED", "CANCELLED"}:
+                raise DownloadFailed("R2 上游下载失败或已取消")
+            if part is None:
+                raise DownloadNotFound("请求的 Part 编号不存在")
+            path = task.directory / f"{part_number}.part"
+            if not path.is_file():
+                raise DownloadNotFound("Part 文件不存在或已过期")
+            task.active_readers += 1
+            task.last_access = self.clock()
+            if task.status == "COMPLETE":
+                task.expires_at = task.last_access + self.settings.cache_ttl_seconds
+            return task, path, dict(part)
 
     async def acquire_body(self, task_id: str) -> tuple[DownloadTask, Path]:
         task = self.get(task_id)
         await self._wait(task, lambda: task.status in {"COMPLETE", "FAILED", "CANCELLED"})
-        if task.status != "COMPLETE":
-            raise DownloadFailed("R2 上游下载失败或已取消")
-        if task.mode != "small":
-            raise DownloadConflict("该任务为分片响应，请按 Part 编号取回")
-        task.active_readers += 1
-        task.last_access = self.clock()
-        if task.status == "COMPLETE":
+        async with self.lock:
+            if self.tasks.get(task_id) is not task or task.delete_requested:
+                raise DownloadNotFound("下载任务不存在或已删除")
+            if task.status != "COMPLETE":
+                raise DownloadFailed("R2 上游下载失败或已取消")
+            if task.mode != "small":
+                raise DownloadConflict("该任务为分片响应，请按 Part 编号取回")
+            path = task.directory / "body.bin"
+            if not path.is_file():
+                raise DownloadNotFound("小响应文件不存在或已过期")
+            task.active_readers += 1
+            task.last_access = self.clock()
             task.expires_at = task.last_access + self.settings.cache_ttl_seconds
-        return task, task.directory / "body.bin"
+            return task, path
 
     async def reader_finished(self, task: DownloadTask) -> None:
-        task.active_readers = max(0, task.active_readers - 1)
-        task.last_access = self.clock()
-        if task.status == "COMPLETE":
-            task.expires_at = task.last_access + self.settings.cache_ttl_seconds
-        if task.delete_requested and not task.writer_active and task.active_readers == 0:
-            await self._remove_files(task)
+        async with self.lock:
+            task.active_readers = max(0, task.active_readers - 1)
+            task.last_access = self.clock()
+            if task.status == "COMPLETE" and not task.delete_requested:
+                task.expires_at = task.last_access + self.settings.cache_ttl_seconds
+            if task.delete_requested and not task.writer_active and task.active_readers == 0:
+                self._remove_files_locked(task)
 
     async def stream_file(self, task: DownloadTask, path: Path) -> AsyncIterator[bytes]:
         try:
@@ -524,45 +537,54 @@ class DownloadManager:
         finally:
             await self.reader_finished(task)
 
-    async def _remove_files(self, task: DownloadTask) -> None:
+    def _remove_files_locked(self, task: DownloadTask) -> None:
         if task.writer_active or task.active_readers:
             return
+        shutil.rmtree(task.directory, ignore_errors=True)
+        self.used_bytes = max(0, self.used_bytes - task.stored_bytes)
+        task.stored_bytes = 0
+        task.parts.clear()
+
+    async def _remove_files(self, task: DownloadTask) -> None:
         async with self.lock:
-            if task.writer_active or task.active_readers:
-                return
-            shutil.rmtree(task.directory, ignore_errors=True)
-            self.used_bytes = max(0, self.used_bytes - task.stored_bytes)
-            task.stored_bytes = 0
-            task.parts.clear()
+            self._remove_files_locked(task)
 
     async def delete(self, task_id: str) -> None:
-        task = self.tasks.get(task_id)
-        if task is None:
-            return
-        task.delete_requested = True
-        if task.worker is not None and not task.worker.done():
-            task.worker.cancel()
-            await asyncio.gather(task.worker, return_exceptions=True)
-        if not task.writer_active and task.active_readers == 0:
-            await self._remove_files(task)
-        self.tasks.pop(task_id, None)
-        self.request_index.pop(task.request_id, None)
+        async with self.lock:
+            task = self.tasks.get(task_id)
+            if task is None:
+                return
+            task.delete_requested = True
+            self.tasks.pop(task_id, None)
+            self.request_index.pop(task.request_id, None)
+            worker = task.worker
+            if not task.writer_active and task.active_readers == 0:
+                self._remove_files_locked(task)
+        if worker is not None and not worker.done():
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+        async with self.lock:
+            if not task.writer_active and task.active_readers == 0:
+                self._remove_files_locked(task)
 
     async def cleanup(self) -> int:
         now = self.clock()
-        expired = [
-            task for task in tuple(self.tasks.values())
-            if task.expires_at is not None
-            and now >= task.expires_at
-            and not task.writer_active
-            and task.active_readers == 0
-            and task.waiters == 0
-        ]
-        for task in expired:
-            await self._remove_files(task)
-            self.tasks.pop(task.task_id, None)
-            self.request_index.pop(task.request_id, None)
-        return len(expired)
+        removed = 0
+        async with self.lock:
+            expired = [
+                task for task in tuple(self.tasks.values())
+                if task.expires_at is not None
+                and now >= task.expires_at
+                and not task.writer_active
+                and task.active_readers == 0
+                and task.waiters == 0
+            ]
+            for task in expired:
+                self._remove_files_locked(task)
+                self.tasks.pop(task.task_id, None)
+                self.request_index.pop(task.request_id, None)
+                removed += 1
+        return removed
 
     async def close(self) -> None:
         if self._process_lock is not None:
