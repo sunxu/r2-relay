@@ -211,6 +211,7 @@ class RelayClient:
                 headers={"Authorization": f"Bearer {self.token}"},
                 timeout=httpx.Timeout(90.0, connect=15.0, read=90.0, write=30.0),
             ) as response:
+                self.download_http_versions.append(response.http_version)
                 yield response
         except (httpx.TransportError, httpx.TimeoutException) as exc:
             raise RelayOutcomeUnknown(
@@ -226,6 +227,7 @@ class RelayClient:
                 headers={"Authorization": f"Bearer {self.token}"},
                 timeout=httpx.Timeout(90.0, connect=15.0, read=90.0, write=30.0),
             ) as response:
+                self.download_http_versions.append(response.http_version)
                 if response.status_code != 200:
                     raise RelayOutcomeUnknown(
                         f"VPS 小响应 API 返回 HTTP {response.status_code}"
