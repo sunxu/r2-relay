@@ -9,6 +9,7 @@ import os
 import secrets
 import shutil
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncIterator
@@ -77,6 +78,23 @@ def filter_hop_headers(headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
             nominated.update(part.strip().lower() for part in value.split(",") if part.strip())
     blocked = HOP_HEADERS | nominated
     return [(key, value) for key, value in headers if key.lower() not in blocked]
+
+
+@asynccontextmanager
+async def _stream_get(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: list[tuple[str, str]],
+):
+    """Send a manually constructed request without AsyncClient default headers."""
+    request = httpx.Request("GET", url, headers=headers)
+    response = await client.send(
+        request, stream=True, follow_redirects=False,
+    )
+    try:
+        yield response
+    finally:
+        await response.aclose()
 
 
 async def _raw_chunks(response: httpx.Response) -> AsyncIterator[bytes]:
@@ -317,8 +335,8 @@ class DownloadManager:
                 transport=self.transport, headers=[],
                 follow_redirects=False, timeout=timeout, trust_env=False,
             ) as client:
-                async with client.stream(
-                    "GET", task.url, headers=task.request_headers
+                async with _stream_get(
+                    client, task.url, task.request_headers
                 ) as response:
                     task.status_code = response.status_code
                     task.response_headers = filter_hop_headers(list(response.headers.multi_items()))
@@ -450,6 +468,8 @@ class DownloadManager:
     async def _wait(self, task: DownloadTask, predicate, *, part_number: int | None = None) -> None:
         async with task.condition:
             if predicate():
+                if task.status in {"FAILED", "CANCELLED"}:
+                    raise DownloadFailed("R2 上游下载失败或已取消")
                 return
             # 全局等待者上限跨任务共享，必须在管理器锁下预留名额。
             async with self.lock:
