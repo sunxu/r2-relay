@@ -102,5 +102,6 @@ Part 状态：`WRITING`、`READY`、`FAILED`。
 - 只允许 HTTPS 443 的 `.r2.cloudflarestorage.com` endpoint。
 - 过滤 hop-by-hop 请求/响应头，同时保留签名相关 Host、查询参数和端到端响应头。
 - 不自动跟随 3xx；保留 R2 真实状态码和原始响应体。
-- 不记录签名 URL、请求 Authorization 或 Bearer Token。
+- 不记录签名 URL、请求 Authorization 或 Bearer Token；错误响应不回显 HTTP 客户端异常文本。
+- URL 长度、请求头数量及总长度有明确上限；Host 若由签名请求显式提供，必须匹配 URL 主机名。
 - 当前无 VPS 部署授权，下载功能保持默认关闭。
