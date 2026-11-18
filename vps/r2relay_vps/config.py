@@ -39,6 +39,10 @@ def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
     if path.is_file():
         with path.open("rb") as stream:
             override = tomllib.load(stream)
+        if "schema_version" in override and (
+            type(override["schema_version"]) is not int or override["schema_version"] != 1
+        ):
+            raise ValueError("unsupported system config schema_version")
         section = override.get("download", {})
         if not isinstance(section, dict):
             raise ValueError("[download] must be a TOML table")
