@@ -99,7 +99,7 @@ def execute(action):
             "schema": "r2_relay_unified_deployment_status_v1",
             "status": "UNIFIED_DEPLOYMENT_STATUS_PASS" if passed else "UNIFIED_DEPLOYMENT_STATUS_FAILED",
             "release_commit": commit if commit_valid else None,
-            "release_matches": commit_valid and verification.get("status") == "SERVICE_VERIFY_PASS",
+            "release_matches": passed,
             "environment_file_exists": env_exists,
             "service_verification": verification,
             "token_emitted": False,
