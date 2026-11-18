@@ -162,6 +162,8 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
     state = State(cache_store,
                   token if token is not None else os.environ.get("R2_RELAY_TOKEN", ""),
                   R2Worker(transport=r2_transport, delays=retry_delays))
+    if not state.token:
+        raise RuntimeError("R2_RELAY_TOKEN must be configured")
     settings = download_settings or load_download_settings(download_config_path)
     downloads = DownloadManager(
         download_root or Path("/var/lib/r2-relay/downloads"), settings,
@@ -169,8 +171,6 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
     )
     state.downloads = downloads
     app.state.downloads = downloads
-    if not state.token:
-        raise RuntimeError("R2_RELAY_TOKEN must be configured")
     app.state.relay = state
 
     def authorize(authorization: str | None):
