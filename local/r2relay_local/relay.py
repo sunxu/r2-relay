@@ -106,6 +106,7 @@ class RelayClient:
         )
         self.execution_timeout = execution_timeout
         self.poll_interval = poll_interval
+        self.download_http_versions: list[str] = []
 
     async def close(self) -> None:
         if self._owns_client:
@@ -153,6 +154,11 @@ class RelayClient:
             raise RelayOutcomeUnknown(
                 f"VPS 下载请求结果未知：{type(exc).__name__}"
             ) from exc
+        self.download_http_versions.append(response.http_version)
+        LOG.info(
+            "download_relay_http_version=%s method=%s",
+            response.http_version, method,
+        )
         if response.status_code >= 400:
             raise RelayOutcomeUnknown(
                 f"VPS 下载 API 返回 HTTP {response.status_code}"
