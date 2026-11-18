@@ -16,7 +16,7 @@
 
 推荐使用专用测试 bucket 或现有 bucket 下的临时测试前缀，不要选生产对象。25 MiB 大于 24 MiB 阈值，预期 VPS 生成两个 Part：16 MiB + 9 MiB。
 
-以下示例使用 AWS CLI 的独立 profile（例如 `r2-test`）。该 profile 应只拥有测试 bucket 的对象读写权限。Cloudflare R2 的 S3 endpoint 使用 `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`，签名 URL 可通过 AWS CLI `s3 presign` 生成。签名位于 URL 查询参数中，预签名 GET 通常不需要额外 Authorization 请求头。参考：[Cloudflare R2 预签名 URL 文档](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)、[R2 S3 API 文档](https://developers.cloudflare.com/r2/get-started/s3/)。
+以下示例使用 AWS CLI 的独立 profile（例如 `r2-test`）。先运行 `aws configure --profile r2-test`，按提示输入 R2 Access Key ID 和 Secret Access Key；再运行 `aws configure set region auto --profile r2-test`。该 profile 应只拥有测试 bucket 的对象读写权限，凭据保存在本机 `~/.aws/credentials`，不要放进仓库。Cloudflare R2 的 S3 endpoint 使用 `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`，签名 URL 可通过 AWS CLI `s3 presign` 生成。签名位于 URL 查询参数中，预签名 GET 通常不需要额外 Authorization 请求头。参考：[Cloudflare R2 预签名 URL 文档](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)、[R2 S3 API 文档](https://developers.cloudflare.com/r2/get-started/s3/)。
 
 在 Mac 终端执行：
 
@@ -197,6 +197,7 @@ python -m r2relay_local --listen-host 127.0.0.1 --listen-port 18585
 在另一个终端中恢复签名 URL 到当前 shell（不打印它），再经 18585 发起相同 Range GET：
 
 ```bash
+export SOURCE="$HOME/r2-relay-25mib.bin"
 export SPEC="$HOME/.config/r2-relay/private/real-get-spec.json"
 export SIGNED_URL="$(python3 - "$SPEC" <<'PY'
 import json, sys
@@ -228,7 +229,7 @@ echo "mitmproxy real R2 GET: PASS (HTTP 206, 25 MiB, bytes identical)"
 2. 实际响应体长度与预期一致。
 3. 响应体 SHA-256 与独立计算的预期值一致。
 4. Mac → VPS 下载请求正常完成；若要求 HTTP/2，报告中的版本必须包含 `HTTP/2`。
-5. VPS 下载任务 DELETE 成功（或已不存在）；报告中的 `vps_task_cleanup_ok` 为 true；本地临时文件和资源预算在响应消费完成后释放。
+5. VPS 下载任务 DELETE 成功（或已不存在）；报告中的 `vps_task_cleanup_ok` 和 `local_temp_cleanup_ok` 均为 true；本地临时文件和内存/磁盘预算在响应消费完成后释放。
 
 此脚本直接验证 RelayClient → VPS → 真实 R2，不经过 mitmproxy 的原始客户端接管层。mitmproxy GET 接管、Loopback response streaming 和不提前连接原始 R2 主机，已由隔离 Mock R2 的 Runner 全栈测试覆盖；如需对真实业务应用做最终验收，还必须让该应用经本地 18585 代理发起同一类真实 GET。
 
