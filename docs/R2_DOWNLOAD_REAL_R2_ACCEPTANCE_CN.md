@@ -12,6 +12,92 @@
 
 **不要把签名 URL、Authorization、X-Amz-Signature 或其他临时凭据提交到仓库、Issue、PR 或 CI 日志。**
 
+## 1.1 准备一个真实的 25 MiB R2 测试对象
+
+推荐使用专用测试 bucket 或现有 bucket 下的临时测试前缀，不要选生产对象。25 MiB 大于 24 MiB 阈值，预期 VPS 生成两个 Part：16 MiB + 9 MiB。
+
+以下示例使用 AWS CLI 的独立 profile（例如 `r2-test`）。该 profile 应只拥有测试 bucket 的对象读写权限。Cloudflare R2 的 S3 endpoint 使用 `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`，签名 URL 可通过 AWS CLI `s3 presign` 生成。签名位于 URL 查询参数中，预签名 GET 通常不需要额外 Authorization 请求头。<Cite refs={["turn533409search0","turn533409search3"]}/>
+
+在 Mac 终端执行：
+
+```bash
+set +x
+export AWS_PROFILE="r2-test"
+export R2_ACCOUNT_ID="你的 Cloudflare Account ID"
+export R2_BUCKET="你的测试 Bucket"
+export R2_KEY="r2-relay-acceptance/real-get-25mib.bin"
+export R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+export SOURCE="$HOME/r2-relay-25mib.bin"
+export BASELINE="$HOME/r2-relay-25mib-direct.bin"
+export BASE_HEADERS="$HOME/r2-relay-25mib-direct.headers"
+
+# 生成恰好 25 MiB 的随机测试文件
+python3 - "$SOURCE" <<'PY'
+import os, sys
+with open(sys.argv[1], "wb") as f:
+    for _ in range(25):
+        f.write(os.urandom(1024 * 1024))
+PY
+
+# 上传测试对象到 R2
+aws --profile "$AWS_PROFILE" --region auto s3 cp \
+  "$SOURCE" "s3://$R2_BUCKET/$R2_KEY" \
+  --endpoint-url "$R2_ENDPOINT"
+
+# 生成 1 小时有效的 GET 预签名 URL，不要 echo 或粘贴到聊天
+export SIGNED_URL="$(
+  aws --profile "$AWS_PROFILE" --region auto s3 presign \
+    "s3://$R2_BUCKET/$R2_KEY" \
+    --expires-in 3600 --endpoint-url "$R2_ENDPOINT"
+)"
+
+# 先绕过 Relay 直接访问 R2，建立可信基线；Range 覆盖完整 25 MiB 对象
+curl --silent --show-error --fail \
+  --range 0-26214399 \
+  --dump-header "$BASE_HEADERS" \
+  --output "$BASELINE" \
+  "$SIGNED_URL"
+
+STATUS="$(awk '/^HTTP\\// {code=$2} END {print code}' "$BASE_HEADERS")"
+test "$STATUS" = "206"
+cmp -s "$SOURCE" "$BASELINE"
+echo "Direct R2 baseline: PASS (HTTP 206, 25 MiB, bytes identical)"
+```
+
+如果直接 R2 基线不是 HTTP 206，或 `cmp` 失败，先不要测 Relay；先排查 URL、权限、对象和 Range 行为。
+
+## 1.2 创建本地私有验收 spec
+
+继续在同一个终端执行。命令不会打印签名 URL：
+
+```bash
+export SPEC="$HOME/.config/r2-relay/private/real-get-spec.json"
+mkdir -p "$(dirname "$SPEC")"
+umask 077
+
+python3 - "$SOURCE" "$SPEC" <<'PY'
+import hashlib, json, os, sys
+source, target = sys.argv[1], sys.argv[2]
+with open(source, "rb") as f:
+    digest = hashlib.file_digest(f, "sha256").hexdigest()
+data = {
+    "url": os.environ["SIGNED_URL"],
+    "headers": [["Range", "bytes=0-26214399"]],
+    "expected_status_code": 206,
+    "expected_size": 25 * 1024 * 1024,
+    "expected_sha256": digest,
+}
+with open(target, "w", encoding="utf-8") as f:
+    json.dump(data, f)
+os.chmod(target, 0o600)
+PY
+
+unset SIGNED_URL
+ls -l "$SPEC"
+```
+
+权限必须显示为仅文件所有者可读写（`-rw-------`）。预签名 URL 已经包含授权信息，因此这个示例不添加 `Authorization`、`x-amz-date` 等额外请求头；如果你测试的是 Header 签名请求，才把实际签名所需的请求头放进 spec。不要改动已签名 URL 的查询参数或编码。
+
 ## 2. 准备本地资源配置
 
 下载功能默认关闭。只有在确认 Mac 临时磁盘和内存预算后，才在 `~/.config/r2-relay/config.toml` 设置：
@@ -85,16 +171,16 @@ PYTHONPATH=local python local/poc/real_r2_download_acceptance.py
 2. 实际响应体长度与预期一致。
 3. 响应体 SHA-256 与独立计算的预期值一致。
 4. Mac → VPS 下载请求正常完成；若要求 HTTP/2，报告中的版本必须包含 `HTTP/2`。
-5. VPS 下载任务成功清理；本地临时文件和资源预算在响应消费完成后释放。
+5. VPS 下载任务 DELETE 成功（或已不存在）；报告中的 `vps_task_cleanup_ok` 为 true；本地临时文件和资源预算在响应消费完成后释放。
 
 此脚本直接验证 RelayClient → VPS → 真实 R2，不经过 mitmproxy 的原始客户端接管层。mitmproxy GET 接管、Loopback response streaming 和不提前连接原始 R2 主机，已由隔离 Mock R2 的 Runner 全栈测试覆盖；如需对真实业务应用做最终验收，还必须让该应用经本地 18585 代理发起同一类真实 GET。
 
 ## 6. 安全收尾
 
-完成后关闭下载功能或恢复原配置，并删除私有请求文件：
+完成后关闭下载功能或恢复原配置，并删除私有请求文件及本地基线文件：
 
 ```bash
-rm -f ~/.config/r2-relay/private/real-get-spec.json
+rm -f ~/.config/r2-relay/private/real-get-spec.json \\\n  "$HOME/r2-relay-25mib.bin" "$HOME/r2-relay-25mib-direct.bin" \\\n  "$HOME/r2-relay-25mib-direct.headers"
 ```
 
 如果签名 URL 或 Authorization 曾被复制到不可信位置，应按对应 R2 凭据管理流程轮换密钥或重新生成签名。
