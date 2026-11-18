@@ -1,4 +1,4 @@
-name: Local proxy tests
+name: 本地代理测试
 on:
   pull_request:
     paths:
@@ -25,5 +25,5 @@ jobs:
           python-version: "3.11"
       - name: Install
         run: python -m pip install -e './local[test]' -e './vps[test]'
-      - name: Test local proxy and 1 GiB disk-response PoC (HTTP/1.1, disconnect propagation)
+      - name: 验证本地代理与 1 GiB 磁盘响应 PoC（HTTP/1.1、客户端断开传播）
         run: cd local && R2_POC_SIZE_MIB=1024 python -m pytest -q -s
