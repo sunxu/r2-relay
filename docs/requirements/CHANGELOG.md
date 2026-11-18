@@ -60,3 +60,10 @@
 - 修复全局等待者计数跨任务并发竞争、Part 失败状态映射和 reader 与 TTL/删除之间的竞态。
 - 下载目录增加 Linux 单进程独占锁，关停时先取消 writer、等待 reader 结束再释放锁。
 - 限制 URL 与请求头输入规模；manifest 不回显底层异常文本，降低签名 URL 泄露风险。
+
+
+## v2.0 — 2026-11-19
+- Stage 1 VPS 下载核心 PR #66 已合并；VPS 专项测试 45 passed，7 个 GitHub Actions 流程全部通过；未部署 VPS。
+- Stage 2 Mac 客户端新增下载协调器、16/32 共享并发调度、READY Part SHA-256 校验、单文件 pwrite 组装和小响应内存/大响应磁盘预算。
+- 新增仅监听 127.0.0.1 的响应服务，通过 mitmproxy response streaming 返回已验证的本地内存/磁盘响应。
+- Mac 下载默认关闭；内存和临时磁盘预算必须显式配置，不猜测设备容量。
