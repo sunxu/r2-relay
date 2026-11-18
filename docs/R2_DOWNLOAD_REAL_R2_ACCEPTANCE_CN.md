@@ -16,7 +16,7 @@
 
 推荐使用专用测试 bucket 或现有 bucket 下的临时测试前缀，不要选生产对象。25 MiB 大于 24 MiB 阈值，预期 VPS 生成两个 Part：16 MiB + 9 MiB。
 
-以下示例使用 AWS CLI 的独立 profile（例如 `r2-test`）。该 profile 应只拥有测试 bucket 的对象读写权限。Cloudflare R2 的 S3 endpoint 使用 `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`，签名 URL 可通过 AWS CLI `s3 presign` 生成。签名位于 URL 查询参数中，预签名 GET 通常不需要额外 Authorization 请求头。<Cite refs={["turn533409search0","turn533409search3"]}/>
+以下示例使用 AWS CLI 的独立 profile（例如 `r2-test`）。该 profile 应只拥有测试 bucket 的对象读写权限。Cloudflare R2 的 S3 endpoint 使用 `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`，签名 URL 可通过 AWS CLI `s3 presign` 生成。签名位于 URL 查询参数中，预签名 GET 通常不需要额外 Authorization 请求头。参考：[Cloudflare R2 预签名 URL 文档](https://developers.cloudflare.com/r2/api/s3/presigned-urls/)、[R2 S3 API 文档](https://developers.cloudflare.com/r2/get-started/s3/)。
 
 在 Mac 终端执行：
 
@@ -58,7 +58,7 @@ curl --silent --show-error --fail \
   --output "$BASELINE" \
   "$SIGNED_URL"
 
-STATUS="$(awk '/^HTTP\\// {code=$2} END {print code}' "$BASE_HEADERS")"
+STATUS="$(awk 'index($1, "HTTP") == 1 {code=$2} END {print code}' "$BASE_HEADERS")"
 test "$STATUS" = "206"
 cmp -s "$SOURCE" "$BASELINE"
 echo "Direct R2 baseline: PASS (HTTP 206, 25 MiB, bytes identical)"
@@ -180,7 +180,9 @@ PYTHONPATH=local python local/poc/real_r2_download_acceptance.py
 完成后关闭下载功能或恢复原配置，并删除私有请求文件及本地基线文件：
 
 ```bash
-rm -f ~/.config/r2-relay/private/real-get-spec.json \\\n  "$HOME/r2-relay-25mib.bin" "$HOME/r2-relay-25mib-direct.bin" \\\n  "$HOME/r2-relay-25mib-direct.headers"
+rm -f ~/.config/r2-relay/private/real-get-spec.json \\
+  "$HOME/r2-relay-25mib.bin" "$HOME/r2-relay-25mib-direct.bin" \\
+  "$HOME/r2-relay-25mib-direct.headers"
 ```
 
 如果签名 URL 或 Authorization 曾被复制到不可信位置，应按对应 R2 凭据管理流程轮换密钥或重新生成签名。
