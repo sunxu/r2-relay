@@ -79,3 +79,11 @@
 ## v2.2 — 2026-11-19
 - 增加手动真实 Cloudflare R2 GET 验收脚本与中文手册；从权限 0600 的本地私有 spec 读取签名 URL/请求头，不输出敏感内容。
 - 真实验收要求状态码、响应长度、SHA-256 和 Mac → VPS HTTP 版本符合预期，并在报告 PASS_REAL 前完成本地临时资源清理。
+
+
+## v2.3 — 2026-11-19
+- 修复真实 R2 验收脚本在清理 result/RelayClient 后再读取状态和 HTTP 版本的问题；报告先快照状态与版本。
+- `PASS_REAL` 现在同时要求 VPS DELETE 成功、本地临时文件消失、内存/磁盘预算归零。
+- 记录 Part/body 流式 API 实际协商的 HTTP 版本，而不只记录创建任务/manifest 请求。
+- 修正 mitmproxy allow-hosts，明确允许 R2 endpoint 与本地 Loopback 响应服务；新增命令参数回归测试。
+- 真实 R2 手册增加 25 MiB 测试对象、直连 Range 基线、0600 私有 spec 和真实 18585 mitmproxy 路径验收步骤。
