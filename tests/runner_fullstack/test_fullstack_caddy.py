@@ -60,13 +60,13 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
     get_calls = tmp_path / "mock_get_calls.jsonl"
     download_config = tmp_path / "download.toml"
     download_config.write_text(
-        "[download]\\n"
-        "enabled = true\\n"
-        "max_concurrency = 16\\n"
-        "global_max_concurrency = 32\\n"
-        "small_response_memory_mib = 32\\n"
-        "max_temp_mib = 128\\n"
-        f'temp_dir = "{tmp_path / "mac-downloads"}"\\n',
+        "[download]\n"
+        "enabled = true\n"
+        "max_concurrency = 16\n"
+        "global_max_concurrency = 32\n"
+        "small_response_memory_mib = 32\n"
+        "max_temp_mib = 128\n"
+        f'temp_dir = "{tmp_path / "mac-downloads"}"\n',
         encoding="utf-8",
     )
     token = "runner-integration-token"
