@@ -128,34 +128,7 @@ temp_dir = "~/.cache/r2-relay/downloads"
 
 以上 32 MiB 内存和 4096 MiB 磁盘只是示例预算，必须按实际机器资源调整。VPS 端也必须独立配置磁盘预算、剩余空间保护、活动任务上限和等待者上限。
 
-## 3. 创建私有请求描述文件
-
-在 Mac 本地创建文件，权限必须为 0600：
-
-```bash
-mkdir -p ~/.config/r2-relay/private
-cat > ~/.config/r2-relay/private/real-get-spec.json <<'JSON'
-{
-  "url": "https://ACCOUNT_ID.r2.cloudflarestorage.com/BUCKET/OBJECT?SIGNED_QUERY",
-  "headers": [
-    ["Range", "bytes=0-26214399"],
-    ["Authorization", "替换为该请求的真实 Authorization"],
-    ["x-amz-date", "替换为该请求的真实签名时间"],
-    ["x-amz-content-sha256", "替换为该请求的真实签名摘要"]
-  ],
-  "expected_status_code": 206,
-  "expected_size": 26214400,
-  "expected_sha256": "替换为响应体的64位SHA256"
-}
-JSON
-chmod 600 ~/.config/r2-relay/private/real-get-spec.json
-```
-
-上面内容仅为字段结构示例，不是可直接使用的签名请求。必须从实际成功的 R2 GET 请求复制完整 URL 和所有必要签名头；不要自行修改 Range、URL 编码、查询参数或请求头大小写/值。
-
-如果请求使用预签名 URL 且不需要 Authorization 头，`headers` 应只包含该请求实际需要的头。不要把无关或已经过期的签名头添加进去。
-
-## 4. 执行验收
+## 3. 执行验收
 
 ```bash
 export R2_RELAY_VPS_URL="https://你的VPS地址:8443"
@@ -177,7 +150,7 @@ PYTHONPATH=local python local/poc/real_r2_download_acceptance.py
 
 脚本不会输出或记录签名 URL、请求头、Token 或底层异常文本。`PASS_REAL` 强制要求 Mac → VPS 实际协商 HTTP/2。
 
-## 4.1 再经真实 mitmproxy 18585 走一次完整客户端链路
+## 3.1 再经真实 mitmproxy 18585 走一次完整客户端链路
 
 上面的验收脚本直接调用 Mac RelayClient → VPS → R2，**不经过 mitmproxy**。Stage 2 的 mitmproxy 接管目前由 Mock R2 全栈 CI 验证。要把真实 R2 也走过本地代理，再做下面这项人工验收。
 
@@ -237,7 +210,7 @@ echo "mitmproxy real R2 GET: PASS (HTTP 206, Content-Range/Length, bytes identic
 
 这一步同时验证：原始客户端 CONNECT → mitmproxy addon 接管 → VPS 下载 API → Cloudflare R2 → Mac Part 组装 → Loopback response streaming → 原始客户端。若代理返回 502，不要改为绕过代理直连来宣称通过；保留状态码和脱敏日志，定位接管或 VPS 错误。
 
-## 5. 验收判定
+## 4. 验收判定
 
 只有以下条件全部成立才算 `PASS_REAL`：
 
@@ -249,7 +222,7 @@ echo "mitmproxy real R2 GET: PASS (HTTP 206, Content-Range/Length, bytes identic
 
 此脚本直接验证 RelayClient → VPS → 真实 R2，不经过 mitmproxy 的原始客户端接管层。mitmproxy GET 接管、Loopback response streaming 和不提前连接原始 R2 主机，已由隔离 Mock R2 的 Runner 全栈测试覆盖；如需对真实业务应用做最终验收，还必须让该应用经本地 18585 代理发起同一类真实 GET。
 
-## 6. 安全收尾
+## 5. 安全收尾
 
 完成后关闭下载功能或恢复原配置，并删除私有请求文件及本地基线文件：
 
