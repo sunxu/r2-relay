@@ -7,6 +7,8 @@ import tomllib
 
 DEFAULT_CONFIG = Path(__file__).with_name("defaults.toml")
 SYSTEM_CONFIG = Path("/etc/r2-relay/config.toml")
+DOWNLOAD_CONFIG = Path("/etc/r2-relay/download.toml")
+DOWNLOAD_CONFIG_SCHEMA = "r2-relay-download-config-dropin-v1"
 _MIB = 1024 * 1024
 
 
@@ -24,25 +26,32 @@ class DownloadSettings:
     wait_timeout_seconds: int
 
 
-def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
-    """Load packaged defaults and the optional system TOML override.
+def load_download_settings(
+    config_path: Path | None = None,
+    download_config_path: Path | None = None,
+) -> DownloadSettings:
+    """Load defaults, the general system config, then the managed download drop-in.
 
-    The download service is disabled until an operator supplies explicit disk
-    and task budgets in /etc/r2-relay/config.toml. The four agreed transfer
-    values are TOML settings and are never read from environment variables.
+    The dedicated /etc/r2-relay/download.toml drop-in has final precedence so
+    the controlled deployment workflow can apply a safe disabled profile
+    without rewriting unrelated settings in /etc/r2-relay/config.toml.
     """
     with DEFAULT_CONFIG.open("rb") as stream:
         data = tomllib.load(stream)
     if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
         raise ValueError("unsupported VPS Relay config schema_version")
-    path = config_path or SYSTEM_CONFIG
-    if path.is_file():
+
+    def merge_download_override(path: Path, *, strict: bool) -> None:
+        if not path.is_file():
+            return
         with path.open("rb") as stream:
             override = tomllib.load(stream)
         if "schema_version" in override and (
             type(override["schema_version"]) is not int or override["schema_version"] != 1
         ):
             raise ValueError("unsupported system config schema_version")
+        if strict and set(override) - {"schema_version", "download"}:
+            raise ValueError("download config drop-in contains unknown top-level fields")
         section = override.get("download", {})
         if not isinstance(section, dict):
             raise ValueError("[download] must be a TOML table")
@@ -50,6 +59,9 @@ def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
         if unknown:
             raise ValueError(f"unknown [download] setting(s): {', '.join(sorted(unknown))}")
         data["download"].update(section)
+
+    merge_download_override(config_path or SYSTEM_CONFIG, strict=False)
+    merge_download_override(download_config_path or DOWNLOAD_CONFIG, strict=True)
 
     section = data["download"]
     enabled = section["enabled"]
