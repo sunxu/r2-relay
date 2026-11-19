@@ -215,13 +215,13 @@ def validate_archive(archive_path: Path, expected_sha: str):
             if not REQUIRED.issubset(names):
                 raise DeployError("required_files_missing")
             if marker != expected_sha:
+                raise DeployError("commit_marker_mismatch")
             if "deploy/download-config-dropin-v1" in names:
                 config_marker = archive.extractfile(
                     archive.getmember("deploy/download-config-dropin-v1")
                 )
                 if config_marker is None or config_marker.read(128).decode("ascii") != DOWNLOAD_CONFIG_MARKER + "\n":
                     raise DeployError("download_config_capability_marker_invalid")
-                raise DeployError("download_config_capability_marker_invalid")
             unit_member = archive.getmember("deploy/vps.service")
             unit_stream = archive.extractfile(unit_member)
             if unit_stream is None or unit_stream.read(65536).decode("utf-8") != UNIT_TEXT:
