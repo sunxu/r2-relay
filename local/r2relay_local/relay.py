@@ -260,6 +260,11 @@ class RelayClient:
             raise RelayOutcomeUnknown(
                 f"VPS 下载清理确认未知：{type(exc).__name__}"
             ) from exc
+        self.download_http_versions.append(response.http_version)
+        LOG.info(
+            "download_relay_http_version=%s method=DELETE",
+            response.http_version,
+        )
         if response.status_code not in (200, 404):
             raise RelayOutcomeUnknown(
                 f"VPS 下载清理 API 返回 HTTP {response.status_code}"
