@@ -2,7 +2,7 @@
 
 - 需求编号：RLY-020～RLY-039
 - 跟踪任务：[Issue #63](https://github.com/sunxu/r2-relay/issues/63)
-- 状态：仓库负责人已确认设计基线；Stage 0 PoC 已通过；Stage 1 VPS 核心已合并（PR #66）；Stage 2 Mac 客户端在 Draft PR #68，最近一轮本地/VPS pytest 97 passed、RC1 offline gate 143 passed，Mock R2 全栈、Smoke、PR governance 均通过；本轮 P1 修复已纳入；真实 R2 验收待执行，尚未部署 VPS。
+- 状态：仓库负责人已确认设计基线；Stage 0 PoC 已通过；Stage 1 VPS 核心 PR #66 已合并，并已部署到 VPS（当前 Release：`12de7b52ba5e824455da15640f0cba8b6454ea08`，下载仍关闭）；Stage 2 Mac 客户端在 Draft PR #68，最新 HEAD 的 CI 全部通过（pytest 104 passed/8 subtests、RC1 offline gate 150 passed/8 subtests、Mock R2 全栈、Smoke、PR governance）；真实 Cloudflare R2 验收尚未执行。临时真实测试配置须先完成 Receiver v7 Bootstrap，采用 30 分钟固定限额 profile；不得启用生产 GET 接管。
 - 原则：下载是独立能力，不改变现有 UploadPart PUT 上传行为。
 
 ## 1. 目标
@@ -128,12 +128,12 @@ Part 写入使用 N.part.tmp；完整写入、fsync 并计算 SHA-256 后原子�
 ## 11. 实施阶段
 
 1. Stage 0：mitmproxy 磁盘响应 PoC，已通过 DL-T21（对应仓库总验收 T31）。
-2. Stage 1：VPS 任务状态、单 GET、流式 Part、manifest、等待式 Part API、TTL 和磁盘保护（已合并 PR #66；VPS 45 项测试及 7 个 Actions 流程通过；未部署）。
-3. Stage 2：Mac GET 接管、TOML、16/32 调度、小响应内存和大响应磁盘组装（已实现并通过隔离 Mock R2 全栈验收，见 Draft PR #68；真实 Cloudflare R2 与生产 VPS 尚待验收）。
+2. Stage 1：VPS 任务状态、单 GET、流式 Part、manifest、等待式 Part API、TTL 和磁盘保护（已合并 PR #66；VPS 45 项测试及 7 个 Actions 流程通过；已部署至 VPS，当前生产配置仍为 `enabled=false`）。
+3. Stage 2：Mac GET 接管、TOML、16/32 调度、小响应内存和大响应磁盘组装（已实现并通过隔离 Mock R2 全栈验收，见 Draft PR #68；真实 Cloudflare R2 尚待验收）。
 4. Stage 3：HTTP 语义、失败恢复、删除、Mock R2 全栈和上传回归。
 5. Stage 4：真实 R2 验收和性能测量。
 
-每阶段通过独立 PR 和 CI。生产 VPS 部署必须另行取得仓库负责人明确授权；本需求不授权部署。
+每阶段通过独立 PR 和 CI。生产 VPS 部署必须另行取得仓库负责人明确授权；Stage 1 已按独立部署授权完成部署。真实 R2 测试只允许使用 Receiver v7 的限时固定测试 profile，不能视为生产启用授权。
 
 ## 12. v1 不做
 
