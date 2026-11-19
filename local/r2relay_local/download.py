@@ -14,6 +14,21 @@ from typing import Awaitable, Callable
 import httpx
 
 from .config import Settings
+from .relay import DownloadPartTransportError
+
+
+def _pwrite_all(fd: int, data: bytes, offset: int) -> None:
+    """Write every byte at the requested offset or fail without claiming success."""
+    view = memoryview(data)
+    written = 0
+    while written < len(view):
+        try:
+            count = os.pwrite(fd, view[written:], offset + written)
+        except InterruptedError:
+            continue
+        if count <= 0:
+            raise OSError("pwrite made no progress")
+        written += count
 
 
 class DownloadRelayError(Exception):
@@ -29,7 +44,7 @@ class DownloadResult:
     status_code: int
     headers: list[tuple[str, str]]
     size: int
-    body: bytes | None = None
+    body: bytes | bytearray | None = None
     path: Path | None = None
     cleanup: Callable[[], Awaitable[None]] | None = None
 
@@ -178,7 +193,7 @@ class DownloadCoordinator:
                                 continue
                             if received + len(chunk) > size:
                                 raise DownloadRelayError("Part 响应超过 manifest 声明长度")
-                            await asyncio.to_thread(os.pwrite, fd, chunk, offset + received)
+                            await asyncio.to_thread(_pwrite_all, fd, chunk, offset + received)
                             digest.update(chunk)
                             received += len(chunk)
                 if received != size:
@@ -187,7 +202,13 @@ class DownloadCoordinator:
                     raise DownloadRelayError("Part SHA-256 校验失败")
                 held_parts[number] = size
                 return
-            except (httpx.TransportError, httpx.TimeoutException, DownloadRelayError, ValueError) as exc:
+            except (
+                httpx.TransportError,
+                httpx.TimeoutException,
+                DownloadPartTransportError,
+                DownloadRelayError,
+                ValueError,
+            ) as exc:
                 last_error = exc
                 if attempt < 2:
                     await asyncio.sleep((0.15, 0.5)[attempt])
