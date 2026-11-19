@@ -1086,16 +1086,17 @@ def apply_download_config_disabled(sha: str) -> dict:
         except BlockingIOError:
             raise DeployError("deployment_already_running") from None
 
-        uid, gid, _previous_target = validate_host_state()
-
+        _uid, gid, _previous_target = validate_host_state()
         _validate_download_config_paths(gid)
         expected = DOWNLOAD_CONFIG_TEXT.encode("utf-8")
         previous_info = DOWNLOAD_CONFIG.stat() if DOWNLOAD_CONFIG.exists() else None
         previous = DOWNLOAD_CONFIG.read_bytes() if previous_info is not None else None
         previous_mode = stat.S_IMODE(previous_info.st_mode) if previous_info is not None else 0o640
         previous_gid = previous_info.st_gid if previous_info is not None else gid
+
         if previous == expected:
-            if not health_check():
+            _clear_download_test_lease()
+            if not health_check(expected_download_enabled=False):
                 raise DeployError("download_config_existing_health_check_failed")
             return {
                 "status": "DOWNLOAD_CONFIG_ALREADY_APPLIED",
@@ -1105,42 +1106,15 @@ def apply_download_config_disabled(sha: str) -> dict:
                 "service_restarted": False,
             }
 
-        DOWNLOAD_CONFIG_BACKUPS.mkdir(mode=0o700, parents=False, exist_ok=True)
-        backup_root_stat = DOWNLOAD_CONFIG_BACKUPS.lstat()
-        if (not stat.S_ISDIR(backup_root_stat.st_mode)
-                or backup_root_stat.st_uid != 0 or backup_root_stat.st_mode & 0o077):
-            raise DeployError("download_config_backup_root_permissions_invalid")
-        backup = DOWNLOAD_CONFIG_BACKUPS / (
-            time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(4)
+        backup = _write_download_config_backup(
+            previous, previous_mode, previous_gid, sha, "disabled"
         )
-        backup.mkdir(mode=0o700)
-        state = {
-            "requested_commit": sha,
-            "previous_config_existed": previous is not None,
-            "previous_config_mode": oct(previous_mode) if previous is not None else None,
-            "previous_config_gid": previous_gid if previous is not None else None,
-            "config_path": str(DOWNLOAD_CONFIG),
-        }
-        if previous is not None:
-            previous_backup = backup / "download.toml"
-            previous_backup.write_bytes(previous)
-            with previous_backup.open("rb") as backup_stream:
-                os.fsync(backup_stream.fileno())
-            os.chown(previous_backup, 0, 0)
-            os.chmod(previous_backup, 0o600)
-        state_path = backup / "state.json"
-        state_path.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
-        with state_path.open("rb") as state_stream:
-            os.fsync(state_stream.fileno())
-        os.chown(state_path, 0, 0)
-        os.chmod(state_path, 0o600)
-        _fsync_directory(backup)
-        _fsync_directory(DOWNLOAD_CONFIG_BACKUPS)
-
         try:
+            # Disabling is fail-closed: never restore a prior enabled profile.
             _atomic_write_download_config(expected, gid)
+            _clear_download_test_lease()
             run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
-            if not health_check():
+            if not health_check(expected_download_enabled=False):
                 raise DeployError("download_config_health_check_failed")
             return {
                 "status": "DOWNLOAD_CONFIG_APPLIED",
@@ -1156,27 +1130,43 @@ def apply_download_config_disabled(sha: str) -> dict:
             }
         except Exception as exc:
             try:
-                _restore_download_config(previous, gid, previous_mode, previous_gid)
+                _atomic_write_download_config(expected, gid)
+                _clear_download_test_lease()
                 run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
-                if not health_check():
-                    raise DeployError("download_config_rollback_health_check_failed")
+                if not health_check(expected_download_enabled=False):
+                    raise DeployError("download_config_disable_health_check_failed")
             except Exception:
+                # A disabled file remains on disk; stopping the service prevents
+                # an old enabled process from continuing if restart/health failed.
+                try:
+                    run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+                except Exception:
+                    pass
                 raise DeployError(
-                    "download_config_apply_failed_rollback_failed:" + type(exc).__name__
+                    "download_config_disable_failed_fail_closed:" + type(exc).__name__
                 ) from None
             raise DeployError(
-                "download_config_apply_failed_rolled_back:" + type(exc).__name__
+                "download_config_disable_failed_but_disabled:" + type(exc).__name__
             ) from None
 
 
 def main() -> int:
     try:
         original_command = os.environ.get("SSH_ORIGINAL_COMMAND")
+        if (not original_command and len(sys.argv) == 3
+                and sys.argv[1] == "--expire-download-test"):
+            result = expire_download_test(sys.argv[2])
+            emit(result.pop("status"), **result)
+            return 0
+
         if isinstance(original_command, str) and original_command.startswith("download-config"):
-            sha = parse_download_config_command(original_command)
+            mode, sha = parse_download_config_command(original_command)
             if sys.stdin.buffer.read(1):
                 raise DeployError("download_config_stdin_must_be_empty")
-            result = apply_download_config_disabled(sha)
+            if mode == "disabled":
+                result = apply_download_config_disabled(sha)
+            else:
+                result = apply_download_config_real_test(sha)
             emit(result.pop("status"), **result)
             return 0
 
