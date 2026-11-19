@@ -31,6 +31,7 @@ CURRENT = Path("/opt/r2-relay-current")
 UNIT = Path("/etc/systemd/system/r2-relay-vps.service")
 ENV_FILE = Path("/etc/r2-relay/vps.env")
 CACHE = Path("/var/lib/r2-relay/cache")
+DOWNLOAD_CACHE = Path("/var/lib/r2-relay/downloads")
 BACKUPS = Path("/var/backups/r2-relay/deploy")
 DOWNLOAD_CONFIG_DIR = Path("/etc/r2-relay-download")
 DOWNLOAD_CONFIG = DOWNLOAD_CONFIG_DIR / "download.toml"
@@ -88,7 +89,7 @@ REQUIRED = {
     ".deployment-commit",
 }
 
-UNIT_TEXT = """[Unit]
+PREVIOUS_UNIT_TEXT = """[Unit]
 Description=R2 Relay VPS API (loopback only; TLS terminates at Caddy 8443)
 After=network-online.target
 Wants=network-online.target
@@ -121,6 +122,11 @@ LimitNOFILE=65535
 [Install]
 WantedBy=multi-user.target
 """
+
+UNIT_TEXT = PREVIOUS_UNIT_TEXT.replace(
+    "ReadWritePaths=/var/lib/r2-relay/cache",
+    "ReadWritePaths=/var/lib/r2-relay/cache /var/lib/r2-relay/downloads",
+)
 
 LEGACY_UNIT_TEXT = """[Unit]
 Description=R2 Relay VPS API (loopback only; TLS terminates at Caddy 8443)
@@ -323,7 +329,9 @@ def validate_host_state() -> tuple[int, int, str]:
     if unit_stat.st_uid != 0 or unit_stat.st_mode & 0o022:
         raise DeployError("service_unit_permissions_invalid")
     unit_text = UNIT.read_text(encoding="utf-8")
-    if unit_text.strip() not in (LEGACY_UNIT_TEXT.strip(), UNIT_TEXT.strip()):
+    if unit_text.strip() not in (
+        LEGACY_UNIT_TEXT.strip(), PREVIOUS_UNIT_TEXT.strip(), UNIT_TEXT.strip()
+    ):
         raise DeployError("installed_service_unit_not_recognized")
     active = subprocess.run(
         ["/usr/bin/systemctl", "is-active", "--quiet", SERVICE],
@@ -342,6 +350,25 @@ def validate_host_state() -> tuple[int, int, str]:
             raise DeployError("current_target_outside_releases")
         previous_target = str(resolved)
     return account.pw_uid, group.gr_gid, previous_target
+
+
+def _ensure_download_cache_directory(uid: int, gid: int) -> None:
+    parent = DOWNLOAD_CACHE.parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise DeployError("download_cache_parent_missing_or_unsafe")
+    parent_stat = parent.stat()
+    if parent_stat.st_uid != 0 or parent_stat.st_mode & 0o022:
+        raise DeployError("download_cache_parent_permissions_invalid")
+    if DOWNLOAD_CACHE.is_symlink():
+        raise DeployError("download_cache_directory_symlink")
+    try:
+        DOWNLOAD_CACHE.mkdir(mode=0o700, parents=False)
+    except FileExistsError:
+        pass
+    info = DOWNLOAD_CACHE.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
+            or info.st_gid != gid or stat.S_IMODE(info.st_mode) != 0o700):
+        raise DeployError("download_cache_directory_permissions_invalid")
 
 
 def run_fixed(argv: list[str], timeout: int = 120) -> None:
@@ -713,6 +740,7 @@ def deploy(sha: str, archive_path: Path) -> dict:
         fsync_path(BACKUPS)
 
         try:
+            _ensure_download_cache_directory(uid, gid)
             write_atomic(UNIT, UNIT_TEXT)
             set_current(str(release))
             run_fixed(["/usr/bin/systemctl", "daemon-reload"], timeout=30)
