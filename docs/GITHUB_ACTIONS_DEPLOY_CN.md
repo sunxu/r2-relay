@@ -255,3 +255,26 @@ The unified `vps_r2_deployment_status` entry point now invokes this fixed root-o
 The one-time bootstrap updates the fixed root helper, loopback verifier, generic MCP module and deployment receiver, then restarts only `r2-rootd.service` and `r2-mcp.service`. It does not restart `r2-relay-vps.service`, Caddy or the MCP tunnel. A backup is created under `/var/backups/vps-mcp/r2-loopback-control-upgrade/`.
 
 The retired legacy inspector source and its tests/docs are removed from this repository. Any already-installed legacy file or MCP tool registration on the VPS is intentionally left untouched and must be handled in a separate, explicitly approved maintenance window.
+
+
+## Receiver v7：限时真实 R2 下载验收（不等于生产启用）
+
+Receiver v6 只支持 `/download-config disabled <SHA>`。本仓库的 Receiver v7 增加唯一的临时测试 profile：
+
+- `/download-config real-test <SHA>`：只接受当前 VPS 正在运行的 Release SHA；要求该 Release 包含下载配置能力标记、systemd unit 已包含下载目录写入白名单、下载缓存目录为 `r2relay:r2relay 0700)，且当前配置必须是固定 disabled profile。
+- 固定资源预算：VPS 下载缓存 64 MiB、最低剩余磁盘 5 GiB、最多 1 个活动任务、2 个保留任务、4 个等待者；Part 16 MiB、阈值 24 MiB、TTL 600 秒。
+- 启用租约为 30 分钟。Receiver 在 `/etc/systemd/system` 安装并启用 nonce 专属的持久 `.service/.timer`；timer 每 30 秒检查一次租约，VPS 重启后由 `OnBootSec` 自动恢复检查，过期后自动关闭。配置同时写入 `test_expires_at_epoch`；VPS 应用在每次启动时检查绝对过期时间，过期配置即使 timer 尚未运行也会按 disabled 加载。租约 nonce 防止旧 timer 误关后续测试。手动关闭会清除租约并清理对应 timer；旧 timer 即使残留也只会得到 stale/no-op 回执。
+- `/download-config disabled <SHA>` 永远写入固定关闭配置；失败时不回滚到先前 enabled 配置，必要时停止 Relay 服务以 fail-closed。
+- Release 部署在活动测试租约期间被拒绝，防止部署重启打断测试或留下不确定状态。
+
+### 推荐执行顺序
+
+1. PR 合并后，记录 Receiver v7 的精确 Merge Commit SHA。Owner 在可信 Root SSH 通道 Bootstrap v7：检出该 SHA，上传 `ops/bootstrap_github_actions_deploy.py` 和 `ops/r2relay_deploy_receiver.py`，先 dry-run，再核对原有 Ed25519 fingerprint，最后 apply。不得重启 sshd。
+2. 用专用部署密钥发送空归档烟测，预期 build ID 为 `r2-relay-deploy-receiver-v7-leased-real-r2-test`，`reason=empty_archive`，SSH exit 1。
+3. 在 Issue #63 由 Owner 评论 `/deploy <PR-merge-SHA>`。这一步部署新的 systemd unit 和下载缓存目录，但必须保持 `/healthz.download_enabled=false`。新 unit 只额外允许 `/var/lib/r2-relay/downloads` 写入；目录必须为 `r2relay:r2relay 0700`。不改变 Caddy、端口、Token、EnvironmentFile 或 PUT 路径。
+4. 核实活动 Release SHA 与部署 SHA 一致、统一 verifier PASS、下载仍关闭。
+5. 仅在准备好真实测试时，在 Issue #63 评论 `/download-config real-test <同一 SHA>`。回执必须是 `DOWNLOAD_TEST_ENABLED` 且 profile、64 MiB、5 GiB、1 task、30 分钟等字段全部匹配。
+6. 使用 Mac 独立测试 TOML 和临时代理端口（18586，不得修改当前 18585 生产代理）执行真实 R2 GET/Range 验收。
+7. 测试完成后立即在 Issue #63 评论 `/download-config disabled <同一 SHA>`，确认 `download_enabled=false`。不要等待自动过期。自动 timer 只是兜底。
+
+**安全边界：** 此 profile 仅用于一次受限真实 R2 验收，不是生产启用命令，不开放生产 GET 接管。测试时 VPS 下载 API 仍可接受持有现有 Relay Bearer Token 的调用，因此只在 Owner 控制测试窗口内启用，并保持本地生产代理配置关闭。
