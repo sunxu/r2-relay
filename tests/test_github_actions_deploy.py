@@ -511,6 +511,10 @@ def test_production_workflow_is_owner_gated_and_requires_deployment_checks():
     assert "github.event.issue.pull_request == null" in workflow
     assert "github.event.comment.user.login == 'sunxu'" in workflow
     assert 're.fullmatch(r"/deploy ([0-9a-f]{40})"' in workflow
+    assert "github.event.issue.number == 63" in workflow
+    assert 'r"/download-config (disabled|real-test) ([0-9a-f]{40})"' in workflow
+    assert 'result.get("profile") == "real-r2-test-v1"' in workflow
+    assert 'gh issue comment "$ISSUE_NUMBER"' in workflow
     assert "git merge-base --is-ancestor" in workflow
     assert 'select(.name == "deploy-tests"' in workflow
     assert '.app.slug == "github-actions"' in workflow
@@ -802,6 +806,7 @@ def test_apply_download_config_disabled_rolls_back_file_after_failed_health(tmp_
 
 def test_apply_download_config_real_test_uses_fixed_bounded_profile_and_lease(tmp_path, monkeypatch):
     release, config_path, backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    config_path.write_text(receiver.DOWNLOAD_CONFIG_TEXT, encoding="utf-8")
     restarts = []
     scheduled = []
     monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: (scheduled if "systemd-run" in argv[0] else restarts).append(argv))
@@ -845,7 +850,8 @@ def test_apply_download_config_real_test_requires_active_release_and_disabled_pr
 
 def test_apply_download_config_real_test_failures_leave_download_disabled(tmp_path, monkeypatch):
     _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
-    health_results = iter([False])
+    config_path.write_text(receiver.DOWNLOAD_CONFIG_TEXT, encoding="utf-8")
+    health_results = iter([True, False, True])
     restarts = []
     def run(argv, timeout=120):
         restarts.append(argv)
