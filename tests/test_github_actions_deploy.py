@@ -32,7 +32,7 @@ def make_archive(path: Path, *, marker=SHA, extra=None, unit=None):
         "vps/r2relay_vps/app.py": b"app = True\n",
         "deploy/vps.service": (unit if unit is not None else receiver.UNIT_TEXT).encode(),
         "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
-        "deploy/download-config-dropin-v1": b"r2-relay-download-config-dropin-v1\\n",
+        "deploy/download-config-dropin-v1": b"r2-relay-download-config-dropin-v1\n",
         ".deployment-commit": (marker + "\n").encode(),
     }
     with tarfile.open(path, "w:") as archive:
@@ -312,8 +312,8 @@ def test_chown_release_keeps_group_readable_immutable_source_modes(tmp_path, mon
     source.mkdir(parents=True)
     regular = source / "app.py"
     executable = source / "launcher"
-    regular.write_text("app = True\\n")
-    executable.write_text("#!/bin/sh\\nexit 0\\n")
+    regular.write_text("app = True\n")
+    executable.write_text("#!/bin/sh\nexit 0\n")
     executable.chmod(0o755)
     chown_calls = []
     monkeypatch.setattr(receiver.os, "chown", lambda path, uid, gid, **kwargs: chown_calls.append((Path(path), uid, gid)))
@@ -684,10 +684,10 @@ def _prepare_download_config_receiver_test(tmp_path, monkeypatch):
     release_root = tmp_path / "releases"
     release = release_root / SHA
     release.mkdir(parents=True)
-    (release / ".deployment-commit").write_text(SHA + "\\n", encoding="ascii")
+    (release / ".deployment-commit").write_text(SHA + "\n", encoding="ascii")
     marker = release / "deploy/download-config-dropin-v1"
     marker.parent.mkdir(parents=True)
-    marker.write_text(receiver.DOWNLOAD_CONFIG_MARKER + "\\n", encoding="ascii")
+    marker.write_text(receiver.DOWNLOAD_CONFIG_MARKER + "\n", encoding="ascii")
 
     current = tmp_path / "current"
     current.symlink_to(release)
@@ -770,7 +770,7 @@ def test_apply_download_config_disabled_is_idempotent_without_restart(tmp_path, 
 
 def test_apply_download_config_disabled_rolls_back_file_after_failed_health(tmp_path, monkeypatch):
     _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
-    previous = b"[download]\\nenabled = false\\n# owner-managed settings\\n"
+    previous = b"[download]\nenabled = false\n# owner-managed settings\n"
     config_path.write_bytes(previous)
     health_results = iter([False, True])
     restarts = []
