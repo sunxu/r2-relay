@@ -51,7 +51,7 @@ VPS 使用 /etc/r2-relay/config.toml；默认 enabled=false。启用前必须根
 
 ### 5.1 Mac 小响应内存峰值
 
-小响应在 Mac 端使用 bytearray 累积并直接交给 Loopback 响应服务，不再转换成另一份完整 bytes 对象，避免 24 MiB 响应在转换瞬间出现两份完整 payload。预算按响应 payload 字节数计量；Python 对象和分配器的少量管理开销不属于 payload 预算。
+小响应在 Mac 端使用 bytearray 累积并直接交给 Loopback 响应服务，不再转换成另一份完整 bytes 对象，避免 24 MiB 响应在转换瞬间出现两份完整 payload。响应消费完成或客户端断开后，cleanup 会清空 bytearray，再归还 memory budget；真实验收也检查 body buffer 已释放。预算按响应 payload 字节数计量；Python 对象和分配器的少量管理开销不属于 payload 预算。
 
 ### 5.2 Mac 下载超时（v1 暂定值）
 
