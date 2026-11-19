@@ -1020,6 +1020,39 @@ def _prepare_download_config_path_validation(tmp_path, monkeypatch, *, existing_
     return config_dir, gid
 
 
+def test_vps_service_unit_grants_only_dedicated_download_cache_write_path():
+    assert "ReadWritePaths=/var/lib/r2-relay/cache /var/lib/r2-relay/downloads" in receiver.UNIT_TEXT
+    assert "ReadWritePaths=/var/lib/r2-relay/cache" in receiver.PREVIOUS_UNIT_TEXT
+    assert receiver.PREVIOUS_UNIT_TEXT.strip() in receiver.validate_host_state.__code__.co_consts
+
+
+def test_download_cache_directory_is_created_private_for_relay_user(tmp_path, monkeypatch):
+    import os
+    import stat
+    from types import SimpleNamespace
+
+    parent = tmp_path / "var-lib-r2-relay"
+    parent.mkdir(mode=0o755)
+    target = parent / "downloads"
+    monkeypatch.setattr(receiver, "DOWNLOAD_CACHE", target)
+    monkeypatch.setattr(receiver.os, "chown", lambda *_args, **_kwargs: None)
+    real_stat = Path.stat
+
+    def fake_stat(path, *args, **kwargs):
+        info = real_stat(path, *args, **kwargs)
+        if path == parent:
+            return SimpleNamespace(st_uid=0, st_mode=info.st_mode)
+        return info
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    receiver._ensure_download_cache_directory(os.getuid(), os.getgid())
+
+    info = target.stat()
+    assert info.st_uid == os.getuid()
+    assert info.st_gid == os.getgid()
+    assert stat.S_IMODE(info.st_mode) == 0o700
+
+
 def test_download_config_directory_is_created_root_owned_group_search_only(
     tmp_path, monkeypatch
 ):
