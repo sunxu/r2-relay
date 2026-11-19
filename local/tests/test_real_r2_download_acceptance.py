@@ -55,6 +55,7 @@ def test_real_r2_spec_loads_only_from_exact_0600_file(tmp_path, monkeypatch):
         ("expected_status_code", 99),
         ("expected_size", -1),
         ("expected_sha256", "not-a-digest"),
+        ("expected_headers", {}),
         ("expected_headers", {"content-range": "bad" + chr(10) + "header"}),
         ("headers", [["Authorization", "bad" + chr(10) + "header"]]),
     ],
@@ -190,3 +191,40 @@ def test_real_r2_acceptance_pass_requires_http2_and_complete_cleanup(
     assert report["local_body_released"] is (leave_temp_file or not leave_body)
     assert report["signed_url_or_headers_logged"] is False
     assert local_path.exists() is leave_temp_file
+
+
+
+@pytest.mark.parametrize(
+    ("expected_headers", "missing_header"),
+    [
+        ({"content-length": "4"}, "Content-Range"),
+        ({"content-range": "bytes 0-3/4"}, "Content-Length"),
+    ],
+)
+def test_real_r2_range_spec_requires_content_range_and_content_length(
+    tmp_path, monkeypatch, expected_headers, missing_header
+):
+    data = valid_spec()
+    data["expected_headers"] = expected_headers
+    path = tmp_path / "private.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    path.chmod(0o600)
+    monkeypatch.setenv("R2_RELAY_REAL_GET_SPEC", str(path))
+
+    with pytest.raises(ValueError, match=missing_header):
+        MODULE.load_spec()
+
+
+def test_real_r2_non_range_spec_still_requires_at_least_one_expected_header(
+    tmp_path, monkeypatch
+):
+    data = valid_spec()
+    data["headers"] = []
+    data["expected_headers"] = {"etag": '"object-version"'}
+    path = tmp_path / "private.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    path.chmod(0o600)
+    monkeypatch.setenv("R2_RELAY_REAL_GET_SPEC", str(path))
+
+    loaded = MODULE.load_spec()
+    assert loaded["expected_headers"] == {"etag": '"object-version"'}
