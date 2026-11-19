@@ -86,8 +86,20 @@ def test_real_r2_hash_result_supports_memory_and_disk(tmp_path):
 
 
 
-def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
-    tmp_path, monkeypatch, capsys
+@pytest.mark.parametrize(
+    ("protocol", "remote_failures", "disk_used", "memory_used", "leave_temp_file", "expected_pass"),
+    [
+        ("HTTP/2", 0, 0, 0, False, True),
+        ("HTTP/1.1", 0, 0, 0, False, False),
+        ("HTTP/2", 1, 0, 0, False, False),
+        ("HTTP/2", 0, 1, 0, False, False),
+        ("HTTP/2", 0, 0, 1, False, False),
+        ("HTTP/2", 0, 0, 0, True, False),
+    ],
+)
+def test_real_r2_acceptance_pass_requires_http2_and_complete_cleanup(
+    tmp_path, monkeypatch, capsys,
+    protocol, remote_failures, disk_used, memory_used, leave_temp_file, expected_pass
 ):
     data = valid_spec()
     body = b"real-r2-acceptance-fixture"
@@ -107,9 +119,13 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
     monkeypatch.setenv("R2_RELAY_VPS_URL", "https://relay.example:8443")
     monkeypatch.setenv("R2_RELAY_TOKEN", "test-token")
 
+    local_path = tmp_path / "leftover-download.bin"
+    if leave_temp_file:
+        local_path.write_bytes(body)
+
     class FakeRelay:
         def __init__(self, endpoint, token):
-            self.download_http_versions = ["HTTP/2", "HTTP/2"]
+            self.download_http_versions = [protocol, protocol]
             self.closed = False
 
         async def close(self):
@@ -118,9 +134,9 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
     class FakeCoordinator:
         def __init__(self, relay, settings):
             self.closed = False
-            self.remote_cleanup_failures = 0
-            self.disk_budget = SimpleNamespace(used=0)
-            self.memory_budget = SimpleNamespace(used=0)
+            self.remote_cleanup_failures = remote_failures
+            self.disk_budget = SimpleNamespace(used=disk_used)
+            self.memory_budget = SimpleNamespace(used=memory_used)
             self.relay = relay
 
         async def download(self, url, headers):
@@ -128,7 +144,8 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
             assert headers[0] == ("Range", f"bytes=0-{len(body) - 1}")
 
             async def cleanup():
-                return None
+                if not leave_temp_file:
+                    local_path.unlink(missing_ok=True)
 
             return SimpleNamespace(
                 status_code=206,
@@ -136,7 +153,9 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
                     ("Content-Range", f"bytes 0-{len(body) - 1}/{len(body)}"),
                     ("Content-Length", str(len(body))),
                 ],
-                body=body, path=None, cleanup=cleanup
+                body=None if leave_temp_file else body,
+                path=local_path if leave_temp_file else None,
+                cleanup=cleanup
             )
 
         async def close(self):
@@ -150,16 +169,19 @@ def test_real_r2_acceptance_emits_pass_after_cleanup_and_reports_http2(
 
     exit_code = asyncio.run(MODULE.run())
     report = json.loads(capsys.readouterr().out)
-    assert exit_code == 0
-    assert report["status"] == "PASS_REAL"
+    assert exit_code == (0 if expected_pass else 1)
+    assert report["status"] == ("PASS_REAL" if expected_pass else "FAIL_REAL")
     assert report["http_status"] == 206
-    assert report["mac_to_vps_http_versions"] == ["HTTP/2"]
-    assert report["http2_ok"] is True
+    assert report["mac_to_vps_http_versions"] == [protocol]
+    assert report["http2_ok"] is (protocol == "HTTP/2")
     assert report["expected_sha256_match"] is True
     assert report["expected_headers_match"] is True
     assert report["header_checks"] == {
         "content-range": True, "content-length": True
     }
-    assert report["vps_task_cleanup_ok"] is True
-    assert report["local_temp_cleanup_ok"] is True
+    assert report["vps_task_cleanup_ok"] is (remote_failures == 0)
+    assert report["local_temp_cleanup_ok"] is (
+        not leave_temp_file and disk_used == 0 and memory_used == 0
+    )
     assert report["signed_url_or_headers_logged"] is False
+    assert local_path.exists() is leave_temp_file
