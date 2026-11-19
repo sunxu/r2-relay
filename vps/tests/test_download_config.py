@@ -248,19 +248,19 @@ async def test_create_app_healthz_fails_closed_for_expired_test_dropin(tmp_path,
     dropin = tmp_path / "etc-r2-relay-download" / "download.toml"
     dropin.parent.mkdir(parents=True)
     dropin.write_text(
-        "schema_version = 1\\n"
-        "[download]\\n"
-        "enabled = true\\n"
-        "part_size_mib = 16\\n"
-        "split_threshold_mib = 24\\n"
-        "cache_ttl_seconds = 600\\n"
-        "max_cache_bytes = 67108864\\n"
-        "min_free_bytes = 5368709120\\n"
-        "max_active_tasks = 1\\n"
-        "max_retained_tasks = 2\\n"
-        "max_waiters = 4\\n"
-        "wait_timeout_seconds = 30\\n"
-        "test_expires_at_epoch = 1\\n",
+        "schema_version = 1\n"
+        "[download]\n"
+        "enabled = true\n"
+        "part_size_mib = 16\n"
+        "split_threshold_mib = 24\n"
+        "cache_ttl_seconds = 600\n"
+        "max_cache_bytes = 67108864\n"
+        "min_free_bytes = 5368709120\n"
+        "max_active_tasks = 1\n"
+        "max_retained_tasks = 2\n"
+        "max_waiters = 4\n"
+        "wait_timeout_seconds = 30\n"
+        "test_expires_at_epoch = 1\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(config, "DOWNLOAD_CONFIG", dropin)
