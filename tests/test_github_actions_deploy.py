@@ -932,7 +932,7 @@ def test_download_test_timer_keeps_future_lease_active_until_expiry(tmp_path, mo
         __import__("json").dumps({
             "lease_id": lease_id, "expires_at": int(__import__("time").time()) + 600,
             "commit": SHA,
-        }) + "\\n",
+        }) + "\n",
         encoding="utf-8",
     )
     receiver.DOWNLOAD_TEST_LEASE.chmod(0o600)
