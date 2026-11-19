@@ -135,7 +135,7 @@ ChatGPT 在 Issue #41 留下 `/deploy <SHA>` 评论。该评论就是触发事�
 /download-config disabled <40-char-lowercase-commit-sha>
 ```
 
-该命令只支持 `disabled`，不提供启用命令、任意 TOML 输入或 `workflow_dispatch`。目标 SHA 必须已经部署为当前活动 Release，且 Release 中包含 `deploy/download-config-dropin-v1` 能力标记。Workflow 通过固定 Root receiver 写入独立的 `/etc/r2-relay/download.toml`，不覆盖现有 `/etc/r2-relay/config.toml`：
+该命令只支持 `disabled`，不提供启用命令、任意 TOML 输入或 `workflow_dispatch`。目标 SHA 必须属于 main、通过 deploy-tests，并在 Git tree 中包含 `deploy/download-config-dropin-v1` 能力标记；配置可以先于应用版本部署，确保新版本第一次启动前下载已明确关闭。Workflow 通过固定 Root receiver 写入独立的 `/etc/r2-relay/download.toml`，不覆盖现有 `/etc/r2-relay/config.toml`：
 
 ```toml
 schema_version = 1
@@ -157,7 +157,7 @@ wait_timeout_seconds = 30
 
 新部署的 Release 会包含能力标记；旧 Release 仍可按原流程部署/回滚，但不能对不含该标记的旧 Release 应用下载配置。新增此操作需要把 Root receiver 升级到 build ID `r2-relay-deploy-receiver-v5-controlled-download-config`。这仍使用原有 `r2relay-deploy` ForcedCommand 和零参数 sudo 授权，不扩大 SSH/sudo 权限；但因 receiver 是独立安装的，合并后 Owner 需通过可信 Root SSH 通道再运行一次现有 Bootstrap（先 dry-run、核对原有 Ed25519 指纹，再 apply）。Bootstrap 只原子更新 Root receiver / sudoers / authorized_keys，不重启 R2 Relay、Caddy 或 sshd。升级后用空归档 `deploy <SHA>` 烟测，预期 v5 回执 `reason=empty_archive`、SSH exit 1。
 
-推荐顺序：先通过 `/deploy <SHA>` 部署包含 drop-in 支持的 main Release；再通过 `/download-config disabled <同一 SHA>` 应用显式关闭配置。两条命令都只接受 Issue #41 上由 `sunxu` 发布的精确评论。
+推荐顺序：先通过 `/download-config disabled <目标 SHA>` 应用关闭配置（目标 SHA 必须已在 main 且含 drop-in 能力标记）；再通过 `/deploy <同一 SHA>` 部署应用。这样新版本第一次启动时就会读取 `enabled=false`。两条命令都只接受 Issue #41 上由 `sunxu` 发布的精确评论。
 
 控制 Workflow 只接受：
 - Issue #41（固定控制 Issue，不能在 PR 评论中触发）；
