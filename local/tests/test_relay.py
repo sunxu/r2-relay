@@ -7,7 +7,13 @@ import httpx
 import pytest
 
 from r2relay_local import relay as relay_module
-from r2relay_local.relay import RelayClient, RelayUnavailable, is_upload_part, http2_enabled
+from r2relay_local.relay import (
+    DownloadPartTransportError,
+    RelayClient,
+    RelayUnavailable,
+    is_upload_part,
+    http2_enabled,
+)
 
 URL = "https://abc.r2.cloudflarestorage.com/b/k?uploadId=abc&partNumber=1"
 
@@ -168,3 +174,34 @@ async def test_relay_client_sets_httpx_protocol_flag(monkeypatch, value, expecte
         assert created[0]["follow_redirects"] is False
     finally:
         await relay.close()
+
+
+
+@pytest.mark.asyncio
+async def test_part_stream_maps_mid_body_transport_failure_to_retryable_error():
+    class InterruptedStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"partial"
+            raise httpx.ReadError("simulated connection reset")
+
+        async def aclose(self):
+            return None
+
+    def handler(_request):
+        return httpx.Response(
+            200,
+            headers={
+                "Content-Length": "16",
+                "X-Part-SHA256": "unused",
+                "X-Part-Number": "1",
+            },
+            stream=InterruptedStream(),
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        relay = RelayClient("https://vps.example:8443", "secret", client=http)
+        with pytest.raises(DownloadPartTransportError):
+            async with relay.download_part_stream("task-id", 1) as response:
+                async for _chunk in response.aiter_raw():
+                    pass
