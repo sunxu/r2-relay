@@ -96,6 +96,18 @@ Bootstrap 会：
 
 部署密钥不能获得 Root Shell，也不能执行其他 sudo 命令。它只能通过固定 Root receiver 完成受限发布。现有 Root 管理密钥不受影响。
 
+### Bootstrap v6 前的目录恢复
+
+在可信 Root SSH 通道先恢复私有环境目录，不要移动或读取 Token：
+
+```bash
+sudo chown root:root /etc/r2-relay
+sudo chmod 0700 /etc/r2-relay
+sudo namei -l /etc/r2-relay/vps.env
+```
+
+确认 `/etc/r2-relay` 为 `root:root 0700`、`vps.env` 仍为 `root:root 0600` 后，再按本次 PR 合并后的精确 SHA 执行 Bootstrap v6。新 receiver 会在 `/download-config disabled <SHA>` 时自动创建独立 drop-in 目录，不需要手工开放旧目录。
+
 ### Bootstrap 后的无部署连通性验证
 
 在 GitHub Secrets 配置完成前，可用专用私钥向受限入口发送一个**空归档**，验证 SSH 公钥认证、ForcedCommand、sudoers 和 Root receiver 全链路。该命令不会进入 `deploy()`，不会切换版本或重启服务：
@@ -116,7 +128,7 @@ set -e
 printf 'ssh_exit=%s\\n' "$SSH_STATUS"
 ```
 
-预期 receiver build ID 为 `r2-relay-deploy-receiver-v5-controlled-download-config`，返回 `{"reason":"empty_archive","status":"REJECTED_OR_FAILED"}` 且 SSH 退出码为 1（这是故意的拒绝结果）。若出现 SSH authentication、locked account、sudo 或 receiver 执行错误，则先停止，不要触发生产部署。
+预期 receiver build ID 为 `r2-relay-deploy-receiver-v6-isolated-download-config-dir`，返回 `{"reason":"empty_archive","status":"REJECTED_OR_FAILED"}` 且 SSH 退出码为 1（这是故意的拒绝结果）。若出现 SSH authentication、locked account、sudo 或 receiver 执行错误，则先停止，不要触发生产部署。
 
 
 ## ChatGPT 触发部署
@@ -135,7 +147,7 @@ ChatGPT 在 Issue #41 留下 `/deploy <SHA>` 评论。该评论就是触发事�
 /download-config disabled <40-char-lowercase-commit-sha>
 ```
 
-该命令只支持 `disabled`，不提供启用命令、任意 TOML 输入或 `workflow_dispatch`。目标 SHA 必须属于 main、通过 deploy-tests，并在 Git tree 中包含 `deploy/download-config-dropin-v1` 能力标记；配置可以先于应用版本部署，确保新版本第一次启动前下载已明确关闭。Workflow 通过固定 Root receiver 写入独立的 `/etc/r2-relay/download.toml`，不覆盖现有 `/etc/r2-relay/config.toml`：
+该命令只支持 `disabled`，不提供启用命令、任意 TOML 输入或 `workflow_dispatch`。目标 SHA 必须属于 main、通过 deploy-tests，并在 Git tree 中包含 `deploy/download-config-dropin-v1` 能力标记；配置可以先于应用版本部署，确保新版本第一次启动前下载已明确关闭。Workflow 通过固定 Root receiver 写入独立的 `/etc/r2-relay-download/download.toml`，不覆盖现有 `/etc/r2-relay/config.toml`：
 
 ```toml
 schema_version = 1
@@ -153,9 +165,13 @@ max_waiters = 0
 wait_timeout_seconds = 30
 ```
 
-该文件由 Root 原子写入，权限为 `root:r2relay 0640`；应用前备份旧文件，重启仅限 `r2-relay-vps.service`，健康检查失败则恢复旧配置并再次重启。回执明确报告 `download_enabled=false`。配置应用不修改 Token、EnvironmentFile、上传缓存、Caddy 或 443/8443。当前命令只能关闭下载，后续若要启用，必须另行审查容量预算和授权，不属于本次授权。
+该文件由 Root 原子写入，权限为 `root:r2relay 0640`；其独立父目录 `/etc/r2-relay-download` 为 `root:r2relay 0710`（服务账户仅有目录搜索权限）。应用前备份旧文件，重启仅限 `r2-relay-vps.service`，健康检查失败则恢复旧配置并再次重启。回执明确报告 `download_enabled=false`。配置应用不修改 Token、EnvironmentFile、上传缓存、Caddy 或 443/8443。当前命令只能关闭下载，后续若要启用，必须另行审查容量预算和授权，不属于本次授权。
 
-新部署的 Release 会包含能力标记；旧 Release 仍可按原流程部署/回滚，但不能对不含该标记的旧 Release 应用下载配置。新增此操作需要把 Root receiver 升级到 build ID `r2-relay-deploy-receiver-v5-controlled-download-config`。这仍使用原有 `r2relay-deploy` ForcedCommand 和零参数 sudo 授权，不扩大 SSH/sudo 权限；但因 receiver 是独立安装的，合并后 Owner 需通过可信 Root SSH 通道再运行一次现有 Bootstrap（先 dry-run、核对原有 Ed25519 指纹，再 apply）。Bootstrap 只原子更新 Root receiver / sudoers / authorized_keys，不重启 R2 Relay、Caddy 或 sshd。升级后用空归档 `deploy <SHA>` 烟测，预期 v5 回执 `reason=empty_archive`、SSH exit 1。
+**目录隔离要求：** `/etc/r2-relay` 同时包含私有 `vps.env`，必须保持 `root:root 0700`；不得为了读取下载 drop-in 而放宽该目录权限。下载 drop-in 独立存放在 `/etc/r2-relay-download/download.toml`，由 v6 receiver 在受控配置应用时创建并校验目录为 `root:r2relay 0710`、文件为 `root:r2relay 0640`。此前遗留的 `/etc/r2-relay/download.toml` 不再被新版本读取，可留在 root-only 目录内，不要将其父目录重新开放。
+
+生产配置加载器默认只读取包内 `defaults.toml` 和独立下载 drop-in；不会探测 `/etc/r2-relay/config.toml`。只有显式传入通用配置路径的调用方才会加载该文件。
+
+新部署的 Release 会包含能力标记；旧 Release 仍可按原流程部署/回滚，但不能对不含该标记的旧 Release 应用下载配置。新增此操作需要把 Root receiver 升级到 build ID `r2-relay-deploy-receiver-v6-isolated-download-config-dir`。这仍使用原有 `r2relay-deploy` ForcedCommand 和零参数 sudo 授权，不扩大 SSH/sudo 权限；但因 receiver 是独立安装的，合并后 Owner 需通过可信 Root SSH 通道再运行一次现有 Bootstrap（先 dry-run、核对原有 Ed25519 指纹，再 apply）。Bootstrap 只原子更新 Root receiver / sudoers / authorized_keys，不重启 R2 Relay、Caddy 或 sshd。升级后用空归档 `deploy <SHA>` 烟测，预期 v5 回执 `reason=empty_archive`、SSH exit 1。
 
 推荐顺序：先通过 `/download-config disabled <目标 SHA>` 应用关闭配置（目标 SHA 必须已在 main 且含 drop-in 能力标记）；再通过 `/deploy <同一 SHA>` 部署应用。这样新版本第一次启动时就会读取 `enabled=false`。两条命令都只接受 Issue #41 上由 `sunxu` 发布的精确评论。
 
