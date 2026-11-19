@@ -820,12 +820,12 @@ def test_archive_rejects_invalid_download_config_capability_marker(tmp_path):
 
     archive = tmp_path / "invalid-config-marker.tar"
     files = {
-        "vps/pyproject.toml": b"[build-system]\\n",
-        "vps/r2relay_vps/app.py": b"app = True\\n",
+        "vps/pyproject.toml": b"[build-system]\n",
+        "vps/r2relay_vps/app.py": b"app = True\n",
         "deploy/vps.service": receiver.UNIT_TEXT.encode(),
-        "deploy/requirements-vps.lock": b"fastapi==0.162.2\\n",
-        "deploy/download-config-dropin-v1": b"not-the-approved-marker\\n",
-        ".deployment-commit": (SHA + "\\n").encode(),
+        "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
+        "deploy/download-config-dropin-v1": b"not-the-approved-marker\n",
+        ".deployment-commit": (SHA + "\n").encode(),
     }
     with tarfile.open(archive, "w:") as output:
         for name, data in files.items():
