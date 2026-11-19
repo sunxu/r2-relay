@@ -263,7 +263,7 @@ Receiver v6 只支持 `/download-config disabled <SHA>`。本仓库的 Receiver 
 
 - `/download-config real-test <SHA>`：只接受当前 VPS 正在运行的 Release SHA；要求该 Release 包含下载配置能力标记、systemd unit 已包含下载目录写入白名单、下载缓存目录为 `r2relay:r2relay 0700)，且当前配置必须是固定 disabled profile。
 - 固定资源预算：VPS 下载缓存 64 MiB、最低剩余磁盘 5 GiB、最多 1 个活动任务、2 个保留任务、4 个等待者；Part 16 MiB、阈值 24 MiB、TTL 600 秒。
-- 启用租约为 30 分钟。Receiver 在 `/etc/systemd/system` 安装并启用 nonce 专属的持久 `.service/.timer`；timer 每 30 秒检查一次租约，VPS 重启后由 `OnBootSec` 自动恢复检查，过期后自动关闭。租约 nonce 防止旧 timer 误关后续测试。手动关闭会清除租约并清理对应 timer；旧 timer 即使残留也只会得到 stale/no-op 回执。
+- 启用租约为 30 分钟。Receiver 在 `/etc/systemd/system` 安装并启用 nonce 专属的持久 `.service/.timer`；timer 每 30 秒检查一次租约，VPS 重启后由 `OnBootSec` 自动恢复检查，过期后自动关闭。配置同时写入 `test_expires_at_epoch`；VPS 应用在每次启动时检查绝对过期时间，过期配置即使 timer 尚未运行也会按 disabled 加载。租约 nonce 防止旧 timer 误关后续测试。手动关闭会清除租约并清理对应 timer；旧 timer 即使残留也只会得到 stale/no-op 回执。
 - `/download-config disabled <SHA>` 永远写入固定关闭配置；失败时不回滚到先前 enabled 配置，必要时停止 Relay 服务以 fail-closed。
 - Release 部署在活动测试租约期间被拒绝，防止部署重启打断测试或留下不确定状态。
 
