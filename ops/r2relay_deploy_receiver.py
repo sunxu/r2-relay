@@ -374,6 +374,19 @@ def _ensure_download_cache_directory(uid: int, gid: int) -> None:
         raise DeployError("download_cache_directory_permissions_invalid")
 
 
+def _validate_download_cache_directory(uid: int, gid: int) -> None:
+    if UNIT.is_symlink() or not UNIT.is_file():
+        raise DeployError("download_cache_service_unit_missing_or_unsafe")
+    if UNIT.read_text(encoding="utf-8").strip() != UNIT_TEXT.strip():
+        raise DeployError("download_cache_systemd_write_path_not_prepared")
+    if DOWNLOAD_CACHE.is_symlink() or not DOWNLOAD_CACHE.is_dir():
+        raise DeployError("download_cache_directory_not_prepared")
+    info = DOWNLOAD_CACHE.stat()
+    if (info.st_uid != uid or info.st_gid != gid
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise DeployError("download_cache_directory_permissions_invalid")
+
+
 def run_fixed(argv: list[str], timeout: int = 120) -> None:
     result = subprocess.run(
         argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -1006,7 +1019,7 @@ def apply_download_config_real_test(sha: str) -> dict:
         except BlockingIOError:
             raise DeployError("deployment_already_running") from None
 
-        _uid, gid, current_target = validate_host_state()
+        uid, gid, current_target = validate_host_state()
         if not current_target or Path(current_target).name != sha:
             raise DeployError("download_test_target_must_be_active_release")
         release_marker = Path(current_target) / "deploy/download-config-dropin-v1"
@@ -1015,6 +1028,7 @@ def apply_download_config_real_test(sha: str) -> dict:
             raise DeployError("download_config_capability_marker_missing")
 
         _validate_download_config_paths(gid)
+        _validate_download_cache_directory(uid, gid)
         current = DOWNLOAD_CONFIG.read_bytes() if DOWNLOAD_CONFIG.exists() else None
         disabled = DOWNLOAD_CONFIG_TEXT.encode("utf-8")
         if current != disabled:
