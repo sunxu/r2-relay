@@ -760,7 +760,9 @@ def _validate_download_config_paths(gid: int) -> None:
         raise DeployError("download_config_backup_root_symlink")
 
 
-def _atomic_write_download_config(content: bytes, gid: int) -> None:
+def _atomic_write_download_config(
+    content: bytes, gid: int, mode: int = 0o640,
+) -> None:
     fd, name = tempfile.mkstemp(prefix=".r2-download-config-", dir=DOWNLOAD_CONFIG.parent)
     try:
         with os.fdopen(fd, "wb") as output:
@@ -768,19 +770,24 @@ def _atomic_write_download_config(content: bytes, gid: int) -> None:
             output.flush()
             os.fsync(output.fileno())
             os.fchown(output.fileno(), 0, gid)
-            os.fchmod(output.fileno(), 0o640)
+            os.fchmod(output.fileno(), mode)
         os.replace(name, DOWNLOAD_CONFIG)
         _fsync_directory(DOWNLOAD_CONFIG.parent)
     finally:
         Path(name).unlink(missing_ok=True)
 
 
-def _restore_download_config(previous: bytes | None, gid: int) -> None:
+def _restore_download_config(
+    previous: bytes | None, gid: int, previous_mode: int = 0o640,
+    previous_gid: int | None = None,
+) -> None:
     if previous is None:
         DOWNLOAD_CONFIG.unlink(missing_ok=True)
         _fsync_directory(DOWNLOAD_CONFIG.parent)
     else:
-        _atomic_write_download_config(previous, gid)
+        _atomic_write_download_config(
+            previous, gid if previous_gid is None else previous_gid, previous_mode
+        )
 
 
 def apply_download_config_disabled(sha: str) -> dict:
@@ -799,7 +806,10 @@ def apply_download_config_disabled(sha: str) -> dict:
 
         _validate_download_config_paths(gid)
         expected = DOWNLOAD_CONFIG_TEXT.encode("utf-8")
-        previous = DOWNLOAD_CONFIG.read_bytes() if DOWNLOAD_CONFIG.exists() else None
+        previous_info = DOWNLOAD_CONFIG.stat() if DOWNLOAD_CONFIG.exists() else None
+        previous = DOWNLOAD_CONFIG.read_bytes() if previous_info is not None else None
+        previous_mode = stat.S_IMODE(previous_info.st_mode) if previous_info is not None else 0o640
+        previous_gid = previous_info.st_gid if previous_info is not None else gid
         if previous == expected:
             if not health_check():
                 raise DeployError("download_config_existing_health_check_failed")
@@ -823,6 +833,8 @@ def apply_download_config_disabled(sha: str) -> dict:
         state = {
             "requested_commit": sha,
             "previous_config_existed": previous is not None,
+            "previous_config_mode": oct(previous_mode) if previous is not None else None,
+            "previous_config_gid": previous_gid if previous is not None else None,
             "config_path": str(DOWNLOAD_CONFIG),
         }
         if previous is not None:
@@ -860,7 +872,7 @@ def apply_download_config_disabled(sha: str) -> dict:
             }
         except Exception as exc:
             try:
-                _restore_download_config(previous, gid)
+                _restore_download_config(previous, gid, previous_mode, previous_gid)
                 run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
                 if not health_check():
                     raise DeployError("download_config_rollback_health_check_failed")
