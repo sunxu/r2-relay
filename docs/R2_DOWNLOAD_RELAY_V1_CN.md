@@ -32,7 +32,7 @@ VPS 使用 /etc/r2-relay/config.toml；默认 enabled=false。启用前必须根
 - **RLY-021 原始请求：** 转发原始 URL、查询参数和必要请求头，保留请求头多值语义；仅移除必须由 HTTP 客户端重新生成的 hop-by-hop 头。不得擅自修改 SigV4 签名相关 URL、查询参数、Host 或签名头。不设计签名 URL 权限缓存。
 - **RLY-022 单次上游请求：** VPS 对每个原始 GET 只发起一次 R2 GET，不发起多个 Range 请求。
 - **RLY-023 响应模式：** 实际响应体 <=24 MiB 时，Mac 使用内存；>24 MiB 时，VPS 生成 16 MiB Part，Mac 使用磁盘。204/304 等无响应体响应直接返回。3xx/4xx/5xx 保留真实状态、响应头和响应体，不得伪造成成功；不自动跟随重定向。
-- **RLY-024 未知长度：** 缺少 Content-Length 时不得无限制缓冲内存。VPS 使用有界临时 spool；超过 24 MiB 时将已暂存前缀交给 Part writer 并继续生成 Part，最终不超过阈值则作为小响应返回。临时 spool 不得被读取接口当作 READY Part。
+- **RLY-024 未知长度：** 缺少 Content-Length 时不得无限制缓冲内存。VPS 使用有界临时 spool；超过 24 MiB 时将已暂存前缀交给 Part writer 并继续生成 Part，最终不超过阈值则作为小响应返回。临时 spool 不得被读取接口当作 READY Part。Mac v1 在未知长度场景下等待 VPS COMPLETE，取得最终总长度后一次性预留磁盘预算，再取回 READY Part；因此未知长度响应暂不具备 Mac 侧边生成边取回能力。这是有意接受的 v1 限制，避免多个未知长度任务分别持有部分预算而互相等待。
 
 ## 4. VPS Part 生成与任务管理
 
@@ -47,7 +47,15 @@ VPS 使用 /etc/r2-relay/config.toml；默认 enabled=false。启用前必须根
 - **RLY-030 并发：** 单文件最多 16 个 Part 同时传输；所有任务合计最多 32 个。使用一个共享全局调度器；等待未 READY Part 不占数据传输名额；重试也必须经过调度器。
 - **RLY-031 小响应：** <=24 MiB 使用内存，不创建大文件缓存。必须有独立的全局小响应内存预算；预算耗尽时排队，不得无限分配。预算默认值在内存压力测试后确定。
 - **RLY-032 大响应：** >24 MiB 使用一个本地任务级临时文件。按 VPS manifest 的偏移和长度定位写入，不在 Mac 保存第二套 Part 文件、不二次合并。每片校验实际长度；建议 VPS 同时计算 SHA-256 并由本地验证。
-- **RLY-033 完整后返回（已接受方案 A）：** Mac 可以在 VPS 下载期间提前取回 READY Part，但必须等待所有 Part 收齐、长度/摘要校验通过且 VPS 任务 COMPLETE，才向原始客户端发送响应体。大文件从本地临时文件流式返回，不得整体读入 Python 内存。确认不再需要 VPS 文件后通知删除。
+- **RLY-033 完整后返回（已接受方案 A）：** 对 Content-Length 已知的大响应，Mac 可以在 VPS 下载期间提前取回 READY Part；未知长度响应按 RLY-024 等待 VPS COMPLETE 并预留最终磁盘预算后再取回。两种情况都必须等待所有 Part 收齐、长度/摘要校验通过且 VPS 任务 COMPLETE，才向原始客户端发送响应体。大文件从本地临时文件流式返回，不得整体读入 Python 内存。确认不再需要 VPS 文件后通知删除。
+
+### 5.1 Mac 小响应内存峰值
+
+小响应在 Mac 端使用 bytearray 累积并直接交给 Loopback 响应服务，不再转换成另一份完整 bytes 对象，避免 24 MiB 响应在转换瞬间出现两份完整 payload。预算按响应 payload 字节数计量；Python 对象和分配器的少量管理开销不属于 payload 预算。
+
+### 5.2 Mac 下载超时（v1 暂定值）
+
+当前 Mac RelayClient 的控制 API 请求超时为 15 秒，单个 Part/body 流读取超时为 90 秒（连接 15 秒、写入 30 秒），单个下载任务整体期限为 180 秒。这些值暂未进入 TOML。先通过真实 R2 和不同网络条件测量实际吞吐、慢速窗口与失败恢复，再决定是否增加配置项；v1 不采用无限等待，也不在缺少实测数据时直接放宽期限。
 
 ## 6. HTTP 语义
 
@@ -100,12 +108,12 @@ Part 写入使用 N.part.tmp；完整写入、fsync 并计算 SHA-256 后原子�
 | DL-T07 | 全局并发 | 所有任务合计最多 32 个传输中的 Part |
 | DL-T08 | 内存 | 小响应使用内存且受总预算限制 |
 | DL-T09 | 大文件 | 1 GiB 不整体进内存，按偏移写入一个本地临时文件 |
-| DL-T10 | 边下边取 | VPS 未完成对象时，本地可取 READY Part |
+| DL-T10 | 边下边取 | Content-Length 已知的大响应中，VPS 未完成对象时本地可取 READY Part；未知长度按 RLY-024 等待 COMPLETE |
 | DL-T11 | 完整返回 | 所有 Part 和任务 COMPLETE 前客户端未收到响应体 |
 | DL-T12 | Range | 原始 Range 正确返回 206/Content-Range；内部使用 Part ID |
 | DL-T13 | 状态码 | 204/304/重定向/403/404/5xx 语义正确，304 无响应体及其元数据头处理符合 HTTP 语义 |
 | DL-T14 | 响应头 | 原始字节、Content-Encoding、Length、ETag 一致；逐跳头过滤 |
-| DL-T15 | 未知长度 | 不无限缓冲；模式切换和最终长度正确 |
+| DL-T15 | 未知长度 | 不无限缓冲；VPS spool/模式切换和最终长度正确；Mac 等待 COMPLETE 后预留最终预算再取回（v1 已知限制） |
 | DL-T16 | 上游失败 | 不发布半成品、不混合重试对象 |
 | DL-T17 | Part 重试 | 只重取完整 READY Part，仍受 16/32 限制 |
 | DL-T18 | TTL | 正常完成主动删除；600 秒空闲过期；活动读写不被删除 |
