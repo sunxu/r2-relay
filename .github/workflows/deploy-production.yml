@@ -153,6 +153,8 @@ jobs:
         if: always()
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha || 'not-parsed' }}
+          TARGET_MODE: ${{ steps.target.outputs.mode || 'not-parsed' }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
           JOB_RESULT: ${{ job.status }}
         run: |
           set -euo pipefail
@@ -165,12 +167,12 @@ jobs:
             receipt="No receiver/SSH response was produced; inspect the workflow logs for the failing step."
             printf -v body '%s\n\nDeployment receipt: %s' "$body" "$receipt"
           fi
-          gh issue comment 41 --repo "$GITHUB_REPOSITORY" --body "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body"
 
 
   configure-download:
     if: >-
-      github.event.issue.number == 41 &&
+      (github.event.issue.number == 41 || github.event.issue.number == 63) &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
       github.event.comment.user.login == 'sunxu' &&
@@ -190,18 +192,27 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Parse disabled-only configuration command
+      - name: Parse owner-gated download configuration command
         id: target
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
-          body = os.environ.get("COMMENT_BODY", "")
-          match = re.fullmatch(r"/download-config disabled ([0-9a-f]{40})", body.strip())
+          issue = int(os.environ["ISSUE_NUMBER"])
+          body = os.environ.get("COMMENT_BODY", "").strip()
+          if issue == 41:
+              pattern = r"/download-config (disabled) ([0-9a-f]{40})"
+          elif issue == 63:
+              pattern = r"/download-config (disabled|real-test) ([0-9a-f]{40})"
+          else:
+              raise SystemExit("Rejected: unsupported control issue")
+          match = re.fullmatch(pattern, body)
           if not match:
-              raise SystemExit("Rejected: expected exactly /download-config disabled <40-char lowercase SHA>")
-          print("sha=" + match.group(1))
+              raise SystemExit("Rejected: command does not match this issue's allowlist")
+          print("mode=" + match.group(1))
+          print("sha=" + match.group(2))
           PY
 
       - name: Verify target is on main and has deployment safety check
@@ -239,10 +250,12 @@ jobs:
           ssh-keygen -y -f "$HOME/.ssh/r2-relay-deploy" >/dev/null
           ssh-keygen -F "$VPS_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null
 
-      - name: Apply fixed disabled download configuration through restricted SSH
+      - name: Apply fixed download configuration through restricted SSH
         id: configure
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
+          TARGET_MODE: ${{ steps.target.outputs.mode }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
           raw="$RUNNER_TEMP/download-config-response.raw.json"
@@ -257,14 +270,14 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o ClearAllForwardings=yes \
             -o RequestTTY=no \
-            "$VPS_USER@$VPS_HOST" "download-config disabled $TARGET_SHA" \
+            "$VPS_USER@$VPS_HOST" "download-config $TARGET_MODE $TARGET_SHA" \
             </dev/null > "$raw" 2> "$stderr_file"
           ssh_status=$?
           set -e
-          python - "$raw" "$stderr_file" "$ssh_status" "$TARGET_SHA" <<'PY'
+          python - "$raw" "$stderr_file" "$ssh_status" "$TARGET_SHA" "$TARGET_MODE" <<'PY'
           import json, pathlib, sys
           raw_path, stderr_path = map(pathlib.Path, sys.argv[1:3])
-          ssh_status, expected_sha = int(sys.argv[3]), sys.argv[4]
+          ssh_status, expected_sha, mode = int(sys.argv[3]), sys.argv[4], sys.argv[5]
           raw = raw_path.read_text(encoding="utf-8", errors="replace") if raw_path.exists() else ""
           stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
           try:
@@ -280,10 +293,19 @@ jobs:
           result["ssh_exit_code"] = ssh_status
           result["requested_commit"] = expected_sha
           print(json.dumps(result, sort_keys=True, ensure_ascii=False))
-          if (ssh_status != 0
-                  or result.get("status") not in ("DOWNLOAD_CONFIG_APPLIED", "DOWNLOAD_CONFIG_ALREADY_APPLIED")
-                  or result.get("commit") != expected_sha
-                  or result.get("download_enabled") is not False):
+          if mode == "real-test":
+              accepted = result.get("status") == "DOWNLOAD_TEST_ENABLED"
+              enabled = result.get("download_enabled") is True
+              bounded = (result.get("profile") == "real-r2-test-v1"
+                         and result.get("lease_minutes") == 30
+                         and result.get("max_cache_bytes") == 67108864
+                         and result.get("max_active_tasks") == 1)
+          else:
+              accepted = result.get("status") in ("DOWNLOAD_CONFIG_APPLIED", "DOWNLOAD_CONFIG_ALREADY_APPLIED")
+              enabled = result.get("download_enabled") is False
+              bounded = True
+          if (ssh_status != 0 or not accepted or not enabled or not bounded
+                  or result.get("commit") != expected_sha):
               raise SystemExit("Download configuration was not safely applied; inspect the sanitized receipt.")
           PY
 
@@ -295,7 +317,7 @@ jobs:
         run: |
           set -euo pipefail
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          printf -v body '**R2 Relay VPS download configuration: %s**\n\nTarget Commit: %s\nWorkflow run: %s' "$JOB_RESULT" "$TARGET_SHA" "$run_url"
+          printf -v body '**R2 Relay VPS download configuration (%s): %s**\n\nTarget Commit: %s\nWorkflow run: %s' "$TARGET_MODE" "$JOB_RESULT" "$TARGET_SHA" "$run_url"
           if [ -f "$RUNNER_TEMP/download-config-response.raw.json" ]; then
             receipt="$(python - "$RUNNER_TEMP/download-config-response.raw.json" <<'PY'
           import json, pathlib, sys
