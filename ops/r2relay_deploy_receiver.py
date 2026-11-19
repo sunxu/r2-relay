@@ -552,13 +552,17 @@ def set_current(target: str | None) -> None:
         os.close(dir_fd)
 
 
-def health_check(attempts: int = 25) -> bool:
+def health_check(
+    attempts: int = 25, *, expected_download_enabled: bool | None = None,
+) -> bool:
     for _ in range(attempts):
         try:
             with urlopen("http://127.0.0.1:18085/healthz", timeout=2) as response:
                 if response.status == 200:
-                    payload = response.read(1024)
-                    if b'"status"' in payload and b'"ok"' in payload:
+                    payload = json.loads(response.read(1024).decode("utf-8"))
+                    if (payload.get("status") == "ok"
+                            and (expected_download_enabled is None
+                                 or payload.get("download_enabled") is expected_download_enabled)):
                         return True
         except Exception:
             pass
@@ -689,7 +693,10 @@ def deploy(sha: str, archive_path: Path) -> dict:
             set_current(str(release))
             run_fixed(["/usr/bin/systemctl", "daemon-reload"], timeout=30)
             run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
-            if not health_check():
+            expected_download_enabled = (
+                False if (release / "deploy/download-config-dropin-v1").is_file() else None
+            )
+            if not health_check(expected_download_enabled=expected_download_enabled):
                 raise DeployError("new_release_health_check_failed")
             return {
                 "status": "DEPLOYED",
