@@ -1033,6 +1033,10 @@ WantedBy=timers.target
         run_fixed(["/usr/bin/systemctl", "daemon-reload"], timeout=30)
         run_fixed(["/usr/bin/systemctl", "enable", "--now", unit + ".timer"], timeout=30)
     except Exception:
+        try:
+            run_fixed(["/usr/bin/systemctl", "disable", "--now", unit + ".timer"], timeout=30)
+        except Exception:
+            pass
         for path in (timer_path, service_path):
             try:
                 if path.is_file() and not path.is_symlink():
@@ -1072,15 +1076,6 @@ def _cleanup_download_test_expiry_timer(lease_id: str) -> None:
         run_fixed(["/usr/bin/systemctl", "daemon-reload"], timeout=30)
     except Exception:
         pass
-
-
-def _backup_current_download_config(sha: str, profile: str) -> tuple[Path, bytes, int, int]:
-    previous_info = DOWNLOAD_CONFIG.stat() if DOWNLOAD_CONFIG.exists() else None
-    previous = DOWNLOAD_CONFIG.read_bytes() if previous_info is not None else None
-    previous_mode = stat.S_IMODE(previous_info.st_mode) if previous_info is not None else 0o640
-    previous_gid = previous_info.st_gid if previous_info is not None else 0
-    backup = _write_download_config_backup(previous, previous_mode, previous_gid, sha, profile)
-    return backup, previous or b"", previous_mode, previous_gid
 
 
 def apply_download_config_real_test(sha: str) -> dict:
