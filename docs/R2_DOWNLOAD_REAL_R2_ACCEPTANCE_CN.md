@@ -4,8 +4,10 @@
 
 ## 1. 前置条件
 
-- VPS 已部署包含 PR #66 的版本，且已按实际磁盘容量配置并启用 VPS `[download]`。
-- Mac 已安装当前 Stage 2 代码；本地下载配置已启用。
+- VPS Stage 1 已部署，当前 Release 固定为 `12de7b52ba5e824455da15640f0cba8b6454ea08`；下载配置当前为 `enabled=false`。
+- 当前生产 Root Receiver v6 只支持关闭配置。必须先合并并 Bootstrap 后续 Receiver v7，才会提供 Issue #63 的 30 分钟固定测试配置命令。**在 Receiver v7 Bootstrap 完成前，不执行任何启用命令。**
+- Receiver v7 的测试配置固定限制：VPS 缓存预算 64 MiB、最低剩余磁盘 5 GiB、最多 1 个活动任务、2 个保留任务、4 个等待者；30 分钟后由 systemd 持久 timer 自动关闭。手动测试结束仍应立即执行关闭命令，不等待计时器。
+- Mac 已检出当前 Stage 2 分支代码；真实测试必须使用独立的本地测试配置和独立代理端口，不得修改现有 18585 生产代理配置。
 - Mac → VPS HTTPS 证书验证正常；自签发证书通过 `R2_RELAY_VPS_CA_FILE` 指定。
 - 准备一条新鲜、未过期、实际可用的 R2 GET 签名 URL，以及该请求必须携带的原始请求头。
 - 准备已知的响应状态码、响应字节数和 SHA-256。若测试 Range，expected_size/hash 必须对应 Range 响应体，而不是整个对象。
@@ -112,29 +114,43 @@ ls -l "$SPEC"
 
 权限必须显示为仅文件所有者可读写（`-rw-------`）。预签名 URL 已经包含授权信息，因此这个示例不添加 `Authorization`、`x-amz-date` 等额外请求头；如果你测试的是 Header 签名请求，才把实际签名所需的请求头放进 spec。不要改动已签名 URL 的查询参数或编码。
 
-## 2. 准备本地资源配置
+## 2. 准备隔离的 Mac 测试配置
 
-下载功能默认关闭。只有在确认 Mac 临时磁盘和内存预算后，才在 `~/.config/r2-relay/config.toml` 设置：
+不要修改当前生产配置 `~/.config/r2-relay/config.toml`，也不要让现有 18585 代理意外接管生产 GET。为真实验收单独创建 `~/.config/r2-relay/real-r2-test.toml`：
 
 ```toml
+schema_version = 1
+
+[upload]
+max_part_mib = 128
+global_buffer_mib = 1024
+
 [download]
 enabled = true
 max_concurrency = 16
 global_max_concurrency = 32
 small_response_memory_mib = 32
-max_temp_mib = 4096
-temp_dir = "~/.cache/r2-relay/downloads"
+max_temp_mib = 64
+temp_dir = "~/.cache/r2-relay/real-r2-test"
 ```
 
-以上 32 MiB 内存和 4096 MiB 磁盘只是示例预算，必须按实际机器资源调整。VPS 端也必须独立配置磁盘预算、剩余空间保护、活动任务上限和等待者上限。
+此配置只用于本次 25 MiB 单对象验收：本地临时空间预算 64 MiB，不是生产容量建议。执行前确认目标临时目录所在磁盘至少有 256 MiB 可用空间。现有生产配置保持下载关闭。
 
-## 3. 执行验收
+## 3. 临时启用 VPS 测试配置并执行 RelayClient 验收
+
+确认 Receiver v7 已完成 Root Bootstrap，且 VPS 当前 Release 仍是目标 SHA 后，在 GitHub Issue #63 添加精确评论：
+
+```text
+/download-config real-test 12de7b52ba5e824455da15640f0cba8b6454ea08
+```
+
+必须收到 `DOWNLOAD_TEST_ENABLED`，并核对回执中的 `profile=real-r2-test-v1`、`lease_minutes=30`、`max_cache_bytes=67108864`、`max_active_tasks=1`。如果回执不匹配，立即停止，不运行测试。
 
 ```bash
 export R2_RELAY_VPS_URL="https://你的VPS地址:8443"
 export R2_RELAY_TOKEN="你的Relay Token"
 export R2_RELAY_VPS_CA_FILE="$HOME/.config/r2-relay/vps-ca.pem"
-export R2_RELAY_CONFIG="$HOME/.config/r2-relay/config.toml"
+export R2_RELAY_CONFIG="$HOME/.config/r2-relay/real-r2-test.toml"
 export R2_RELAY_REAL_GET_SPEC="$HOME/.config/r2-relay/private/real-get-spec.json"
 export R2_RELAY_HTTP2=1
 
@@ -150,9 +166,9 @@ PYTHONPATH=local python local/poc/real_r2_download_acceptance.py
 
 脚本不会输出或记录签名 URL、请求头、Token 或底层异常文本。`PASS_REAL` 强制要求 Mac → VPS 实际协商 HTTP/2。
 
-## 3.1 再经真实 mitmproxy 18585 走一次完整客户端链路
+## 3.1 再经独立 mitmproxy 18586 走一次完整客户端链路
 
-上面的验收脚本直接调用 Mac RelayClient → VPS → R2，**不经过 mitmproxy**。Stage 2 的 mitmproxy 接管目前由 Mock R2 全栈 CI 验证。要把真实 R2 也走过本地代理，再做下面这项人工验收。
+上面的验收脚本直接调用 Mac RelayClient → VPS → R2，**不经过 mitmproxy**。Stage 2 的 mitmproxy 接管目前由 Mock R2 全栈 CI 验证。要把真实 R2 也走过本地代理，再做下面这项人工验收。这里使用独立端口 18586，不能复用或重启现有 18585 生产代理。
 
 先确认 Mac 的 `~/.config/r2-relay/config.toml` 已启用下载，并按本机真实资源填写预算，例如：
 
@@ -174,9 +190,9 @@ temp_dir = "~/.cache/r2-relay/downloads"
 export R2_RELAY_VPS_URL="https://你的VPS地址:8443"
 export R2_RELAY_TOKEN="你的Relay Token"
 export R2_RELAY_VPS_CA_FILE="$HOME/.config/r2-relay/vps-ca.pem"
-export R2_RELAY_CONFIG="$HOME/.config/r2-relay/config.toml"
+export R2_RELAY_CONFIG="$HOME/.config/r2-relay/real-r2-test.toml"
 export R2_RELAY_HTTP2=1
-python -m r2relay_local --listen-host 127.0.0.1 --listen-port 18585
+python -m r2relay_local --listen-host 127.0.0.1 --listen-port 18586
 ```
 
 首次启动后，mitmproxy 会生成本地客户端 CA 公共证书：`~/.mitmproxy/mitmproxy-ca-cert.pem`。不要分享或提交 CA 私钥。
@@ -192,7 +208,7 @@ print(json.load(open(sys.argv[1], encoding="utf-8"))["url"])
 PY
 )"
 curl --silent --show-error --fail \
-  --proxy http://127.0.0.1:18585 \
+  --proxy http://127.0.0.1:18586 \
   --cacert "$HOME/.mitmproxy/mitmproxy-ca-cert.pem" \
   --range 0-26214399 \
   --dump-header "$HOME/r2-relay-25mib-proxy.headers" \
@@ -224,10 +240,17 @@ echo "mitmproxy real R2 GET: PASS (HTTP 206, Content-Range/Length, bytes identic
 
 ## 5. 安全收尾
 
-完成后关闭下载功能或恢复原配置，并删除私有请求文件及本地基线文件：
+完成后立即在 Issue #63 添加精确关闭评论（不要等待 30 分钟自动关闭）：
+
+```text
+/download-config disabled 12de7b52ba5e824455da15640f0cba8b6454ea08
+```
+
+必须收到 `DOWNLOAD_CONFIG_APPLIED` 或 `DOWNLOAD_CONFIG_ALREADY_APPLIED`，且 `download_enabled=false`。随后停止独立 18586 测试代理，删除独立本地测试配置、私有请求文件及本地基线文件；现有 18585 生产代理不做任何操作：
 
 ```bash
 rm -f ~/.config/r2-relay/private/real-get-spec.json \
+  ~/.config/r2-relay/real-r2-test.toml \
   "$HOME/r2-relay-25mib.bin" "$HOME/r2-relay-25mib-direct.bin" \
   "$HOME/r2-relay-25mib-direct.headers"
 ```
