@@ -23,6 +23,7 @@ on:
       - "deploy/**"
       - ".github/workflows/deploy-production.yml"
       - ".github/workflows/deploy-tests.yml"
+      - "docs/GITHUB_ACTIONS_DEPLOY_CN.md"
 
 permissions:
   contents: read
