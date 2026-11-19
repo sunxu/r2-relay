@@ -840,6 +840,7 @@ def test_apply_download_config_real_test_uses_fixed_bounded_profile_and_lease(tm
     assert "enabled = true" in config_path.read_text(encoding="utf-8")
     assert "max_cache_bytes = 67108864" in config_path.read_text(encoding="utf-8")
     assert "max_active_tasks = 1" in config_path.read_text(encoding="utf-8")
+    assert f"test_expires_at_epoch = {result['expires_at']}" in config_path.read_text(encoding="utf-8")
     assert receiver.DOWNLOAD_TEST_LEASE.is_file()
     assert receiver.DOWNLOAD_TEST_LEASE.stat().st_mode & 0o777 == 0o600
     timer_unit = receiver.SYSTEMD_UNIT_DIR / ("r2-relay-download-test-expiry-" + "c" * 32 + ".timer")
@@ -895,7 +896,7 @@ def test_apply_download_config_real_test_failures_leave_download_disabled(tmp_pa
 def test_download_test_expiry_disables_only_matching_expired_lease(tmp_path, monkeypatch):
     _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
     lease_id = "d" * 32
-    config_path.write_text(receiver.DOWNLOAD_TEST_PROFILE_TEXT, encoding="utf-8")
+    config_path.write_text(receiver.DOWNLOAD_TEST_PROFILE_TEXT.format(expires_at=1), encoding="utf-8")
     receiver.DOWNLOAD_TEST_LEASE.write_text(
         __import__("json").dumps({"lease_id": lease_id, "expires_at": 1, "commit": SHA}) + "\n",
         encoding="utf-8",
@@ -927,10 +928,11 @@ def test_download_test_expiry_disables_only_matching_expired_lease(tmp_path, mon
 def test_download_test_timer_keeps_future_lease_active_until_expiry(tmp_path, monkeypatch):
     _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
     lease_id = "f" * 32
-    config_path.write_text(receiver.DOWNLOAD_TEST_PROFILE_TEXT, encoding="utf-8")
+    future_expiry = int(__import__("time").time()) + 600
+    config_path.write_text(receiver.DOWNLOAD_TEST_PROFILE_TEXT.format(expires_at=future_expiry), encoding="utf-8")
     receiver.DOWNLOAD_TEST_LEASE.write_text(
         __import__("json").dumps({
-            "lease_id": lease_id, "expires_at": int(__import__("time").time()) + 600,
+            "lease_id": lease_id, "expires_at": future_expiry,
             "commit": SHA,
         }) + "\n",
         encoding="utf-8",
@@ -952,14 +954,17 @@ def test_download_test_timer_keeps_future_lease_active_until_expiry(tmp_path, mo
     result = receiver.expire_download_test(lease_id)
 
     assert result["status"] == "DOWNLOAD_TEST_EXPIRY_NOT_DUE"
-    assert config_path.read_text(encoding="utf-8") == receiver.DOWNLOAD_TEST_PROFILE_TEXT
+    assert config_path.read_text(encoding="utf-8") == receiver.DOWNLOAD_TEST_PROFILE_TEXT.format(expires_at=future_expiry)
     assert receiver.DOWNLOAD_TEST_LEASE.exists()
     assert restarts == []
 
 
 def test_download_test_expiry_with_corrupt_lease_fails_closed(tmp_path, monkeypatch):
     _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
-    config_path.write_text(receiver.DOWNLOAD_TEST_PROFILE_TEXT, encoding="utf-8")
+    config_path.write_text(
+        receiver.DOWNLOAD_TEST_PROFILE_TEXT.format(expires_at=int(__import__("time").time()) + 600),
+        encoding="utf-8",
+    )
     receiver.DOWNLOAD_TEST_LEASE.write_text("not-json", encoding="utf-8")
     receiver.DOWNLOAD_TEST_LEASE.chmod(0o600)
     real_lstat = Path.lstat
