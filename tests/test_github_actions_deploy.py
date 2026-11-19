@@ -51,7 +51,7 @@ def test_receiver_build_id_is_in_every_emitted_receipt(capsys):
     receiver.emit("TEST", marker="ok")
     import json
     payload = json.loads(capsys.readouterr().out)
-    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v5-controlled-download-config"
+    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v6-isolated-download-config-dir"
     assert payload["marker"] == "ok"
 
 
@@ -692,8 +692,8 @@ def _prepare_download_config_receiver_test(tmp_path, monkeypatch):
 
     current = tmp_path / "current"
     current.symlink_to(release)
-    config_parent = tmp_path / "etc/r2-relay"
-    config_parent.mkdir(parents=True)
+    config_parent = tmp_path / "etc-r2-relay-download"
+    config_parent.mkdir(mode=0o710, parents=True)
     config_path = config_parent / "download.toml"
     backup_parent = tmp_path / "var/backups/r2-relay"
     backup_parent.mkdir(parents=True)
@@ -872,3 +872,69 @@ def test_health_check_can_require_download_disabled(monkeypatch):
     assert receiver.health_check(attempts=1) is True
     assert receiver.health_check(attempts=1, expected_download_enabled=False) is False
     assert receiver.health_check(attempts=1, expected_download_enabled=False) is True
+
+
+
+def _prepare_download_config_path_validation(tmp_path, monkeypatch, *, existing_mode=None):
+    from types import SimpleNamespace
+
+    etc_dir = tmp_path / "etc"
+    etc_dir.mkdir()
+    config_dir = etc_dir / "r2-relay-download"
+    if existing_mode is not None:
+        config_dir.mkdir(mode=existing_mode)
+        config_dir.chmod(existing_mode)
+    backup_parent = tmp_path / "var" / "backups" / "r2-relay"
+    backup_parent.mkdir(parents=True)
+    backup_root = backup_parent / "download-config"
+    gid = 4242
+
+    monkeypatch.setattr(receiver, "DOWNLOAD_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(receiver, "DOWNLOAD_CONFIG", config_dir / "download.toml")
+    monkeypatch.setattr(receiver, "DOWNLOAD_CONFIG_BACKUPS", backup_root)
+    monkeypatch.setattr(receiver.os, "chown", lambda *_args, **_kwargs: None)
+
+    real_stat = Path.stat
+
+    def fake_stat(path, *args, **kwargs):
+        info = real_stat(path, *args, **kwargs)
+        if path == etc_dir:
+            return SimpleNamespace(st_uid=0, st_gid=0, st_mode=info.st_mode)
+        if path == config_dir:
+            return SimpleNamespace(st_uid=0, st_gid=gid, st_mode=info.st_mode)
+        if path == backup_parent:
+            return SimpleNamespace(st_uid=0, st_gid=0, st_mode=info.st_mode)
+        return info
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    return config_dir, gid
+
+
+def test_download_config_directory_is_created_root_owned_group_search_only(
+    tmp_path, monkeypatch
+):
+    import stat
+
+    config_dir, gid = _prepare_download_config_path_validation(tmp_path, monkeypatch)
+
+    receiver._validate_download_config_paths(gid)
+
+    info = config_dir.stat()
+    assert info.st_uid == 0
+    assert info.st_gid == gid
+    assert stat.S_IMODE(info.st_mode) == 0o710
+
+
+def test_download_config_directory_rejects_permissive_existing_mode(
+    tmp_path, monkeypatch
+):
+    config_dir, gid = _prepare_download_config_path_validation(
+        tmp_path, monkeypatch, existing_mode=0o755
+    )
+
+    try:
+        receiver._validate_download_config_paths(gid)
+    except receiver.DeployError as exc:
+        assert str(exc) == "download_config_parent_permissions_invalid"
+    else:
+        raise AssertionError("permissive download config directory accepted")
