@@ -715,6 +715,11 @@ def _prepare_download_config_receiver_test(tmp_path, monkeypatch):
     state_dir = tmp_path / "var/lib/r2-relay-deploy"
     state_dir.mkdir(mode=0o700, parents=True)
 
+    systemd_dir = tmp_path / "systemd"
+    systemd_dir.mkdir(mode=0o755)
+    monkeypatch.setattr(receiver, "SYSTEMD_UNIT_DIR", systemd_dir)
+    monkeypatch.setattr(receiver, "_validate_download_test_systemd_dir", lambda: None)
+    monkeypatch.setattr(receiver, "_cleanup_download_test_expiry_timer", lambda _lease_id: None)
     monkeypatch.setattr(receiver, "DOWNLOAD_TEST_STATE_DIR", state_dir)
     monkeypatch.setattr(receiver, "DOWNLOAD_TEST_LEASE", state_dir / "download-test-lease.json")
     monkeypatch.setattr(receiver, "CURRENT", current)
@@ -813,9 +818,13 @@ def test_apply_download_config_disabled_rolls_back_file_after_failed_health(tmp_
 def test_apply_download_config_real_test_uses_fixed_bounded_profile_and_lease(tmp_path, monkeypatch):
     release, config_path, backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
     config_path.write_text(receiver.DOWNLOAD_CONFIG_TEXT, encoding="utf-8")
+    commands = []
     restarts = []
-    scheduled = []
-    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: (scheduled if "systemd-run" in argv[0] else restarts).append(argv))
+    def run(argv, timeout=120):
+        commands.append(argv)
+        if argv == ["/usr/bin/systemctl", "restart", receiver.SERVICE]:
+            restarts.append(argv)
+    monkeypatch.setattr(receiver, "run_fixed", run)
     monkeypatch.setattr(receiver, "health_check", lambda attempts=25, expected_download_enabled=None: expected_download_enabled is False or expected_download_enabled is True)
     monkeypatch.setattr(receiver.secrets, "token_hex", lambda _n: "c" * 32)
 
@@ -833,9 +842,16 @@ def test_apply_download_config_real_test_uses_fixed_bounded_profile_and_lease(tm
     assert "max_active_tasks = 1" in config_path.read_text(encoding="utf-8")
     assert receiver.DOWNLOAD_TEST_LEASE.is_file()
     assert receiver.DOWNLOAD_TEST_LEASE.stat().st_mode & 0o777 == 0o600
-    assert len(scheduled) == 1
-    assert "--timer-property=Persistent=true" in scheduled[0]
-    assert "--on-calendar=" in " ".join(scheduled[0])
+    timer_unit = receiver.SYSTEMD_UNIT_DIR / ("r2-relay-download-test-expiry-" + "c" * 32 + ".timer")
+    service_unit = receiver.SYSTEMD_UNIT_DIR / ("r2-relay-download-test-expiry-" + "c" * 32 + ".service")
+    timer_text = timer_unit.read_text(encoding="utf-8")
+    service_text = service_unit.read_text(encoding="utf-8")
+    assert "OnBootSec=30s" in timer_text
+    assert "OnUnitActiveSec=30s" in timer_text
+    assert "WantedBy=timers.target" in timer_text
+    assert "--expire-download-test " + "c" * 32 in service_text
+    assert ["/usr/bin/systemctl", "daemon-reload"] in commands
+    assert ["/usr/bin/systemctl", "enable", "--now", "r2-relay-download-test-expiry-" + "c" * 32 + ".timer"] in commands
     assert len(restarts) == 1
     assert restarts[0] == ["/usr/bin/systemctl", "restart", receiver.SERVICE]
     assert list(backup_root.iterdir())
