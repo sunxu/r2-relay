@@ -1077,6 +1077,10 @@ def apply_download_config_real_test(sha: str) -> dict:
                 if not health_check(expected_download_enabled=False):
                     raise DeployError("download_test_disable_after_failure_health_check_failed")
             except Exception:
+                try:
+                    run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+                except Exception:
+                    pass
                 raise DeployError(
                     "download_test_enable_failed_disable_failed:" + type(exc).__name__
                 ) from None
@@ -1106,10 +1110,10 @@ def expire_download_test(lease_id: str) -> dict:
                 "expires_at": lease["expires_at"],
             }
         _uid, gid, _current_target = validate_host_state(require_active=False)
-        _validate_download_config_paths(gid)
-        _atomic_write_download_config(DOWNLOAD_CONFIG_TEXT.encode("utf-8"), gid)
-        _clear_download_test_lease()
         try:
+            _validate_download_config_paths(gid)
+            _atomic_write_download_config(DOWNLOAD_CONFIG_TEXT.encode("utf-8"), gid)
+            _clear_download_test_lease()
             run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
             if not health_check(expected_download_enabled=False):
                 raise DeployError("download_test_expiry_disable_health_check_failed")
@@ -1142,7 +1146,7 @@ def apply_download_config_disabled(sha: str) -> dict:
         except BlockingIOError:
             raise DeployError("deployment_already_running") from None
 
-        _uid, gid, _previous_target = validate_host_state()
+        _uid, gid, _previous_target = validate_host_state(require_active=False)
         _validate_download_config_paths(gid)
         expected = DOWNLOAD_CONFIG_TEXT.encode("utf-8")
         previous_info = DOWNLOAD_CONFIG.stat() if DOWNLOAD_CONFIG.exists() else None
