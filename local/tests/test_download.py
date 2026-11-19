@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import os
 import tempfile
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -587,3 +588,127 @@ async def test_interrupted_ready_part_read_retries_same_part_and_completes(tmp_p
         os.close(fd)
         path.unlink(missing_ok=True)
         await coordinator.close()
+
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_blocking_pwrite_before_fd_file_and_process_lock_cleanup(
+    tmp_path, monkeypatch
+):
+    import fcntl
+
+    payload = b"disk-data"
+    digest = hashlib.sha256(payload).hexdigest()
+    manifest = {
+        "task_id": "blocking-write-task",
+        "status": "COMPLETE",
+        "mode": "parts",
+        "status_code": 200,
+        "headers": [],
+        "total_size": len(payload),
+        "expected_size": len(payload),
+        "part_size_bytes": len(payload),
+        "part_count": 1,
+        "ready_part_count": 1,
+        "parts": [{
+            "part_number": 1,
+            "size": len(payload),
+            "sha256": digest,
+            "status": "READY",
+        }],
+    }
+
+    class BlockingWriteRelay:
+        execution_timeout = 5
+        poll_interval = 0.001
+
+        async def download_create(self, request_id, url, headers):
+            return {"task_id": "blocking-write-task"}
+
+        async def download_manifest(self, task_id):
+            return manifest
+
+        @asynccontextmanager
+        async def download_part_stream(self, task_id, number):
+            yield _PayloadPartResponse(payload)
+
+        async def download_delete(self, task_id):
+            return None
+
+    coordinator = DownloadCoordinator(
+        BlockingWriteRelay(), local_settings(tmp_path)
+    )
+    write_started = threading.Event()
+    release_write = threading.Event()
+    real_pwrite = os.pwrite
+    real_mkstemp = tempfile.mkstemp
+    created = {}
+
+    def recording_mkstemp(*args, **kwargs):
+        fd, raw_path = real_mkstemp(*args, **kwargs)
+        created["fd"] = fd
+        created["path"] = Path(raw_path)
+        return fd, raw_path
+
+    def blocking_pwrite(fd, data, offset):
+        created["writer_fd"] = fd
+        write_started.set()
+        if not release_write.wait(timeout=10):
+            raise TimeoutError("test did not release blocked pwrite")
+        return real_pwrite(fd, data, offset)
+
+    monkeypatch.setattr(download_module.tempfile, "mkstemp", recording_mkstemp)
+    monkeypatch.setattr(download_module.os, "pwrite", blocking_pwrite)
+
+    download_task = asyncio.create_task(coordinator.download(R2_URL, []))
+    close_task = None
+    lock_probe = None
+    try:
+        deadline = asyncio.get_running_loop().time() + 3
+        while not write_started.is_set():
+            if asyncio.get_running_loop().time() >= deadline:
+                raise AssertionError("pwrite worker did not start")
+            await asyncio.sleep(0.005)
+
+        assert created["writer_fd"] == created["fd"]
+        assert created["path"].exists()
+        close_task = asyncio.create_task(coordinator.close())
+        await asyncio.sleep(0.05)
+
+        # close() must still be waiting for the OS thread; fd and process lock
+        # must remain valid/held while that thread can still call pwrite().
+        assert not close_task.done()
+        os.fstat(created["fd"])
+        assert created["path"].exists()
+        assert coordinator.disk_budget.used == len(payload)
+
+        lock_probe = (coordinator.root / ".process.lock").open("a+b")
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(
+                lock_probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB
+            )
+
+        release_write.set()
+        await asyncio.wait_for(close_task, timeout=3)
+        assert download_task.done()
+        assert download_task.cancelled()
+        assert not created["path"].exists()
+        assert coordinator.disk_budget.used == 0
+        with pytest.raises(OSError):
+            os.fstat(created["fd"])
+
+        # The process lock is released only after the writer has stopped and
+        # the temporary file descriptor has been closed.
+        fcntl.flock(lock_probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(lock_probe.fileno(), fcntl.LOCK_UN)
+    finally:
+        release_write.set()
+        if close_task is not None and not close_task.done():
+            await asyncio.wait_for(close_task, timeout=3)
+        elif not coordinator._closed:
+            await coordinator.close()
+        if not download_task.done():
+            download_task.cancel()
+            await asyncio.gather(download_task, return_exceptions=True)
+        if lock_probe is not None:
+            lock_probe.close()
