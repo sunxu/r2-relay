@@ -673,6 +673,8 @@ def deploy(sha: str, archive_path: Path) -> dict:
         except BlockingIOError:
             raise DeployError("deployment_already_running") from None
 
+        if _read_download_test_lease() is not None:
+            raise DeployError("deployment_blocked_while_real_r2_test_lease_active")
         uid, gid, previous_target = validate_host_state()
         previous_was_symlink = CURRENT.is_symlink()
         release = RELEASES / sha
@@ -1093,9 +1095,18 @@ def expire_download_test(lease_id: str) -> dict:
         _validate_download_config_paths(gid)
         _atomic_write_download_config(DOWNLOAD_CONFIG_TEXT.encode("utf-8"), gid)
         _clear_download_test_lease()
-        run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
-        if not health_check(expected_download_enabled=False):
-            raise DeployError("download_test_expiry_disable_health_check_failed")
+        try:
+            run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+            if not health_check(expected_download_enabled=False):
+                raise DeployError("download_test_expiry_disable_health_check_failed")
+        except Exception as exc:
+            try:
+                run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+            except Exception:
+                pass
+            raise DeployError(
+                "download_test_expiry_disable_failed_fail_closed:" + type(exc).__name__
+            ) from None
         return {
             "status": "DOWNLOAD_TEST_AUTO_DISABLED",
             "commit": lease["commit"],
@@ -1128,7 +1139,11 @@ def apply_download_config_disabled(sha: str) -> dict:
         if previous == expected:
             _clear_download_test_lease()
             if not health_check(expected_download_enabled=False):
-                raise DeployError("download_config_existing_health_check_failed")
+                try:
+                    run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+                except Exception:
+                    pass
+                raise DeployError("download_config_existing_health_check_failed_service_stopped")
             return {
                 "status": "DOWNLOAD_CONFIG_ALREADY_APPLIED",
                 "commit": sha,
