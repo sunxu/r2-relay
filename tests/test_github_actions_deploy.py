@@ -905,7 +905,7 @@ def test_apply_download_config_disabled_requires_healthy_managed_host(tmp_path, 
     _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
     monkeypatch.setattr(
         receiver, "validate_host_state",
-        lambda: (_ for _ in ()).throw(receiver.DeployError("service_not_active_before_deploy")),
+        lambda **_kwargs: (_ for _ in ()).throw(receiver.DeployError("service_not_active_before_deploy")),
     )
     try:
         receiver.apply_download_config_disabled(SHA)
