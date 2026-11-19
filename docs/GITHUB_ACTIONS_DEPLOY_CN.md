@@ -50,12 +50,12 @@ ssh-keygen -t ed25519 -a 64 -N "" \
 > **职责边界：这是一项由 Owner 执行的一次性初始化，不纳入 GitHub Actions 自动化范围。** Owner 可以通过现有可信 Root SSH 管理通道执行下面的 Bootstrap；完成后，日常部署不再需要人工登录 VPS 或执行命令。无需新增 Bootstrap Workflow、VPS MCP Server 或独立管理项目。
 
 
-**必须使用 PR #69 合并后记录的精确 Merge Commit SHA，不要直接使用不断变化的 main HEAD。** 本轮固定 SHA 为 `737e23437763de8e5b1b8c66c73c72b5c934de50`。先在可信 Mac 上检出该固定提交，并确认工作区：
+**必须使用 PR #71 合并后记录的精确 Merge Commit SHA，不要直接使用不断变化的 main HEAD。** 本轮固定 Bootstrap SHA 为 `12de7b52ba5e824455da15640f0cba8b6454ea08`。先在可信 Mac 上检出该固定提交，并确认工作区：
 
 ```bash
 git fetch origin main
-git checkout --detach 737e23437763de8e5b1b8c66c73c72b5c934de50
-test "$(git rev-parse HEAD)" = "737e23437763de8e5b1b8c66c73c72b5c934de50"
+git checkout --detach 12de7b52ba5e824455da15640f0cba8b6454ea08
+test "$(git rev-parse HEAD)" = "12de7b52ba5e824455da15640f0cba8b6454ea08"
 git status --short
 ```
 
@@ -113,7 +113,7 @@ sudo namei -l /etc/r2-relay/vps.env
 在 GitHub Secrets 配置完成前，可用专用私钥向受限入口发送一个**空归档**，验证 SSH 公钥认证、ForcedCommand、sudoers 和 Root receiver 全链路。该命令不会进入 `deploy()`，不会切换版本或重启服务：
 
 ```bash
-MERGE_SHA="737e23437763de8e5b1b8c66c73c72b5c934de50"
+MERGE_SHA="12de7b52ba5e824455da15640f0cba8b6454ea08"
 set +e
 printf '' | ssh -T \
   -i ~/.ssh/r2-relay-github-actions \
