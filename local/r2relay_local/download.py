@@ -31,6 +31,36 @@ def _pwrite_all(fd: int, data: bytes, offset: int) -> None:
         written += count
 
 
+async def _run_disk_operation(function, *args):
+    """Run blocking disk I/O without letting task cancellation outlive the worker.
+
+    asyncio.to_thread() cannot stop a running OS thread. Shield its task and,
+    after cancellation, wait until the worker has really finished before
+    propagating CancelledError to the caller. Callers may then safely close
+    the file descriptor or remove its backing file.
+    """
+    worker = asyncio.create_task(asyncio.to_thread(function, *args))
+    cancelled = False
+    while not worker.done():
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled = True
+        except BaseException:
+            # Retrieve the worker exception below. If cancellation was also
+            # requested, cancellation remains the caller-visible outcome.
+            break
+    try:
+        result = worker.result()
+    except BaseException:
+        if cancelled:
+            raise asyncio.CancelledError
+        raise
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
+
+
 class DownloadRelayError(Exception):
     """下载中继失败；不得静默回退为直连 R2。"""
 
@@ -194,7 +224,7 @@ class DownloadCoordinator:
                                 continue
                             if received + len(chunk) > size:
                                 raise DownloadRelayError("Part 响应超过 manifest 声明长度")
-                            await asyncio.to_thread(_pwrite_all, fd, chunk, offset + received)
+                            await _run_disk_operation(_pwrite_all, fd, chunk, offset + received)
                             digest.update(chunk)
                             received += len(chunk)
                 if received != size:
@@ -330,8 +360,8 @@ class DownloadCoordinator:
                     expected_size = manifest.get("expected_size")
                     if expected_size is not None and int(expected_size) != total_size:
                         raise DownloadRelayError("大响应长度与 Content-Length 不一致")
-                    await asyncio.to_thread(os.ftruncate, fd, total_size)
-                    await asyncio.to_thread(os.fsync, fd)
+                    await _run_disk_operation(os.ftruncate, fd, total_size)
+                    await _run_disk_operation(os.fsync, fd)
                     os.close(fd)
                     fd = -1
                     await self._delete_remote(task_id)
