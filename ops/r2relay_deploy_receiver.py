@@ -1001,7 +1001,7 @@ def _download_test_timer_unit_name(lease_id: str) -> str:
     return DOWNLOAD_TEST_TIMER_PREFIX + lease_id
 
 
-def _schedule_download_test_expiry(lease_id: str, expires_at: int) -> None:
+def _schedule_download_test_expiry(lease_id: str) -> None:
     _validate_download_test_systemd_dir()
     unit = _download_test_timer_unit_name(lease_id)
     service_path = SYSTEMD_UNIT_DIR / (unit + ".service")
@@ -1047,6 +1047,7 @@ WantedBy=timers.target
 
 
 def _cleanup_download_test_expiry_timer(lease_id: str) -> None:
+    _validate_download_test_systemd_dir()
     unit = _download_test_timer_unit_name(lease_id)
     service_path = SYSTEMD_UNIT_DIR / (unit + ".service")
     timer_path = SYSTEMD_UNIT_DIR / (unit + ".timer")
@@ -1123,7 +1124,7 @@ def apply_download_config_real_test(sha: str) -> dict:
         try:
             _write_download_test_lease(lease)
             _atomic_write_download_config(DOWNLOAD_TEST_PROFILE_TEXT.encode("utf-8"), gid)
-            _schedule_download_test_expiry(lease_id, expires_at)
+            _schedule_download_test_expiry(lease_id)
             run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
             if not health_check(expected_download_enabled=True):
                 raise DeployError("download_test_enable_health_check_failed")
