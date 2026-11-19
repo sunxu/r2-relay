@@ -101,7 +101,7 @@ def test_valid_archive_and_commit_marker(tmp_path):
     archive = tmp_path / "release.tar"
     make_archive(archive)
     members, info = receiver.validate_archive(archive, SHA)
-    assert info["files"] == 5
+    assert info["files"] == 6
     assert info["unpacked_bytes"] > 0
     stage = tmp_path / "stage"
     receiver.extract_archive(archive, stage, members, SHA)
