@@ -139,6 +139,7 @@ class DownloadCoordinator:
                 nonlocal released
                 if not released:
                     released = True
+                    body.clear()
                     await self.memory_budget.release(size)
 
             return DownloadResult(
