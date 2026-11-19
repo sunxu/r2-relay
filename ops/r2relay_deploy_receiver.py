@@ -1089,6 +1089,27 @@ def apply_download_config_real_test(sha: str) -> dict:
             ) from None
 
 
+def _force_download_test_disabled(gid: int) -> None:
+    _validate_download_config_paths(gid)
+    _atomic_write_download_config(DOWNLOAD_CONFIG_TEXT.encode("utf-8"), gid)
+    _clear_download_test_lease()
+    run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+    if not health_check(expected_download_enabled=False):
+        raise DeployError("download_test_disable_health_check_failed")
+
+
+def _force_download_test_disabled_or_stop() -> None:
+    try:
+        _uid, gid, _target = validate_host_state(require_active=False)
+        _force_download_test_disabled(gid)
+    except Exception:
+        try:
+            run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+        except Exception:
+            pass
+        raise DeployError("download_test_disable_failed_fail_closed") from None
+
+
 def expire_download_test(lease_id: str) -> dict:
     if not re.fullmatch(r"[0-9a-f]{32}", lease_id):
         raise DeployError("invalid_download_test_lease_id")
@@ -1100,23 +1121,37 @@ def expire_download_test(lease_id: str) -> dict:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise DeployError("deployment_already_running") from None
-        lease = _read_download_test_lease()
+        try:
+            lease = _read_download_test_lease()
+        except DeployError:
+            _force_download_test_disabled_or_stop()
+            return {
+                "status": "DOWNLOAD_TEST_AUTO_DISABLED",
+                "download_enabled": False,
+                "reason": "invalid_lease_fail_closed",
+                "service_restarted": True,
+            }
         if lease is None or lease["lease_id"] != lease_id:
             return {"status": "DOWNLOAD_TEST_EXPIRY_STALE", "download_enabled": None}
         if lease["expires_at"] > int(time.time()):
-            _schedule_download_test_expiry(lease_id, lease["expires_at"])
-            return {
-                "status": "DOWNLOAD_TEST_EXPIRY_RESCHEDULED",
-                "expires_at": lease["expires_at"],
-            }
-        _uid, gid, _current_target = validate_host_state(require_active=False)
+            try:
+                _schedule_download_test_expiry(lease_id, lease["expires_at"])
+                return {
+                    "status": "DOWNLOAD_TEST_EXPIRY_RESCHEDULED",
+                    "expires_at": lease["expires_at"],
+                }
+            except Exception:
+                _force_download_test_disabled_or_stop()
+                return {
+                    "status": "DOWNLOAD_TEST_AUTO_DISABLED",
+                    "commit": lease["commit"],
+                    "download_enabled": False,
+                    "reason": "expiry_timer_reschedule_failed",
+                    "service_restarted": True,
+                }
         try:
-            _validate_download_config_paths(gid)
-            _atomic_write_download_config(DOWNLOAD_CONFIG_TEXT.encode("utf-8"), gid)
-            _clear_download_test_lease()
-            run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
-            if not health_check(expected_download_enabled=False):
-                raise DeployError("download_test_expiry_disable_health_check_failed")
+            _uid, gid, _current_target = validate_host_state(require_active=False)
+            _force_download_test_disabled(gid)
         except Exception as exc:
             try:
                 run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
@@ -1146,8 +1181,15 @@ def apply_download_config_disabled(sha: str) -> dict:
         except BlockingIOError:
             raise DeployError("deployment_already_running") from None
 
-        _uid, gid, _previous_target = validate_host_state(require_active=False)
-        _validate_download_config_paths(gid)
+        try:
+            _uid, gid, _previous_target = validate_host_state(require_active=False)
+            _validate_download_config_paths(gid)
+        except Exception:
+            try:
+                run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+            except Exception:
+                pass
+            raise
         expected = DOWNLOAD_CONFIG_TEXT.encode("utf-8")
         previous_info = DOWNLOAD_CONFIG.stat() if DOWNLOAD_CONFIG.exists() else None
         previous = DOWNLOAD_CONFIG.read_bytes() if previous_info is not None else None
@@ -1158,16 +1200,24 @@ def apply_download_config_disabled(sha: str) -> dict:
             _clear_download_test_lease()
             if not health_check(expected_download_enabled=False):
                 try:
-                    run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+                    run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+                    if not health_check(expected_download_enabled=False):
+                        raise DeployError("download_config_existing_health_check_failed")
+                    restarted = True
                 except Exception:
-                    pass
-                raise DeployError("download_config_existing_health_check_failed_service_stopped")
+                    try:
+                        run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+                    except Exception:
+                        pass
+                    raise DeployError("download_config_existing_health_check_failed_service_stopped") from None
+            else:
+                restarted = False
             return {
                 "status": "DOWNLOAD_CONFIG_ALREADY_APPLIED",
                 "commit": sha,
                 "download_enabled": False,
                 "config_path": str(DOWNLOAD_CONFIG),
-                "service_restarted": False,
+                "service_restarted": restarted,
             }
 
         backup = _write_download_config_backup(
