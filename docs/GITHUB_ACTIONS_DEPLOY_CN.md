@@ -129,6 +129,36 @@ PR 合并、Owner 完成一次性 VPS Bootstrap，并配置好两个 GitHub Acti
 
 ChatGPT 在 Issue #41 留下 `/deploy <SHA>` 评论。该评论就是触发事件；无需额外 Dispatch 服务或 MCP。
 
+应用下载配置使用同一个固定控制 Issue 和同一把受限 SSH key，命令为：
+
+```text
+/download-config disabled <40-char-lowercase-commit-sha>
+```
+
+该命令只支持 `disabled`，不提供启用命令、任意 TOML 输入或 `workflow_dispatch`。目标 SHA 必须已经部署为当前活动 Release，且 Release 中包含 `deploy/download-config-dropin-v1` 能力标记。Workflow 通过固定 Root receiver 写入独立的 `/etc/r2-relay/download.toml`，不覆盖现有 `/etc/r2-relay/config.toml`：
+
+```toml
+schema_version = 1
+
+[download]
+enabled = false
+part_size_mib = 16
+split_threshold_mib = 24
+cache_ttl_seconds = 600
+max_cache_bytes = 0
+min_free_bytes = 0
+max_active_tasks = 0
+max_retained_tasks = 0
+max_waiters = 0
+wait_timeout_seconds = 30
+```
+
+该文件由 Root 原子写入，权限为 `root:r2relay 0640`；应用前备份旧文件，重启仅限 `r2-relay-vps.service`，健康检查失败则恢复旧配置并再次重启。回执明确报告 `download_enabled=false`。配置应用不修改 Token、EnvironmentFile、上传缓存、Caddy 或 443/8443。当前命令只能关闭下载，后续若要启用，必须另行审查容量预算和授权，不属于本次授权。
+
+新增此操作需要把 Root receiver 升级到 build ID `r2-relay-deploy-receiver-v5-controlled-download-config`。这仍使用原有 `r2relay-deploy` ForcedCommand 和零参数 sudo 授权，不扩大 SSH/sudo 权限；但因 receiver 是独立安装的，合并后 Owner 需通过可信 Root SSH 通道再运行一次现有 Bootstrap（先 dry-run、核对原有 Ed25519 指纹，再 apply）。Bootstrap 只原子更新 Root receiver / sudoers / authorized_keys，不重启 R2 Relay、Caddy 或 sshd。升级后用空归档 `deploy <SHA>` 烟测，预期 v5 回执 `reason=empty_archive`、SSH exit 1。
+
+推荐顺序：先通过 `/deploy <SHA>` 部署包含 drop-in 支持的 main Release；再通过 `/download-config disabled <同一 SHA>` 应用显式关闭配置。两条命令都只接受 Issue #41 上由 `sunxu` 发布的精确评论。
+
 控制 Workflow 只接受：
 - Issue #41（固定控制 Issue，不能在 PR 评论中触发）；
 - 评论作者 `sunxu`；
