@@ -773,6 +773,7 @@ def test_apply_download_config_disabled_rolls_back_file_after_failed_health(tmp_
     _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
     previous = b"[download]\nenabled = false\n# owner-managed settings\n"
     config_path.write_bytes(previous)
+    config_path.chmod(0o600)
     health_results = iter([False, True])
     restarts = []
     monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: restarts.append(argv))
@@ -786,6 +787,7 @@ def test_apply_download_config_disabled_rolls_back_file_after_failed_health(tmp_
         raise AssertionError("failed config health check was accepted")
 
     assert config_path.read_bytes() == previous
+    assert config_path.stat().st_mode & 0o777 == 0o600
     assert len(restarts) == 2
 
 
