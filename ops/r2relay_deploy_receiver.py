@@ -31,18 +31,21 @@ UNIT = Path("/etc/systemd/system/r2-relay-vps.service")
 ENV_FILE = Path("/etc/r2-relay/vps.env")
 CACHE = Path("/var/lib/r2-relay/cache")
 BACKUPS = Path("/var/backups/r2-relay/deploy")
+DOWNLOAD_CONFIG = Path("/etc/r2-relay/download.toml")
+DOWNLOAD_CONFIG_BACKUPS = Path("/var/backups/r2-relay/download-config")
 LOCK = Path("/run/lock/r2-relay-github-deploy.lock")
 SERVICE = "r2-relay-vps.service"
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_UNPACKED_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 6000
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
-RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v4-venv-lib64-symlink"
+RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v5-controlled-download-config"
 REQUIRED = {
     "vps/pyproject.toml",
     "vps/r2relay_vps/app.py",
     "deploy/vps.service",
     "deploy/requirements-vps.lock",
+    "deploy/download-config-dropin-v1",
     ".deployment-commit",
 }
 
@@ -198,6 +201,11 @@ def validate_archive(archive_path: Path, expected_sha: str):
                 raise DeployError("required_files_missing")
             if marker != expected_sha:
                 raise DeployError("commit_marker_mismatch")
+            config_marker = archive.extractfile(
+                archive.getmember("deploy/download-config-dropin-v1")
+            )
+            if config_marker is None or config_marker.read(128).decode("ascii") != DOWNLOAD_CONFIG_MARKER + "\\n":
+                raise DeployError("download_config_capability_marker_invalid")
             unit_member = archive.getmember("deploy/vps.service")
             unit_stream = archive.extractfile(unit_member)
             if unit_stream is None or unit_stream.read(65536).decode("utf-8") != UNIT_TEXT:
@@ -687,9 +695,177 @@ def deploy(sha: str, archive_path: Path) -> dict:
             raise DeployError("deployment_failed_rollback_failed:" + str(exc)) from None
 
 
+def parse_download_config_command(command: str | None) -> str:
+    if not isinstance(command, str):
+        raise DeployError("missing_forced_command")
+    match = re.fullmatch(r"download-config disabled ([0-9a-f]{40})", command)
+    if not match:
+        raise DeployError("download_config_command_not_allowed")
+    return match.group(1)
+
+
+def _fsync_directory(path: Path) -> None:
+    directory_fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _validate_download_config_paths(gid: int) -> None:
+    parent = DOWNLOAD_CONFIG.parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise DeployError("download_config_parent_missing_or_unsafe")
+    parent_stat = parent.stat()
+    if parent_stat.st_uid != 0 or parent_stat.st_mode & 0o022:
+        raise DeployError("download_config_parent_permissions_invalid")
+    if DOWNLOAD_CONFIG.is_symlink():
+        raise DeployError("download_config_path_symlink")
+    if DOWNLOAD_CONFIG.exists():
+        info = DOWNLOAD_CONFIG.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                or info.st_gid not in (0, gid) or info.st_mode & 0o027
+                or info.st_nlink != 1 or info.st_size > 4096):
+            raise DeployError("download_config_file_permissions_invalid")
+    backup_parent = DOWNLOAD_CONFIG_BACKUPS.parent
+    if backup_parent.is_symlink() or not backup_parent.is_dir():
+        raise DeployError("download_config_backup_parent_missing_or_unsafe")
+    backup_parent_stat = backup_parent.stat()
+    if backup_parent_stat.st_uid != 0 or backup_parent_stat.st_mode & 0o022:
+        raise DeployError("download_config_backup_parent_permissions_invalid")
+    if DOWNLOAD_CONFIG_BACKUPS.is_symlink():
+        raise DeployError("download_config_backup_root_symlink")
+
+
+def _atomic_write_download_config(content: bytes, gid: int) -> None:
+    fd, name = tempfile.mkstemp(prefix=".r2-download-config-", dir=DOWNLOAD_CONFIG.parent)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+            os.fchown(output.fileno(), 0, gid)
+            os.fchmod(output.fileno(), 0o640)
+        os.replace(name, DOWNLOAD_CONFIG)
+        _fsync_directory(DOWNLOAD_CONFIG.parent)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def _restore_download_config(previous: bytes | None, gid: int) -> None:
+    if previous is None:
+        DOWNLOAD_CONFIG.unlink(missing_ok=True)
+        _fsync_directory(DOWNLOAD_CONFIG.parent)
+    else:
+        _atomic_write_download_config(previous, gid)
+
+
+def apply_download_config_disabled(sha: str) -> dict:
+    if not SHA_RE.fullmatch(sha):
+        raise DeployError("invalid_commit_sha")
+    if os.geteuid() != 0:
+        raise DeployError("root_required")
+    lock_fd = open_deploy_lock()
+    with os.fdopen(lock_fd, "r+") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise DeployError("deployment_already_running") from None
+
+        uid, gid, previous_target = validate_host_state()
+        if not CURRENT.is_symlink() or Path(previous_target).name != sha:
+            raise DeployError("download_config_target_not_active_release")
+        release = Path(previous_target)
+        try:
+            installed_sha = (release / ".deployment-commit").read_text(encoding="ascii").strip()
+            capability = (release / "deploy/download-config-dropin-v1").read_text(encoding="ascii")
+        except (OSError, UnicodeError):
+            raise DeployError("download_config_capability_not_deployed") from None
+        if installed_sha != sha or capability != DOWNLOAD_CONFIG_MARKER + "\\n":
+            raise DeployError("download_config_capability_not_deployed")
+
+        _validate_download_config_paths(gid)
+        expected = DOWNLOAD_CONFIG_TEXT.encode("utf-8")
+        previous = DOWNLOAD_CONFIG.read_bytes() if DOWNLOAD_CONFIG.exists() else None
+        if previous == expected:
+            return {
+                "status": "DOWNLOAD_CONFIG_ALREADY_APPLIED",
+                "commit": sha,
+                "download_enabled": False,
+                "config_path": str(DOWNLOAD_CONFIG),
+                "service_restarted": False,
+            }
+
+        DOWNLOAD_CONFIG_BACKUPS.mkdir(mode=0o700, parents=False, exist_ok=True)
+        backup_root_stat = DOWNLOAD_CONFIG_BACKUPS.lstat()
+        if (not stat.S_ISDIR(backup_root_stat.st_mode)
+                or backup_root_stat.st_uid != 0 or backup_root_stat.st_mode & 0o077):
+            raise DeployError("download_config_backup_root_permissions_invalid")
+        backup = DOWNLOAD_CONFIG_BACKUPS / (
+            time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(4)
+        )
+        backup.mkdir(mode=0o700)
+        state = {
+            "requested_commit": sha,
+            "previous_config_existed": previous is not None,
+            "config_path": str(DOWNLOAD_CONFIG),
+        }
+        if previous is not None:
+            previous_backup = backup / "download.toml"
+            previous_backup.write_bytes(previous)
+            os.chown(previous_backup, 0, 0)
+            os.chmod(previous_backup, 0o600)
+        state_path = backup / "state.json"
+        state_path.write_text(json.dumps(state, sort_keys=True) + "\\n", encoding="utf-8")
+        os.chown(state_path, 0, 0)
+        os.chmod(state_path, 0o600)
+        _fsync_directory(backup)
+        _fsync_directory(DOWNLOAD_CONFIG_BACKUPS)
+
+        try:
+            _atomic_write_download_config(expected, gid)
+            run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+            if not health_check():
+                raise DeployError("download_config_health_check_failed")
+            return {
+                "status": "DOWNLOAD_CONFIG_APPLIED",
+                "commit": sha,
+                "download_enabled": False,
+                "config_path": str(DOWNLOAD_CONFIG),
+                "config_mode": "0640",
+                "backup": str(backup),
+                "service_restarted": True,
+                "cache_modified": False,
+                "environment_modified": False,
+                "caddy_modified": False,
+            }
+        except Exception as exc:
+            try:
+                _restore_download_config(previous, gid)
+                run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+                if not health_check():
+                    raise DeployError("download_config_rollback_health_check_failed")
+            except Exception:
+                raise DeployError(
+                    "download_config_apply_failed_rollback_failed:" + type(exc).__name__
+                ) from None
+            raise DeployError(
+                "download_config_apply_failed_rolled_back:" + type(exc).__name__
+            ) from None
+
+
 def main() -> int:
     try:
-        sha = parse_original_command(os.environ.get("SSH_ORIGINAL_COMMAND"))
+        original_command = os.environ.get("SSH_ORIGINAL_COMMAND")
+        if isinstance(original_command, str) and original_command.startswith("download-config"):
+            sha = parse_download_config_command(original_command)
+            if sys.stdin.buffer.read(1):
+                raise DeployError("download_config_stdin_must_be_empty")
+            result = apply_download_config_disabled(sha)
+            emit(result.pop("status"), **result)
+            return 0
+
+        sha = parse_original_command(original_command)
         archive = read_archive(sys.stdin.buffer)
         try:
             result = deploy(sha, archive)
