@@ -797,7 +797,7 @@ def apply_download_config_disabled(sha: str) -> dict:
             capability = (release / "deploy/download-config-dropin-v1").read_text(encoding="ascii")
         except (OSError, UnicodeError):
             raise DeployError("download_config_capability_not_deployed") from None
-        if installed_sha != sha or capability != DOWNLOAD_CONFIG_MARKER + "\\n":
+        if installed_sha != sha or capability != DOWNLOAD_CONFIG_MARKER + "\n":
             raise DeployError("download_config_capability_not_deployed")
 
         _validate_download_config_paths(gid)
