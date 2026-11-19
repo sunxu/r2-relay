@@ -138,7 +138,8 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
                download_transport: httpx.AsyncBaseTransport | None = None,
                download_settings: DownloadSettings | None = None,
                download_root: Path | None = None,
-               download_config_path: Path | None = None) -> FastAPI:
+               download_config_path: Path | None = None,
+               download_override_path: Path | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         task = asyncio.create_task(_cleanup_loop(app.state.relay))
@@ -164,7 +165,9 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
                   R2Worker(transport=r2_transport, delays=retry_delays))
     if not state.token:
         raise RuntimeError("R2_RELAY_TOKEN must be configured")
-    settings = download_settings or load_download_settings(download_config_path)
+    settings = download_settings or load_download_settings(
+        download_config_path, download_override_path
+    )
     downloads = DownloadManager(
         download_root or Path("/var/lib/r2-relay/downloads"), settings,
         transport=download_transport,
@@ -179,7 +182,7 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
 
     @app.get("/healthz")
     async def healthz():
-        return {"status": "ok"}
+        return {"status": "ok", "download_enabled": settings.enabled}
 
     # Dedicated network benchmark sink: authenticated, bounded, streamed and discarded.
     bench_max_bytes = int(os.environ.get("R2_RELAY_BENCH_MAX_BYTES", str(32 * 1024 * 1024)))

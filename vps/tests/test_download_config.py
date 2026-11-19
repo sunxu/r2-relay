@@ -62,3 +62,78 @@ def test_enabling_download_without_disk_budgets_fails_closed(tmp_path):
     path.write_text("[download]\nenabled = true\n", encoding="utf-8")
     with pytest.raises(ValueError, match="max_cache_bytes"):
         load_download_settings(path)
+
+
+
+def test_managed_download_dropin_overrides_general_config_without_touching_it(tmp_path):
+    general = tmp_path / "config.toml"
+    general.write_text(
+        "[download]\n"
+        "enabled = true\n"
+        "part_size_mib = 16\n"
+        "split_threshold_mib = 24\n"
+        "cache_ttl_seconds = 600\n"
+        "max_cache_bytes = 536870912\n"
+        "min_free_bytes = 4294967296\n"
+        "max_active_tasks = 2\n"
+        "max_retained_tasks = 16\n"
+        "max_waiters = 32\n"
+        "wait_timeout_seconds = 30\n",
+        encoding="utf-8",
+    )
+    original_general = general.read_bytes()
+    dropin = tmp_path / "download.toml"
+    dropin.write_text(
+        "schema_version = 1\n"
+        "[download]\n"
+        "enabled = false\n"
+        "part_size_mib = 16\n"
+        "split_threshold_mib = 24\n"
+        "cache_ttl_seconds = 600\n"
+        "max_cache_bytes = 0\n"
+        "min_free_bytes = 0\n"
+        "max_active_tasks = 0\n"
+        "max_retained_tasks = 0\n"
+        "max_waiters = 0\n"
+        "wait_timeout_seconds = 30\n",
+        encoding="utf-8",
+    )
+
+    settings = load_download_settings(general, dropin)
+
+    assert settings.enabled is False
+    assert settings.part_size_bytes == 16 * 1024 * 1024
+    assert settings.split_threshold_bytes == 24 * 1024 * 1024
+    assert settings.cache_ttl_seconds == 600
+    assert settings.max_cache_bytes == 0
+    assert general.read_bytes() == original_general
+
+
+def test_managed_download_dropin_rejects_unknown_top_level_fields(tmp_path):
+    dropin = tmp_path / "download.toml"
+    dropin.write_text(
+        "schema_version = 1\n"
+        "unrelated = true\n"
+        "[download]\n"
+        "enabled = false\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="unknown top-level"):
+        load_download_settings(
+            Path("/path/that/does/not/exist.toml"), dropin
+        )
+
+
+def test_managed_download_dropin_rejects_invalid_values(tmp_path):
+    dropin = tmp_path / "download.toml"
+    dropin.write_text(
+        "[download]\n"
+        "enabled = false\n"
+        "part_size_mib = 16\n"
+        "split_threshold_mib = 8\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="cannot be smaller"):
+        load_download_settings(
+            Path("/path/that/does/not/exist.toml"), dropin
+        )

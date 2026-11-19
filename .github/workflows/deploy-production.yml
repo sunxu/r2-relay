@@ -166,3 +166,148 @@ jobs:
             printf -v body '%s\n\nDeployment receipt: %s' "$body" "$receipt"
           fi
           gh issue comment 41 --repo "$GITHUB_REPOSITORY" --body "$body"
+
+
+  configure-download:
+    if: >-
+      github.event.issue.number == 41 &&
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      github.event.comment.user.login == 'sunxu' &&
+      startsWith(github.event.comment.body, '/download-config ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VPS_HOST: 104.224.168.192
+      VPS_USER: r2relay-deploy
+      VPS_PORT: '22'
+    steps:
+      - name: Checkout trusted deployment controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Parse disabled-only configuration command
+        id: target
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, re
+          body = os.environ.get("COMMENT_BODY", "")
+          match = re.fullmatch(r"/download-config disabled ([0-9a-f]{40})", body.strip())
+          if not match:
+              raise SystemExit("Rejected: expected exactly /download-config disabled <40-char lowercase SHA>")
+          print("sha=" + match.group(1))
+          PY
+
+      - name: Verify target is on main and has deployment safety check
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          git cat-file -e "$TARGET_SHA^{commit}"
+          git merge-base --is-ancestor "$TARGET_SHA" origin/main
+          git cat-file -e "$TARGET_SHA:deploy/download-config-dropin-v1"
+          checks="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/check-runs?per_page=100")"
+          check="$(printf '%s\n' "$checks" | jq -s --arg sha "$TARGET_SHA" '[.[].check_runs[] | select(.name == "deploy-tests" and .head_sha == $sha and .app.slug == "github-actions")] | sort_by(.id) | last // empty')"
+          if [ -z "$check" ] || [ "$check" = "null" ]; then
+            echo "Required GitHub Actions deploy-tests check is missing for target commit."
+            exit 1
+          fi
+          status="$(jq -r '.status' <<< "$check")"
+          conclusion="$(jq -r '.conclusion // ""' <<< "$check")"
+          [ "$status" = "completed" ] || { echo "Required check is not complete: $status"; exit 1; }
+          [ "$conclusion" = "success" ] || { echo "Required check did not pass: $conclusion"; exit 1; }
+
+      - name: Configure pinned SSH identity
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_SSH_KEY" || { echo "Missing VPS_DEPLOY_SSH_KEY"; exit 1; }
+          test -n "$DEPLOY_KNOWN_HOSTS" || { echo "Missing VPS_SSH_KNOWN_HOSTS"; exit 1; }
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/r2-relay-deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/r2-relay-deploy" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/r2-relay-deploy" >/dev/null
+          ssh-keygen -F "$VPS_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null
+
+      - name: Apply fixed disabled download configuration through restricted SSH
+        id: configure
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          raw="$RUNNER_TEMP/download-config-response.raw.json"
+          stderr_file="$RUNNER_TEMP/download-config-ssh.stderr"
+          set +e
+          ssh -T \
+            -i "$HOME/.ssh/r2-relay-deploy" \
+            -p "$VPS_PORT" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ClearAllForwardings=yes \
+            -o RequestTTY=no \
+            "$VPS_USER@$VPS_HOST" "download-config disabled $TARGET_SHA" \
+            </dev/null > "$raw" 2> "$stderr_file"
+          ssh_status=$?
+          set -e
+          python - "$raw" "$stderr_file" "$ssh_status" "$TARGET_SHA" <<'PY'
+          import json, pathlib, sys
+          raw_path, stderr_path = map(pathlib.Path, sys.argv[1:3])
+          ssh_status, expected_sha = int(sys.argv[3]), sys.argv[4]
+          raw = raw_path.read_text(encoding="utf-8", errors="replace") if raw_path.exists() else ""
+          stderr = stderr_path.read_text(encoding="utf-8", errors="replace") if stderr_path.exists() else ""
+          try:
+              result = json.loads(raw)
+              if not isinstance(result, dict):
+                  raise ValueError("receiver_json_not_object")
+          except Exception:
+              result = {
+                  "status": "SSH_OR_RECEIVER_TRANSPORT_FAILED",
+                  "reason": "no valid receiver JSON response" if not (stderr.strip() or raw.strip())
+                            else "SSH or receiver returned a non-JSON response",
+              }
+          result["ssh_exit_code"] = ssh_status
+          result["requested_commit"] = expected_sha
+          print(json.dumps(result, sort_keys=True, ensure_ascii=False))
+          if (ssh_status != 0
+                  or result.get("status") not in ("DOWNLOAD_CONFIG_APPLIED", "DOWNLOAD_CONFIG_ALREADY_APPLIED")
+                  or result.get("commit") != expected_sha
+                  or result.get("download_enabled") is not False):
+              raise SystemExit("Download configuration was not safely applied; inspect the sanitized receipt.")
+          PY
+
+      - name: Publish download configuration receipt
+        if: always()
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha || 'not-parsed' }}
+          JOB_RESULT: ${{ job.status }}
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          printf -v body '**R2 Relay VPS download configuration: %s**\n\nTarget Commit: %s\nWorkflow run: %s' "$JOB_RESULT" "$TARGET_SHA" "$run_url"
+          if [ -f "$RUNNER_TEMP/download-config-response.raw.json" ]; then
+            receipt="$(python - "$RUNNER_TEMP/download-config-response.raw.json" <<'PY'
+          import json, pathlib, sys
+          try:
+              value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+              print(json.dumps(value, sort_keys=True, ensure_ascii=False))
+          except Exception:
+              print("No valid receiver JSON response; inspect the workflow logs.")
+          PY
+          )"
+            printf -v body '%s\n\nConfiguration receipt: %s' "$body" "$receipt"
+          elif [ "$JOB_RESULT" != "success" ]; then
+            printf -v body '%s\n\nConfiguration receipt: no receiver response was produced; inspect the failing workflow step.' "$body"
+          fi
+          gh issue comment 41 --repo "$GITHUB_REPOSITORY" --body "$body"

@@ -1,6 +1,8 @@
 import base64
 import importlib.util
 import io
+import os
+import stat
 from pathlib import Path
 import struct
 import subprocess
@@ -24,7 +26,7 @@ bootstrap = load_module("bootstrap_github_actions_deploy", "ops/bootstrap_github
 SHA = "a" * 40
 
 
-def make_archive(path: Path, *, marker=SHA, extra=None, unit=None):
+def make_archive(path: Path, *, marker=SHA, extra=None, unit=None, include_config_marker=True):
     files = {
         "vps/pyproject.toml": b"[build-system]\n",
         "vps/r2relay_vps/app.py": b"app = True\n",
@@ -32,6 +34,8 @@ def make_archive(path: Path, *, marker=SHA, extra=None, unit=None):
         "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
         ".deployment-commit": (marker + "\n").encode(),
     }
+    if include_config_marker:
+        files["deploy/download-config-dropin-v1"] = b"r2-relay-download-config-dropin-v1\n"
     with tarfile.open(path, "w:") as archive:
         for name, data in files.items():
             info = tarfile.TarInfo(name)
@@ -47,7 +51,7 @@ def test_receiver_build_id_is_in_every_emitted_receipt(capsys):
     receiver.emit("TEST", marker="ok")
     import json
     payload = json.loads(capsys.readouterr().out)
-    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v4-venv-lib64-symlink"
+    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v5-controlled-download-config"
     assert payload["marker"] == "ok"
 
 
@@ -98,7 +102,7 @@ def test_valid_archive_and_commit_marker(tmp_path):
     archive = tmp_path / "release.tar"
     make_archive(archive)
     members, info = receiver.validate_archive(archive, SHA)
-    assert info["files"] == 5
+    assert info["files"] == 6
     assert info["unpacked_bytes"] > 0
     stage = tmp_path / "stage"
     receiver.extract_archive(archive, stage, members, SHA)
@@ -309,8 +313,8 @@ def test_chown_release_keeps_group_readable_immutable_source_modes(tmp_path, mon
     source.mkdir(parents=True)
     regular = source / "app.py"
     executable = source / "launcher"
-    regular.write_text("app = True\\n")
-    executable.write_text("#!/bin/sh\\nexit 0\\n")
+    regular.write_text("app = True\n")
+    executable.write_text("#!/bin/sh\nexit 0\n")
     executable.chmod(0o755)
     chown_calls = []
     monkeypatch.setattr(receiver.os, "chown", lambda path, uid, gid, **kwargs: chown_calls.append((Path(path), uid, gid)))
@@ -654,3 +658,217 @@ def test_deployment_tests_run_on_main_push():
     assert "push:" in workflow
     assert "branches: [main]" in workflow
     assert "pull_request:" in workflow
+
+
+
+def test_download_config_command_accepts_only_disabled_and_full_sha():
+    assert receiver.parse_download_config_command("download-config disabled " + SHA) == SHA
+    for command in (
+        None,
+        "",
+        "download-config enabled " + SHA,
+        "download-config disabled main",
+        "download-config disabled " + "A" * 40,
+        "download-config disabled " + SHA + " extra",
+        "download-config disabled " + SHA + "; id",
+        "deploy " + SHA,
+    ):
+        try:
+            receiver.parse_download_config_command(command)
+        except receiver.DeployError:
+            pass
+        else:
+            raise AssertionError(f"accepted unsafe download config command: {command!r}")
+
+
+def _prepare_download_config_receiver_test(tmp_path, monkeypatch):
+    release_root = tmp_path / "releases"
+    release = release_root / SHA
+    release.mkdir(parents=True)
+    (release / ".deployment-commit").write_text(SHA + "\n", encoding="ascii")
+    marker = release / "deploy/download-config-dropin-v1"
+    marker.parent.mkdir(parents=True)
+    marker.write_text(receiver.DOWNLOAD_CONFIG_MARKER + "\n", encoding="ascii")
+
+    current = tmp_path / "current"
+    current.symlink_to(release)
+    config_parent = tmp_path / "etc/r2-relay"
+    config_parent.mkdir(parents=True)
+    config_path = config_parent / "download.toml"
+    backup_parent = tmp_path / "var/backups/r2-relay"
+    backup_parent.mkdir(parents=True)
+    backup_root = backup_parent / "download-config"
+    backup_root.mkdir(mode=0o700)
+    lock_path = tmp_path / "deploy.lock"
+
+    monkeypatch.setattr(receiver, "CURRENT", current)
+    monkeypatch.setattr(receiver, "RELEASES", release_root)
+    monkeypatch.setattr(receiver, "DOWNLOAD_CONFIG", config_path)
+    monkeypatch.setattr(receiver, "DOWNLOAD_CONFIG_BACKUPS", backup_root)
+    monkeypatch.setattr(receiver, "open_deploy_lock", lambda: os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600))
+    monkeypatch.setattr(receiver, "validate_host_state", lambda: (os.getuid(), os.getgid(), str(release)))
+    monkeypatch.setattr(receiver.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(receiver.os, "chown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(receiver.os, "fchown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(receiver, "_validate_download_config_paths", lambda _gid: None)
+
+    real_lstat = Path.lstat
+
+    def fake_lstat(path):
+        if path == backup_root:
+            return type("RootOwnedStat", (), {
+                "st_mode": stat.S_IFDIR | 0o700,
+                "st_uid": 0,
+                "st_gid": 0,
+            })()
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    return release, config_path, backup_root
+
+
+def test_apply_download_config_disabled_writes_fixed_profile_and_restarts_once(tmp_path, monkeypatch):
+    release, config_path, backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    restarts = []
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: restarts.append(argv))
+    monkeypatch.setattr(receiver, "health_check", lambda attempts=25: True)
+
+    result = receiver.apply_download_config_disabled(SHA)
+
+    assert result["status"] == "DOWNLOAD_CONFIG_APPLIED"
+    assert result["commit"] == SHA
+    assert result["download_enabled"] is False
+    assert result["config_path"] == str(config_path)
+    assert result["config_mode"] == "0640"
+    assert result["cache_modified"] is False
+    assert result["environment_modified"] is False
+    assert result["caddy_modified"] is False
+    assert len(restarts) == 1
+    assert restarts[0] == ["/usr/bin/systemctl", "restart", receiver.SERVICE]
+    content = config_path.read_text(encoding="utf-8")
+    assert "enabled = false" in content
+    assert "part_size_mib = 16" in content
+    assert "split_threshold_mib = 24" in content
+    assert "max_cache_bytes = 0" in content
+    assert config_path.stat().st_mode & 0o777 == 0o640
+    assert list(backup_root.iterdir())
+
+
+def test_apply_download_config_disabled_is_idempotent_without_restart(tmp_path, monkeypatch):
+    _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    config_path.write_text(receiver.DOWNLOAD_CONFIG_TEXT, encoding="utf-8")
+    restarts = []
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: restarts.append(argv))
+    monkeypatch.setattr(receiver, "health_check", lambda attempts=25: True)
+
+    result = receiver.apply_download_config_disabled(SHA)
+
+    assert result["status"] == "DOWNLOAD_CONFIG_ALREADY_APPLIED"
+    assert result["download_enabled"] is False
+    assert result["service_restarted"] is False
+    assert restarts == []
+
+
+def test_apply_download_config_disabled_rolls_back_file_after_failed_health(tmp_path, monkeypatch):
+    _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    previous = b"[download]\nenabled = false\n# owner-managed settings\n"
+    config_path.write_bytes(previous)
+    config_path.chmod(0o600)
+    health_results = iter([False, True])
+    restarts = []
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: restarts.append(argv))
+    monkeypatch.setattr(receiver, "health_check", lambda attempts=25: next(health_results))
+
+    try:
+        receiver.apply_download_config_disabled(SHA)
+    except receiver.DeployError as exc:
+        assert str(exc) == "download_config_apply_failed_rolled_back:DeployError"
+    else:
+        raise AssertionError("failed config health check was accepted")
+
+    assert config_path.read_bytes() == previous
+    assert config_path.stat().st_mode & 0o777 == 0o600
+    assert len(restarts) == 2
+
+
+def test_apply_download_config_disabled_requires_healthy_managed_host(tmp_path, monkeypatch):
+    _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        receiver, "validate_host_state",
+        lambda: (_ for _ in ()).throw(receiver.DeployError("service_not_active_before_deploy")),
+    )
+    try:
+        receiver.apply_download_config_disabled(SHA)
+    except receiver.DeployError as exc:
+        assert str(exc) == "service_not_active_before_deploy"
+    else:
+        raise AssertionError("download config applied without validated active host state")
+    assert not config_path.exists()
+
+
+def test_legacy_release_archive_without_download_marker_remains_deployable(tmp_path):
+    archive = tmp_path / "legacy-release.tar"
+    make_archive(archive, include_config_marker=False)
+
+    members, info = receiver.validate_archive(archive, SHA)
+
+    assert info["files"] == 5
+    assert "deploy/download-config-dropin-v1" not in {member.name for member in members}
+
+
+def test_archive_rejects_invalid_download_config_capability_marker(tmp_path):
+    import io
+    import tarfile
+
+    archive = tmp_path / "invalid-config-marker.tar"
+    files = {
+        "vps/pyproject.toml": b"[build-system]\n",
+        "vps/r2relay_vps/app.py": b"app = True\n",
+        "deploy/vps.service": receiver.UNIT_TEXT.encode(),
+        "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
+        "deploy/download-config-dropin-v1": b"not-the-approved-marker\n",
+        ".deployment-commit": (SHA + "\n").encode(),
+    }
+    with tarfile.open(archive, "w:") as output:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o644
+            output.addfile(info, io.BytesIO(data))
+
+    try:
+        receiver.validate_archive(archive, SHA)
+    except receiver.DeployError as exc:
+        assert str(exc) == "download_config_capability_marker_invalid"
+    else:
+        raise AssertionError("invalid download config marker accepted")
+
+
+
+def test_health_check_can_require_download_disabled(monkeypatch):
+    from types import SimpleNamespace
+
+    responses = [
+        b'{"status":"ok"}',
+        b'{"status":"ok","download_enabled":true}',
+        b'{"status":"ok","download_enabled":false}',
+    ]
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return responses.pop(0)
+
+    monkeypatch.setattr(receiver, "urlopen", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(receiver.time, "sleep", lambda _seconds: None)
+
+    assert receiver.health_check(attempts=1) is True
+    assert receiver.health_check(attempts=1, expected_download_enabled=False) is False
+    assert receiver.health_check(attempts=1, expected_download_enabled=False) is True

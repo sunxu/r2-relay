@@ -22,7 +22,7 @@
 
 VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、cache_ttl_seconds=600。Mac 的 [download] 配置段包含 max_concurrency=16、global_max_concurrency=32，并与现有上传配置共存。
 
-VPS 使用 /etc/r2-relay/config.toml；默认 enabled=false。启用前必须根据 VPS 实际磁盘检查填写 max_cache_bytes、min_free_bytes、max_active_tasks、max_retained_tasks 和 max_waiters，未填写有效正值时 fail-closed。当前不臆造这些容量值，也不授权部署。Mac 配置路径为 ~/.config/r2-relay/config.toml。
+VPS 通用配置路径为 /etc/r2-relay/config.toml；下载默认 enabled=false。受控 GitHub Actions 另可应用 /etc/r2-relay/download.toml 独立 drop-in，其 [download] 配置优先于通用配置，不改写其他上传/服务设置。当前受控 Actions 只允许应用 enabled=false 的固定 profile（16 MiB Part、24 MiB 阈值、600 秒 TTL，磁盘预算和任务上限为 0），不提供启用命令。启用前必须另行核对 VPS 实际磁盘并明确授权，填写 max_cache_bytes、min_free_bytes、max_active_tasks、max_retained_tasks 和 max_waiters 的有效正值；未填写有效正值时 fail-closed。Mac 配置路径为 ~/.config/r2-relay/config.toml。
 
 四个核心参数必须通过 TOML 加载、严格校验，不得硬编码或要求通过环境变量维护。Token、VPS 地址、TLS CA 等凭据和连接信息继续按现有安全方式管理。VPS manifest 是每个任务 Part 布局的唯一权威来源。
 
@@ -125,7 +125,7 @@ Part 写入使用 N.part.tmp；完整写入、fsync 并计算 SHA-256 后原子�
 4. Stage 3：HTTP 语义、失败恢复、删除、Mock R2 全栈和上传回归。
 5. Stage 4：真实 R2 验收和性能测量。
 
-每阶段通过独立 PR 和 CI。生产 VPS 部署必须另行取得仓库负责人明确授权；本需求不授权部署。
+每阶段通过独立 PR 和 CI。生产 VPS 部署仍通过 Issue #41 的 Owner-only GitHub Actions 显式触发；本轮明确授权仅覆盖受控的下载关闭配置应用及随后部署包含 drop-in 支持的 Release，不授权启用下载。
 
 ## 12. v1 不做
 
