@@ -881,7 +881,7 @@ def test_download_test_expiry_disables_only_matching_expired_lease(tmp_path, mon
     lease_id = "d" * 32
     config_path.write_text(receiver.DOWNLOAD_TEST_PROFILE_TEXT, encoding="utf-8")
     receiver.DOWNLOAD_TEST_LEASE.write_text(
-        __import__("json").dumps({"lease_id": lease_id, "expires_at": 1, "commit": SHA}) + "\\n",
+        __import__("json").dumps({"lease_id": lease_id, "expires_at": 1, "commit": SHA}) + "\n",
         encoding="utf-8",
     )
     receiver.DOWNLOAD_TEST_LEASE.chmod(0o600)
