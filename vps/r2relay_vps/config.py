@@ -6,8 +6,7 @@ from pathlib import Path
 import tomllib
 
 DEFAULT_CONFIG = Path(__file__).with_name("defaults.toml")
-SYSTEM_CONFIG = Path("/etc/r2-relay/config.toml")
-DOWNLOAD_CONFIG = Path("/etc/r2-relay/download.toml")
+DOWNLOAD_CONFIG = Path("/etc/r2-relay-download/download.toml")
 DOWNLOAD_CONFIG_SCHEMA = "r2-relay-download-config-dropin-v1"
 _MIB = 1024 * 1024
 
@@ -30,11 +29,12 @@ def load_download_settings(
     config_path: Path | None = None,
     download_config_path: Path | None = None,
 ) -> DownloadSettings:
-    """Load defaults, the general system config, then the managed download drop-in.
+    """Load package defaults, an explicitly supplied general config, then the managed drop-in.
 
-    The dedicated /etc/r2-relay/download.toml drop-in has final precedence so
-    the controlled deployment workflow can apply a safe disabled profile
-    without rewriting unrelated settings in /etc/r2-relay/config.toml.
+    Production startup intentionally does not probe /etc/r2-relay/config.toml:
+    that root-only directory also contains the private EnvironmentFile.
+    The controlled download drop-in lives in /etc/r2-relay-download/download.toml,
+    whose directory grants the service account search-only access.
     """
     with DEFAULT_CONFIG.open("rb") as stream:
         data = tomllib.load(stream)
@@ -60,7 +60,8 @@ def load_download_settings(
             raise ValueError(f"unknown [download] setting(s): {', '.join(sorted(unknown))}")
         data["download"].update(section)
 
-    merge_download_override(config_path or SYSTEM_CONFIG, strict=False)
+    if config_path is not None:
+        merge_download_override(config_path, strict=False)
     merge_download_override(download_config_path or DOWNLOAD_CONFIG, strict=True)
 
     section = data["download"]

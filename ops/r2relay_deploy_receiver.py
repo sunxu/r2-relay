@@ -31,7 +31,8 @@ UNIT = Path("/etc/systemd/system/r2-relay-vps.service")
 ENV_FILE = Path("/etc/r2-relay/vps.env")
 CACHE = Path("/var/lib/r2-relay/cache")
 BACKUPS = Path("/var/backups/r2-relay/deploy")
-DOWNLOAD_CONFIG = Path("/etc/r2-relay/download.toml")
+DOWNLOAD_CONFIG_DIR = Path("/etc/r2-relay-download")
+DOWNLOAD_CONFIG = DOWNLOAD_CONFIG_DIR / "download.toml"
 DOWNLOAD_CONFIG_BACKUPS = Path("/var/backups/r2-relay/download-config")
 LOCK = Path("/run/lock/r2-relay-github-deploy.lock")
 SERVICE = "r2-relay-vps.service"
@@ -55,7 +56,7 @@ max_retained_tasks = 0
 max_waiters = 0
 wait_timeout_seconds = 30
 """
-RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v5-controlled-download-config"
+RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v6-isolated-download-config-dir"
 REQUIRED = {
     "vps/pyproject.toml",
     "vps/r2relay_vps/app.py",
@@ -736,20 +737,13 @@ def _fsync_directory(path: Path) -> None:
 
 
 def _validate_download_config_paths(gid: int) -> None:
-    parent = DOWNLOAD_CONFIG.parent
-    if parent.is_symlink() or not parent.is_dir():
-        raise DeployError("download_config_parent_missing_or_unsafe")
-    parent_stat = parent.stat()
-    if parent_stat.st_uid != 0 or parent_stat.st_mode & 0o022:
-        raise DeployError("download_config_parent_permissions_invalid")
-    if DOWNLOAD_CONFIG.is_symlink():
-        raise DeployError("download_config_path_symlink")
-    if DOWNLOAD_CONFIG.exists():
-        info = DOWNLOAD_CONFIG.lstat()
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
-                or info.st_gid not in (0, gid) or info.st_mode & 0o027
-                or info.st_nlink != 1 or info.st_size > 4096):
-            raise DeployError("download_config_file_permissions_invalid")
+    etc = DOWNLOAD_CONFIG_DIR.parent
+    if etc.is_symlink() or not etc.is_dir():
+        raise DeployError("download_config_etc_directory_missing_or_unsafe")
+    etc_stat = etc.stat()
+    if etc_stat.st_uid != 0 or etc_stat.st_mode & 0o022:
+        raise DeployError("download_config_etc_directory_permissions_invalid")
+
     backup_parent = DOWNLOAD_CONFIG_BACKUPS.parent
     if backup_parent.is_symlink() or not backup_parent.is_dir():
         raise DeployError("download_config_backup_parent_missing_or_unsafe")
@@ -758,6 +752,35 @@ def _validate_download_config_paths(gid: int) -> None:
         raise DeployError("download_config_backup_parent_permissions_invalid")
     if DOWNLOAD_CONFIG_BACKUPS.is_symlink():
         raise DeployError("download_config_backup_root_symlink")
+
+    parent = DOWNLOAD_CONFIG_DIR
+    if parent.is_symlink():
+        raise DeployError("download_config_parent_symlink")
+    try:
+        parent.mkdir(mode=0o710)
+    except FileExistsError:
+        pass
+    except OSError:
+        raise DeployError("download_config_parent_create_failed") from None
+    else:
+        os.chown(parent, 0, gid)
+        os.chmod(parent, 0o710)
+
+    if parent.is_symlink() or not parent.is_dir():
+        raise DeployError("download_config_parent_missing_or_unsafe")
+    parent_stat = parent.stat()
+    if (parent_stat.st_uid != 0 or parent_stat.st_gid != gid
+            or stat.S_IMODE(parent_stat.st_mode) != 0o710):
+        raise DeployError("download_config_parent_permissions_invalid")
+
+    if DOWNLOAD_CONFIG.is_symlink():
+        raise DeployError("download_config_path_symlink")
+    if DOWNLOAD_CONFIG.exists():
+        info = DOWNLOAD_CONFIG.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                or info.st_gid != gid or stat.S_IMODE(info.st_mode) != 0o640
+                or info.st_nlink != 1 or info.st_size > 4096):
+            raise DeployError("download_config_file_permissions_invalid")
 
 
 def _atomic_write_download_config(
