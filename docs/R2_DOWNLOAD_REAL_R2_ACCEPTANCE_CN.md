@@ -4,9 +4,9 @@
 
 ## 1. 前置条件
 
-- VPS Stage 1 已部署，当前 Release 为 `12de7b52ba5e824455da15640f0cba8b6454ea08`；下载配置为 `enabled=false`。
-- Receiver v7 PR 合并后，Owner 必须先用该 PR 的精确 Merge SHA Bootstrap Root Receiver v7，再通过 Issue #63 的 `/deploy <SHA>` 部署同一个 SHA。这个 Release 更新仅增加下载缓存目录和 systemd 写入白名单，部署健康检查必须仍报告 `download_enabled=false`。
-- 只有 Receiver v7 已 Bootstrap、v7 Release 已实际运行且部署 SHA 一致，才可以使用 Issue #63 的 30 分钟固定测试配置命令。**在这两个前置步骤完成前，不执行任何启用命令。**
+- Receiver v7 已 Bootstrap 并通过空归档拒绝烟测；v7 Release 已通过 Issue #63 的 Owner 命令部署到 VPS。当前活动 Release 为 `a77f2414bd32370cf8f6f5ac78014fbf923e605a`。
+- 部署回执为 `DEPLOYED`、`health=PASS`；Receiver 在部署后通过 `/healthz` 明确验证 `download_enabled=false`。统一 VPS verifier 为 `UNIFIED_DEPLOYMENT_STATUS_PASS`，服务验证为 `SERVICE_VERIFY_PASS`。
+- 只有准备好执行真实 R2 测试、Mac 独立配置与 18586 代理后，才可以使用 Issue #63 的 30 分钟固定测试配置命令。**生产下载仍保持关闭；未准备好测试前不得启用。**
 - Receiver v7 的测试配置固定限制：VPS 缓存预算 64 MiB、最低剩余磁盘 5 GiB、最多 1 个活动任务、2 个保留任务、4 个等待者；30 分钟后由持久化 systemd timer 自动关闭。Timer 每 30 秒检查租约，VPS 重启后自动恢复；配置中的 `test_expires_at_epoch` 还会在应用启动时强制过期配置按关闭状态加载。手动测试结束仍应立即执行关闭命令，不等待计时器。
 - Mac 已检出当前 Stage 2 分支代码；真实测试必须使用独立的本地测试配置和独立代理端口，不得修改现有 18585 生产代理配置。
 - Mac → VPS HTTPS 证书验证正常；自签发证书通过 `R2_RELAY_VPS_CA_FILE` 指定。
