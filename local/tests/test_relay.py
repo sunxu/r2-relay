@@ -205,3 +205,16 @@ async def test_part_stream_maps_mid_body_transport_failure_to_retryable_error():
             async with relay.download_part_stream("task-id", 1) as response:
                 async for _chunk in response.aiter_raw():
                     pass
+
+
+
+@pytest.mark.asyncio
+async def test_download_delete_records_negotiated_http_version():
+    def handler(_request):
+        return httpx.Response(200, json={"deleted": True})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as http:
+        relay = RelayClient("https://vps.example:8443", "secret", client=http)
+        await relay.download_delete("task-id")
+        assert relay.download_http_versions == ["HTTP/1.1"]
