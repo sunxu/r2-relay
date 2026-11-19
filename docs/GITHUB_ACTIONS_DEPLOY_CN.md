@@ -50,12 +50,12 @@ ssh-keygen -t ed25519 -a 64 -N "" \
 > **职责边界：这是一项由 Owner 执行的一次性初始化，不纳入 GitHub Actions 自动化范围。** Owner 可以通过现有可信 Root SSH 管理通道执行下面的 Bootstrap；完成后，日常部署不再需要人工登录 VPS 或执行命令。无需新增 Bootstrap Workflow、VPS MCP Server 或独立管理项目。
 
 
-**必须使用 PR #42 合并后记录的精确 Merge Commit SHA，不要直接使用不断变化的 main HEAD。** ChatGPT 会在 PR 合并后给出该 SHA。先在可信 Mac 上检出该固定提交，并确认工作区：
+**必须使用 PR #69 合并后记录的精确 Merge Commit SHA，不要直接使用不断变化的 main HEAD。** 本轮固定 SHA 为 `737e23437763de8e5b1b8c66c73c72b5c934de50`。先在可信 Mac 上检出该固定提交，并确认工作区：
 
 ```bash
 git fetch origin main
-git checkout --detach d4af052d5d075514e6820a4e5071c24812343be5
-test "$(git rev-parse HEAD)" = "d4af052d5d075514e6820a4e5071c24812343be5"
+git checkout --detach 737e23437763de8e5b1b8c66c73c72b5c934de50
+test "$(git rev-parse HEAD)" = "737e23437763de8e5b1b8c66c73c72b5c934de50"
 git status --short
 ```
 
@@ -101,7 +101,7 @@ Bootstrap 会：
 在 GitHub Secrets 配置完成前，可用专用私钥向受限入口发送一个**空归档**，验证 SSH 公钥认证、ForcedCommand、sudoers 和 Root receiver 全链路。该命令不会进入 `deploy()`，不会切换版本或重启服务：
 
 ```bash
-MERGE_SHA="d4af052d5d075514e6820a4e5071c24812343be5"
+MERGE_SHA="737e23437763de8e5b1b8c66c73c72b5c934de50"
 set +e
 printf '' | ssh -T \
   -i ~/.ssh/r2-relay-github-actions \
@@ -116,7 +116,7 @@ set -e
 printf 'ssh_exit=%s\\n' "$SSH_STATUS"
 ```
 
-预期 receiver 返回 `{"reason":"empty_archive","status":"REJECTED_OR_FAILED"}` 且 SSH 退出码为 1（这是故意的拒绝结果）。若出现 SSH authentication、locked account、sudo 或 receiver 执行错误，则先停止，不要触发生产部署。
+预期 receiver build ID 为 `r2-relay-deploy-receiver-v5-controlled-download-config`，返回 `{"reason":"empty_archive","status":"REJECTED_OR_FAILED"}` 且 SSH 退出码为 1（这是故意的拒绝结果）。若出现 SSH authentication、locked account、sudo 或 receiver 执行错误，则先停止，不要触发生产部署。
 
 
 ## ChatGPT 触发部署
