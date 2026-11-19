@@ -1,4 +1,7 @@
 import asyncio
+import hashlib
+import os
+import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,8 +13,9 @@ from mitmproxy import http
 from r2relay_local.addon import R2RelayAddon
 from r2relay_local.config import Settings
 from r2relay_local.disk_response import DiskResponseServer
+from r2relay_local import download as download_module
 from r2relay_local.download import DownloadCapacityError, DownloadCoordinator, DownloadResult
-from r2relay_local.relay import RelayClient, is_r2_get
+from r2relay_local.relay import DownloadPartTransportError, RelayClient, is_r2_get
 from r2relay_vps.app import create_app
 from r2relay_vps.cache import CacheStore
 from r2relay_vps.config import DownloadSettings as VPSDownloadSettings
@@ -99,6 +103,7 @@ async def test_mac_download_small_response_uses_bounded_memory_and_preserves_r2_
         result = await coordinator.download(R2_URL, [("Range", "bytes=0-18")])
         assert result.status_code == 403
         assert result.body == body
+        assert isinstance(result.body, bytearray)
         assert result.path is None
         assert ("etag", '"r2-error"') in [(k.lower(), v) for k, v in result.headers]
         assert coordinator.memory_budget.used == len(body)
@@ -460,4 +465,124 @@ async def test_two_downloads_enforce_16_per_file_and_32_global_part_concurrency(
             await result.cleanup()
         assert coordinator.disk_budget.used == 0
     finally:
+        await coordinator.close()
+
+
+
+def test_pwrite_all_retries_short_writes_until_buffer_is_complete(tmp_path, monkeypatch):
+    path = tmp_path / "short-write.bin"
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    real_pwrite = os.pwrite
+    calls = []
+
+    def short_pwrite(target_fd, data, offset):
+        calls.append(len(data))
+        return real_pwrite(target_fd, memoryview(data)[:max(1, min(3, len(data)))], offset)
+
+    monkeypatch.setattr(download_module.os, "pwrite", short_pwrite)
+    try:
+        download_module._pwrite_all(fd, b"0123456789", 7)
+        os.ftruncate(fd, 17)
+    finally:
+        os.close(fd)
+
+    assert len(calls) > 1
+    assert path.read_bytes() == b"\\x00" * 7 + b"0123456789"
+
+
+@pytest.mark.asyncio
+async def test_part_write_zero_is_a_hard_failure_not_a_verified_success(tmp_path, monkeypatch):
+    class OnePartRelay:
+        @asynccontextmanager
+        async def download_part_stream(self, task_id, number):
+            yield _PayloadPartResponse(b"complete")
+
+    coordinator = DownloadCoordinator(OnePartRelay(), local_settings(tmp_path))
+    fd, raw_path = tempfile.mkstemp(dir=coordinator.root)
+    path = Path(raw_path)
+    monkeypatch.setattr(download_module.os, "pwrite", lambda *_args: 0)
+    held_parts = {}
+    try:
+        with pytest.raises(OSError, match="no progress"):
+            await coordinator._fetch_one_part(
+                "task",
+                {
+                    "part_number": 1,
+                    "size": 8,
+                    "sha256": hashlib.sha256(b"complete").hexdigest(),
+                },
+                fd,
+                8,
+                asyncio.Semaphore(1),
+                held_parts,
+            )
+        assert held_parts == {}
+    finally:
+        os.close(fd)
+        path.unlink(missing_ok=True)
+        await coordinator.close()
+
+
+class _PayloadPartResponse:
+    status_code = 200
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.headers = {
+            "content-length": str(len(payload)),
+            "x-part-sha256": hashlib.sha256(payload).hexdigest(),
+            "x-part-number": "1",
+        }
+
+    async def aiter_raw(self):
+        yield self.payload
+
+
+class _InterruptedPartResponse(_PayloadPartResponse):
+    async def aiter_raw(self):
+        yield self.payload[:3]
+        raise DownloadPartTransportError("simulated TCP read interruption")
+
+
+@pytest.mark.asyncio
+async def test_interrupted_ready_part_read_retries_same_part_and_completes(tmp_path):
+    payload = b"complete"
+
+    class RetryOnceRelay:
+        def __init__(self):
+            self.attempts = 0
+
+        @asynccontextmanager
+        async def download_part_stream(self, task_id, number):
+            self.attempts += 1
+            if self.attempts == 1:
+                yield _InterruptedPartResponse(payload)
+            else:
+                yield _PayloadPartResponse(payload)
+
+    relay = RetryOnceRelay()
+    coordinator = DownloadCoordinator(relay, local_settings(tmp_path))
+    fd, raw_path = tempfile.mkstemp(dir=coordinator.root)
+    path = Path(raw_path)
+    held_parts = {}
+    try:
+        await coordinator._fetch_one_part(
+            "task",
+            {
+                "part_number": 1,
+                "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            },
+            fd,
+            len(payload),
+            asyncio.Semaphore(1),
+            held_parts,
+        )
+        os.fsync(fd)
+        assert relay.attempts == 2
+        assert held_parts == {1: len(payload)}
+        assert os.pread(fd, len(payload), 0) == payload
+    finally:
+        os.close(fd)
+        path.unlink(missing_ok=True)
         await coordinator.close()
