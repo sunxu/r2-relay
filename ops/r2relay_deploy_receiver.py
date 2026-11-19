@@ -804,6 +804,8 @@ def apply_download_config_disabled(sha: str) -> dict:
         expected = DOWNLOAD_CONFIG_TEXT.encode("utf-8")
         previous = DOWNLOAD_CONFIG.read_bytes() if DOWNLOAD_CONFIG.exists() else None
         if previous == expected:
+            if not health_check():
+                raise DeployError("download_config_existing_health_check_failed")
             return {
                 "status": "DOWNLOAD_CONFIG_ALREADY_APPLIED",
                 "commit": sha,
@@ -829,10 +831,14 @@ def apply_download_config_disabled(sha: str) -> dict:
         if previous is not None:
             previous_backup = backup / "download.toml"
             previous_backup.write_bytes(previous)
+            with previous_backup.open("rb") as backup_stream:
+                os.fsync(backup_stream.fileno())
             os.chown(previous_backup, 0, 0)
             os.chmod(previous_backup, 0o600)
         state_path = backup / "state.json"
         state_path.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
+        with state_path.open("rb") as state_stream:
+            os.fsync(state_stream.fileno())
         os.chown(state_path, 0, 0)
         os.chmod(state_path, 0o600)
         _fsync_directory(backup)
