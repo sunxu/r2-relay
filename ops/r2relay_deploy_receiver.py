@@ -788,17 +788,7 @@ def apply_download_config_disabled(sha: str) -> dict:
         except BlockingIOError:
             raise DeployError("deployment_already_running") from None
 
-        uid, gid, previous_target = validate_host_state()
-        if not CURRENT.is_symlink() or Path(previous_target).name != sha:
-            raise DeployError("download_config_target_not_active_release")
-        release = Path(previous_target)
-        try:
-            installed_sha = (release / ".deployment-commit").read_text(encoding="ascii").strip()
-            capability = (release / "deploy/download-config-dropin-v1").read_text(encoding="ascii")
-        except (OSError, UnicodeError):
-            raise DeployError("download_config_capability_not_deployed") from None
-        if installed_sha != sha or capability != DOWNLOAD_CONFIG_MARKER + "\n":
-            raise DeployError("download_config_capability_not_deployed")
+        uid, gid, _previous_target = validate_host_state()
 
         _validate_download_config_paths(gid)
         expected = DOWNLOAD_CONFIG_TEXT.encode("utf-8")
