@@ -8,6 +8,7 @@ It never runs shell commands from the repository archive.
 from __future__ import annotations
 
 import fcntl
+from datetime import datetime, timezone
 import grp
 import io
 import json
@@ -34,6 +35,9 @@ BACKUPS = Path("/var/backups/r2-relay/deploy")
 DOWNLOAD_CONFIG_DIR = Path("/etc/r2-relay-download")
 DOWNLOAD_CONFIG = DOWNLOAD_CONFIG_DIR / "download.toml"
 DOWNLOAD_CONFIG_BACKUPS = Path("/var/backups/r2-relay/download-config")
+DOWNLOAD_TEST_STATE_DIR = Path("/var/lib/r2-relay-deploy")
+DOWNLOAD_TEST_LEASE = DOWNLOAD_TEST_STATE_DIR / "download-test-lease.json"
+RECEIVER_INSTALLED = Path("/usr/local/libexec/r2relay_deploy_receiver.py")
 LOCK = Path("/run/lock/r2-relay-github-deploy.lock")
 SERVICE = "r2-relay-vps.service"
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
@@ -43,7 +47,7 @@ SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 DOWNLOAD_CONFIG_MARKER = "r2-relay-download-config-dropin-v1"
 DOWNLOAD_CONFIG_TEXT = """schema_version = 1
 
-# 由受控 GitHub Actions 管理；当前只应用关闭配置。
+# 由受控 GitHub Actions 管理；生产默认关闭。
 [download]
 enabled = false
 part_size_mib = 16
@@ -56,7 +60,26 @@ max_retained_tasks = 0
 max_waiters = 0
 wait_timeout_seconds = 30
 """
-RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v6-isolated-download-config-dir"
+
+# 仅用于一次真实 R2 验收；固定资源上限，30 分钟后由 systemd timer 自动关闭。
+DOWNLOAD_TEST_PROFILE_TEXT = """schema_version = 1
+
+# REAL_R2_TEST_PROFILE_V1；禁止用于生产流量。
+[download]
+enabled = true
+part_size_mib = 16
+split_threshold_mib = 24
+cache_ttl_seconds = 600
+max_cache_bytes = 67108864
+min_free_bytes = 5368709120
+max_active_tasks = 1
+max_retained_tasks = 2
+max_waiters = 4
+wait_timeout_seconds = 30
+"""
+DOWNLOAD_TEST_LEASE_SECONDS = 1800
+DOWNLOAD_TEST_TIMER_PREFIX = "r2-relay-download-test-expiry-"
+RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v7-leased-real-r2-test"
 REQUIRED = {
     "vps/pyproject.toml",
     "vps/r2relay_vps/app.py",
@@ -719,13 +742,13 @@ def deploy(sha: str, archive_path: Path) -> dict:
             raise DeployError("deployment_failed_rollback_failed:" + str(exc)) from None
 
 
-def parse_download_config_command(command: str | None) -> str:
+def parse_download_config_command(command: str | None) -> tuple[str, str]:
     if not isinstance(command, str):
         raise DeployError("missing_forced_command")
-    match = re.fullmatch(r"download-config disabled ([0-9a-f]{40})", command)
+    match = re.fullmatch(r"download-config (disabled|real-test) ([0-9a-f]{40})", command)
     if not match:
         raise DeployError("download_config_command_not_allowed")
-    return match.group(1)
+    return match.group(1), match.group(2)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -811,6 +834,244 @@ def _restore_download_config(
         _atomic_write_download_config(
             previous, gid if previous_gid is None else previous_gid, previous_mode
         )
+
+
+def _write_download_config_backup(previous: bytes | None, previous_mode: int,
+                                  previous_gid: int, sha: str, profile: str) -> Path:
+    DOWNLOAD_CONFIG_BACKUPS.mkdir(mode=0o700, parents=False, exist_ok=True)
+    backup_root_stat = DOWNLOAD_CONFIG_BACKUPS.lstat()
+    if (not stat.S_ISDIR(backup_root_stat.st_mode)
+            or backup_root_stat.st_uid != 0 or backup_root_stat.st_mode & 0o077):
+        raise DeployError("download_config_backup_root_permissions_invalid")
+    backup = DOWNLOAD_CONFIG_BACKUPS / (
+        time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + "-" + secrets.token_hex(4)
+    )
+    backup.mkdir(mode=0o700)
+    state = {
+        "requested_commit": sha,
+        "previous_config_existed": previous is not None,
+        "previous_config_mode": oct(previous_mode) if previous is not None else None,
+        "previous_config_gid": previous_gid if previous is not None else None,
+        "config_path": str(DOWNLOAD_CONFIG),
+        "profile": profile,
+    }
+    if previous is not None:
+        previous_backup = backup / "download.toml"
+        previous_backup.write_bytes(previous)
+        with previous_backup.open("rb") as stream:
+            os.fsync(stream.fileno())
+        os.chown(previous_backup, 0, 0)
+        os.chmod(previous_backup, 0o600)
+    state_path = backup / "state.json"
+    state_path.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
+    with state_path.open("rb") as stream:
+        os.fsync(stream.fileno())
+    os.chown(state_path, 0, 0)
+    os.chmod(state_path, 0o600)
+    _fsync_directory(backup)
+    _fsync_directory(DOWNLOAD_CONFIG_BACKUPS)
+    return backup
+
+
+def _ensure_download_test_state_dir() -> None:
+    parent = DOWNLOAD_TEST_STATE_DIR.parent
+    if parent.is_symlink() or not parent.is_dir():
+        raise DeployError("download_test_state_parent_unsafe")
+    parent_stat = parent.stat()
+    if parent_stat.st_uid != 0 or parent_stat.st_mode & 0o022:
+        raise DeployError("download_test_state_parent_permissions_invalid")
+    if DOWNLOAD_TEST_STATE_DIR.is_symlink():
+        raise DeployError("download_test_state_dir_symlink")
+    try:
+        DOWNLOAD_TEST_STATE_DIR.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    info = DOWNLOAD_TEST_STATE_DIR.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise DeployError("download_test_state_dir_permissions_invalid")
+
+
+def _write_download_test_lease(lease: dict) -> None:
+    _ensure_download_test_state_dir()
+    fd, name = tempfile.mkstemp(prefix=".download-test-lease-", dir=DOWNLOAD_TEST_STATE_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(lease, stream, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchown(stream.fileno(), 0, 0)
+            os.fchmod(stream.fileno(), 0o600)
+        os.replace(name, DOWNLOAD_TEST_LEASE)
+        _fsync_directory(DOWNLOAD_TEST_STATE_DIR)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def _read_download_test_lease() -> dict | None:
+    if DOWNLOAD_TEST_LEASE.is_symlink():
+        raise DeployError("download_test_lease_symlink")
+    if not DOWNLOAD_TEST_LEASE.exists():
+        return None
+    info = DOWNLOAD_TEST_LEASE.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+            or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+            or info.st_size > 2048):
+        raise DeployError("download_test_lease_permissions_invalid")
+    try:
+        value = json.loads(DOWNLOAD_TEST_LEASE.read_text(encoding="utf-8"))
+    except Exception:
+        raise DeployError("download_test_lease_invalid") from None
+    if (not isinstance(value, dict)
+            or not re.fullmatch(r"[0-9a-f]{32}", str(value.get("lease_id", "")))
+            or type(value.get("expires_at")) is not int
+            or not SHA_RE.fullmatch(str(value.get("commit", "")))):
+        raise DeployError("download_test_lease_invalid")
+    return value
+
+
+def _clear_download_test_lease() -> None:
+    if DOWNLOAD_TEST_LEASE.is_symlink():
+        raise DeployError("download_test_lease_symlink")
+    DOWNLOAD_TEST_LEASE.unlink(missing_ok=True)
+    if DOWNLOAD_TEST_STATE_DIR.exists():
+        _fsync_directory(DOWNLOAD_TEST_STATE_DIR)
+
+
+def _schedule_download_test_expiry(lease_id: str, expires_at: int) -> None:
+    when = datetime.fromtimestamp(expires_at, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    unit = DOWNLOAD_TEST_TIMER_PREFIX + lease_id
+    run_fixed([
+        "/usr/bin/systemd-run", "--quiet", "--collect",
+        "--unit=" + unit,
+        "--on-calendar=" + when,
+        "--timer-property=Persistent=true",
+        "/usr/bin/python3", str(RECEIVER_INSTALLED),
+        "--expire-download-test", lease_id,
+    ], timeout=30)
+
+
+def _backup_current_download_config(sha: str, profile: str) -> tuple[Path, bytes, int, int]:
+    previous_info = DOWNLOAD_CONFIG.stat() if DOWNLOAD_CONFIG.exists() else None
+    previous = DOWNLOAD_CONFIG.read_bytes() if previous_info is not None else None
+    previous_mode = stat.S_IMODE(previous_info.st_mode) if previous_info is not None else 0o640
+    previous_gid = previous_info.st_gid if previous_info is not None else 0
+    backup = _write_download_config_backup(previous, previous_mode, previous_gid, sha, profile)
+    return backup, previous or b"", previous_mode, previous_gid
+
+
+def apply_download_config_real_test(sha: str) -> dict:
+    if not SHA_RE.fullmatch(sha):
+        raise DeployError("invalid_commit_sha")
+    if os.geteuid() != 0:
+        raise DeployError("root_required")
+    lock_fd = open_deploy_lock()
+    with os.fdopen(lock_fd, "r+") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise DeployError("deployment_already_running") from None
+
+        _uid, gid, current_target = validate_host_state()
+        if not current_target or Path(current_target).name != sha:
+            raise DeployError("download_test_target_must_be_active_release")
+        release_marker = Path(current_target) / "deploy/download-config-dropin-v1"
+        if (not release_marker.is_file()
+                or release_marker.read_text(encoding="ascii").strip() != DOWNLOAD_CONFIG_MARKER):
+            raise DeployError("download_config_capability_marker_missing")
+
+        _validate_download_config_paths(gid)
+        current = DOWNLOAD_CONFIG.read_bytes() if DOWNLOAD_CONFIG.exists() else None
+        disabled = DOWNLOAD_CONFIG_TEXT.encode("utf-8")
+        if current != disabled:
+            raise DeployError("download_test_requires_fixed_disabled_profile")
+        if not health_check(expected_download_enabled=False):
+            raise DeployError("download_test_requires_healthy_disabled_service")
+        _ensure_download_test_state_dir()
+        if _read_download_test_lease() is not None:
+            raise DeployError("download_test_lease_already_exists")
+
+        backup = _write_download_config_backup(
+            current, 0o640, gid, sha, "real-r2-test-v1"
+        )
+        lease_id = secrets.token_hex(16)
+        expires_at = int(time.time()) + DOWNLOAD_TEST_LEASE_SECONDS
+        lease = {"lease_id": lease_id, "expires_at": expires_at, "commit": sha}
+        try:
+            _write_download_test_lease(lease)
+            _atomic_write_download_config(DOWNLOAD_TEST_PROFILE_TEXT.encode("utf-8"), gid)
+            _schedule_download_test_expiry(lease_id, expires_at)
+            run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+            if not health_check(expected_download_enabled=True):
+                raise DeployError("download_test_enable_health_check_failed")
+            return {
+                "status": "DOWNLOAD_TEST_ENABLED",
+                "commit": sha,
+                "download_enabled": True,
+                "profile": "real-r2-test-v1",
+                "max_cache_bytes": 67108864,
+                "min_free_bytes": 5368709120,
+                "max_active_tasks": 1,
+                "max_retained_tasks": 2,
+                "max_waiters": 4,
+                "expires_at": expires_at,
+                "lease_minutes": 30,
+                "config_path": str(DOWNLOAD_CONFIG),
+                "config_mode": "0640",
+                "backup": str(backup),
+                "service_restarted": True,
+            }
+        except Exception as exc:
+            try:
+                _atomic_write_download_config(disabled, gid)
+                _clear_download_test_lease()
+                run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+                if not health_check(expected_download_enabled=False):
+                    raise DeployError("download_test_disable_after_failure_health_check_failed")
+            except Exception:
+                raise DeployError(
+                    "download_test_enable_failed_disable_failed:" + type(exc).__name__
+                ) from None
+            raise DeployError(
+                "download_test_enable_failed_disabled:" + type(exc).__name__
+            ) from None
+
+
+def expire_download_test(lease_id: str) -> dict:
+    if not re.fullmatch(r"[0-9a-f]{32}", lease_id):
+        raise DeployError("invalid_download_test_lease_id")
+    if os.geteuid() != 0:
+        raise DeployError("root_required")
+    lock_fd = open_deploy_lock()
+    with os.fdopen(lock_fd, "r+") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise DeployError("deployment_already_running") from None
+        lease = _read_download_test_lease()
+        if lease is None or lease["lease_id"] != lease_id:
+            return {"status": "DOWNLOAD_TEST_EXPIRY_STALE", "download_enabled": None}
+        if lease["expires_at"] > int(time.time()):
+            _schedule_download_test_expiry(lease_id, lease["expires_at"])
+            return {
+                "status": "DOWNLOAD_TEST_EXPIRY_RESCHEDULED",
+                "expires_at": lease["expires_at"],
+            }
+        _uid, gid, _current_target = validate_host_state()
+        _validate_download_config_paths(gid)
+        _atomic_write_download_config(DOWNLOAD_CONFIG_TEXT.encode("utf-8"), gid)
+        _clear_download_test_lease()
+        run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+        if not health_check(expected_download_enabled=False):
+            raise DeployError("download_test_expiry_disable_health_check_failed")
+        return {
+            "status": "DOWNLOAD_TEST_AUTO_DISABLED",
+            "commit": lease["commit"],
+            "download_enabled": False,
+            "config_path": str(DOWNLOAD_CONFIG),
+            "service_restarted": True,
+        }
 
 
 def apply_download_config_disabled(sha: str) -> dict:
