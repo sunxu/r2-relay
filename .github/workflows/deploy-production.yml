@@ -178,7 +178,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      GH_TOKEN: ${ github.token }}
+      GH_TOKEN: ${{ github.token }}
       VPS_HOST: 104.224.168.192
       VPS_USER: r2relay-deploy
       VPS_PORT: '22'
@@ -193,7 +193,7 @@ jobs:
       - name: Parse disabled-only configuration command
         id: target
         env:
-          COMMENT_BODY: ${ github.event.comment.body }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import os, re
@@ -206,7 +206,7 @@ jobs:
 
       - name: Verify target is on main and has deployment safety check
         env:
-          TARGET_SHA: ${ steps.target.outputs.sha }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
           git fetch origin main --no-tags
@@ -225,8 +225,8 @@ jobs:
 
       - name: Configure pinned SSH identity
         env:
-          DEPLOY_SSH_KEY: ${ secrets.VPS_DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${ secrets.VPS_SSH_KNOWN_HOSTS }}
+          DEPLOY_SSH_KEY: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           test -n "$DEPLOY_SSH_KEY" || { echo "Missing VPS_DEPLOY_SSH_KEY"; exit 1; }
@@ -241,7 +241,7 @@ jobs:
       - name: Apply fixed disabled download configuration through restricted SSH
         id: configure
         env:
-          TARGET_SHA: ${ steps.target.outputs.sha }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
           raw="$RUNNER_TEMP/download-config-response.raw.json"
@@ -289,8 +289,8 @@ jobs:
       - name: Publish download configuration receipt
         if: always()
         env:
-          TARGET_SHA: ${ steps.target.outputs.sha || 'not-parsed' }}
-          JOB_RESULT: ${ job.status }}
+          TARGET_SHA: ${{ steps.target.outputs.sha || 'not-parsed' }}
+          JOB_RESULT: ${{ job.status }}
         run: |
           set -euo pipefail
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
