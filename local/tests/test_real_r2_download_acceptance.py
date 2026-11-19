@@ -87,19 +87,20 @@ def test_real_r2_hash_result_supports_memory_and_disk(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("protocol", "remote_failures", "disk_used", "memory_used", "leave_temp_file", "expected_pass"),
+    ("protocol", "remote_failures", "disk_used", "memory_used", "leave_temp_file", "leave_body", "expected_pass"),
     [
-        ("HTTP/2", 0, 0, 0, False, True),
-        ("HTTP/1.1", 0, 0, 0, False, False),
-        ("HTTP/2", 1, 0, 0, False, False),
-        ("HTTP/2", 0, 1, 0, False, False),
-        ("HTTP/2", 0, 0, 1, False, False),
-        ("HTTP/2", 0, 0, 0, True, False),
+        ("HTTP/2", 0, 0, 0, False, False, True),
+        ("HTTP/1.1", 0, 0, 0, False, False, False),
+        ("HTTP/2", 1, 0, 0, False, False, False),
+        ("HTTP/2", 0, 1, 0, False, False, False),
+        ("HTTP/2", 0, 0, 1, False, False, False),
+        ("HTTP/2", 0, 0, 0, True, False, False),
+        ("HTTP/2", 0, 0, 0, False, True, False),
     ],
 )
 def test_real_r2_acceptance_pass_requires_http2_and_complete_cleanup(
     tmp_path, monkeypatch, capsys,
-    protocol, remote_failures, disk_used, memory_used, leave_temp_file, expected_pass
+    protocol, remote_failures, disk_used, memory_used, leave_temp_file, leave_body, expected_pass
 ):
     data = valid_spec()
     body = b"real-r2-acceptance-fixture"
@@ -120,6 +121,7 @@ def test_real_r2_acceptance_pass_requires_http2_and_complete_cleanup(
     monkeypatch.setenv("R2_RELAY_TOKEN", "test-token")
 
     local_path = tmp_path / "leftover-download.bin"
+    body_buffer = bytearray(body)
     if leave_temp_file:
         local_path.write_bytes(body)
 
@@ -146,6 +148,8 @@ def test_real_r2_acceptance_pass_requires_http2_and_complete_cleanup(
             async def cleanup():
                 if not leave_temp_file:
                     local_path.unlink(missing_ok=True)
+                if not leave_body:
+                    body_buffer.clear()
 
             return SimpleNamespace(
                 status_code=206,
@@ -153,7 +157,7 @@ def test_real_r2_acceptance_pass_requires_http2_and_complete_cleanup(
                     ("Content-Range", f"bytes 0-{len(body) - 1}/{len(body)}"),
                     ("Content-Length", str(len(body))),
                 ],
-                body=None if leave_temp_file else body,
+                body=None if leave_temp_file else body_buffer,
                 path=local_path if leave_temp_file else None,
                 cleanup=cleanup
             )
@@ -181,7 +185,8 @@ def test_real_r2_acceptance_pass_requires_http2_and_complete_cleanup(
     }
     assert report["vps_task_cleanup_ok"] is (remote_failures == 0)
     assert report["local_temp_cleanup_ok"] is (
-        not leave_temp_file and disk_used == 0 and memory_used == 0
+        not leave_temp_file and not leave_body and disk_used == 0 and memory_used == 0
     )
+    assert report["local_body_released"] is (leave_temp_file or not leave_body)
     assert report["signed_url_or_headers_logged"] is False
     assert local_path.exists() is leave_temp_file
