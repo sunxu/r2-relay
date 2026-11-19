@@ -26,15 +26,16 @@ bootstrap = load_module("bootstrap_github_actions_deploy", "ops/bootstrap_github
 SHA = "a" * 40
 
 
-def make_archive(path: Path, *, marker=SHA, extra=None, unit=None):
+def make_archive(path: Path, *, marker=SHA, extra=None, unit=None, include_config_marker=True):
     files = {
         "vps/pyproject.toml": b"[build-system]\n",
         "vps/r2relay_vps/app.py": b"app = True\n",
         "deploy/vps.service": (unit if unit is not None else receiver.UNIT_TEXT).encode(),
         "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
-        "deploy/download-config-dropin-v1": b"r2-relay-download-config-dropin-v1\n",
         ".deployment-commit": (marker + "\n").encode(),
     }
+    if include_config_marker:
+        files["deploy/download-config-dropin-v1"] = b"r2-relay-download-config-dropin-v1\n"
     with tarfile.open(path, "w:") as archive:
         for name, data in files.items():
             info = tarfile.TarInfo(name)
@@ -814,3 +815,42 @@ def test_production_workflow_adds_owner_gated_disabled_config_command():
     assert "VPS_SSH_KNOWN_HOSTS" in workflow
     assert "StrictHostKeyChecking=yes" in workflow
     assert "workflow_dispatch:" not in workflow
+
+
+
+def test_legacy_release_archive_without_download_marker_remains_deployable(tmp_path):
+    archive = tmp_path / "legacy-release.tar"
+    make_archive(archive, include_config_marker=False)
+
+    members, info = receiver.validate_archive(archive, SHA)
+
+    assert info["files"] == 5
+    assert "deploy/download-config-dropin-v1" not in {member.name for member in members}
+
+
+def test_archive_rejects_invalid_download_config_capability_marker(tmp_path):
+    import io
+    import tarfile
+
+    archive = tmp_path / "invalid-config-marker.tar"
+    files = {
+        "vps/pyproject.toml": b"[build-system]\n",
+        "vps/r2relay_vps/app.py": b"app = True\n",
+        "deploy/vps.service": receiver.UNIT_TEXT.encode(),
+        "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
+        "deploy/download-config-dropin-v1": b"not-the-approved-marker\n",
+        ".deployment-commit": (SHA + "\n").encode(),
+    }
+    with tarfile.open(archive, "w:") as output:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o644
+            output.addfile(info, io.BytesIO(data))
+
+    try:
+        receiver.validate_archive(archive, SHA)
+    except receiver.DeployError as exc:
+        assert str(exc) == "download_config_capability_marker_invalid"
+    else:
+        raise AssertionError("invalid download config marker accepted")
