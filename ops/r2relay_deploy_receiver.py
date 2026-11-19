@@ -47,6 +47,7 @@ MAX_UNPACKED_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 6000
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 DOWNLOAD_CONFIG_MARKER = "r2-relay-download-config-dropin-v1"
+DOWNLOAD_TEST_CAPABILITY_MARKER = "r2-relay-leased-download-test-v1"
 DOWNLOAD_CONFIG_TEXT = """schema_version = 1
 
 # 由受控 GitHub Actions 管理；生产默认关闭。
@@ -256,6 +257,12 @@ def validate_archive(archive_path: Path, expected_sha: str):
                 )
                 if config_marker is None or config_marker.read(128).decode("ascii") != DOWNLOAD_CONFIG_MARKER + "\n":
                     raise DeployError("download_config_capability_marker_invalid")
+            if "deploy/leased-download-test-v1" in names:
+                test_marker = archive.extractfile(
+                    archive.getmember("deploy/leased-download-test-v1")
+                )
+                if test_marker is None or test_marker.read(128).decode("ascii") != DOWNLOAD_TEST_CAPABILITY_MARKER + "\n":
+                    raise DeployError("download_test_capability_marker_invalid")
             unit_member = archive.getmember("deploy/vps.service")
             unit_stream = archive.extractfile(unit_member)
             if unit_stream is None or unit_stream.read(65536).decode("utf-8") != UNIT_TEXT:
@@ -1099,6 +1106,10 @@ def apply_download_config_real_test(sha: str) -> dict:
         if (not release_marker.is_file()
                 or release_marker.read_text(encoding="ascii").strip() != DOWNLOAD_CONFIG_MARKER):
             raise DeployError("download_config_capability_marker_missing")
+        test_marker = Path(current_target) / "deploy/leased-download-test-v1"
+        if (not test_marker.is_file()
+                or test_marker.read_text(encoding="ascii").strip() != DOWNLOAD_TEST_CAPABILITY_MARKER):
+            raise DeployError("download_test_capability_marker_missing")
 
         _validate_download_config_paths(gid)
         _validate_download_cache_directory(uid, gid)
