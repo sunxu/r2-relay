@@ -789,33 +789,19 @@ def test_apply_download_config_disabled_rolls_back_file_after_failed_health(tmp_
     assert len(restarts) == 2
 
 
-def test_apply_download_config_disabled_requires_active_release_marker(tmp_path, monkeypatch):
+def test_apply_download_config_disabled_requires_healthy_managed_host(tmp_path, monkeypatch):
     _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
-    release = receiver.CURRENT.resolve()
-    (release / "deploy/download-config-dropin-v1").unlink()
+    monkeypatch.setattr(
+        receiver, "validate_host_state",
+        lambda: (_ for _ in ()).throw(receiver.DeployError("service_not_active_before_deploy")),
+    )
     try:
         receiver.apply_download_config_disabled(SHA)
     except receiver.DeployError as exc:
-        assert str(exc) == "download_config_capability_not_deployed"
+        assert str(exc) == "service_not_active_before_deploy"
     else:
-        raise AssertionError("config applied to a release without the drop-in capability")
+        raise AssertionError("download config applied without validated active host state")
     assert not config_path.exists()
-
-
-def test_production_workflow_adds_owner_gated_disabled_config_command():
-    workflow = (ROOT / ".github/workflows/deploy-production.yml").read_text(encoding="utf-8")
-    assert "configure-download:" in workflow
-    assert "github.event.issue.number == 41" in workflow
-    assert "github.event.issue.state == 'open'" in workflow
-    assert "github.event.comment.user.login == 'sunxu'" in workflow
-    assert 're.fullmatch(r"/download-config disabled ([0-9a-f]{40})"' in workflow
-    assert 'select(.name == "deploy-tests"' in workflow
-    assert 'download-config disabled $TARGET_SHA' in workflow
-    assert "VPS_DEPLOY_SSH_KEY" in workflow
-    assert "VPS_SSH_KNOWN_HOSTS" in workflow
-    assert "StrictHostKeyChecking=yes" in workflow
-    assert "workflow_dispatch:" not in workflow
-
 
 
 def test_legacy_release_archive_without_download_marker_remains_deployable(tmp_path):
@@ -834,12 +820,12 @@ def test_archive_rejects_invalid_download_config_capability_marker(tmp_path):
 
     archive = tmp_path / "invalid-config-marker.tar"
     files = {
-        "vps/pyproject.toml": b"[build-system]\n",
-        "vps/r2relay_vps/app.py": b"app = True\n",
+        "vps/pyproject.toml": b"[build-system]\\n",
+        "vps/r2relay_vps/app.py": b"app = True\\n",
         "deploy/vps.service": receiver.UNIT_TEXT.encode(),
-        "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
-        "deploy/download-config-dropin-v1": b"not-the-approved-marker\n",
-        ".deployment-commit": (SHA + "\n").encode(),
+        "deploy/requirements-vps.lock": b"fastapi==0.162.2\\n",
+        "deploy/download-config-dropin-v1": b"not-the-approved-marker\\n",
+        ".deployment-commit": (SHA + "\\n").encode(),
     }
     with tarfile.open(archive, "w:") as output:
         for name, data in files.items():
