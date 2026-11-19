@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 import tomllib
 
 DEFAULT_CONFIG = Path(__file__).with_name("defaults.toml")
@@ -23,6 +24,7 @@ class DownloadSettings:
     max_retained_tasks: int
     max_waiters: int
     wait_timeout_seconds: int
+    test_expires_at_epoch: int = 0
 
 
 def load_download_settings(
@@ -79,6 +81,7 @@ def load_download_settings(
         "max_retained_tasks": (0, 65536),
         "max_waiters": (0, 65536),
         "wait_timeout_seconds": (1, 300),
+        "test_expires_at_epoch": (0, 2**63 - 1),
     }
     for key, (minimum, maximum) in integer_ranges.items():
         value = section[key]
@@ -94,6 +97,10 @@ def load_download_settings(
             if section[key] <= 0:
                 raise ValueError(f"download.{key} must be positive when download.enabled=true")
 
+    test_expires_at_epoch = section["test_expires_at_epoch"]
+    if test_expires_at_epoch and int(time.time()) >= test_expires_at_epoch:
+        enabled = False
+
     return DownloadSettings(
         enabled=enabled,
         part_size_bytes=part_size * _MIB,
@@ -105,4 +112,5 @@ def load_download_settings(
         max_retained_tasks=section["max_retained_tasks"],
         max_waiters=section["max_waiters"],
         wait_timeout_seconds=section["wait_timeout_seconds"],
+        test_expires_at_epoch=test_expires_at_epoch,
     )
