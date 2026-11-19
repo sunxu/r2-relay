@@ -4,8 +4,9 @@
 
 ## 1. 前置条件
 
-- VPS Stage 1 已部署，当前 Release 固定为 `12de7b52ba5e824455da15640f0cba8b6454ea08`；下载配置当前为 `enabled=false`。
-- 当前生产 Root Receiver v6 只支持关闭配置。必须先合并并 Bootstrap 后续 Receiver v7，才会提供 Issue #63 的 30 分钟固定测试配置命令。**在 Receiver v7 Bootstrap 完成前，不执行任何启用命令。**
+- VPS Stage 1 已部署，当前 Release 为 `12de7b52ba5e824455da15640f0cba8b6454ea08`；下载配置为 `enabled=false`。
+- Receiver v7 PR 合并后，Owner 必须先用该 PR 的精确 Merge SHA Bootstrap Root Receiver v7，再通过 Issue #63 的 `/deploy <SHA>` 部署同一个 SHA。这个 Release 更新仅增加下载缓存目录和 systemd 写入白名单，部署健康检查必须仍报告 `download_enabled=false`。
+- 只有 Receiver v7 已 Bootstrap、v7 Release 已实际运行且部署 SHA 一致，才可以使用 Issue #63 的 30 分钟固定测试配置命令。**在这两个前置步骤完成前，不执行任何启用命令。**
 - Receiver v7 的测试配置固定限制：VPS 缓存预算 64 MiB、最低剩余磁盘 5 GiB、最多 1 个活动任务、2 个保留任务、4 个等待者；30 分钟后由 systemd 持久 timer 自动关闭。手动测试结束仍应立即执行关闭命令，不等待计时器。
 - Mac 已检出当前 Stage 2 分支代码；真实测试必须使用独立的本地测试配置和独立代理端口，不得修改现有 18585 生产代理配置。
 - Mac → VPS HTTPS 证书验证正常；自签发证书通过 `R2_RELAY_VPS_CA_FILE` 指定。
@@ -137,7 +138,7 @@ temp_dir = "~/.cache/r2-relay/real-r2-test"
 确认 Receiver v7 已完成 Root Bootstrap，且 VPS 当前 Release 仍是目标 SHA 后，在 GitHub Issue #63 添加精确评论：
 
 ```text
-/download-config real-test 12de7b52ba5e824455da15640f0cba8b6454ea08
+/download-config real-test <当前 VPS 已运行的 Receiver v7 Release 40 位 SHA>
 ```
 
 必须收到 `DOWNLOAD_TEST_ENABLED`，并核对回执中的 `profile=real-r2-test-v1`、`lease_minutes=30`、`max_cache_bytes=67108864`、`max_active_tasks=1`。如果回执不匹配，立即停止，不运行测试。
@@ -239,7 +240,7 @@ echo "mitmproxy real R2 GET: PASS (HTTP 206, Content-Range/Length, bytes identic
 完成后立即在 Issue #63 添加精确关闭评论（不要等待 30 分钟自动关闭）：
 
 ```text
-/download-config disabled 12de7b52ba5e824455da15640f0cba8b6454ea08
+/download-config disabled <与启用时相同的 Receiver v7 Release SHA>
 ```
 
 必须收到 `DOWNLOAD_CONFIG_APPLIED` 或 `DOWNLOAD_CONFIG_ALREADY_APPLIED`，且 `download_enabled=false`。随后停止独立 18586 测试代理，删除独立本地测试配置、私有请求文件及本地基线文件；现有 18585 生产代理不做任何操作：
