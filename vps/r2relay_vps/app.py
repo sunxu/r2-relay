@@ -182,7 +182,7 @@ def create_app(store: CacheStore | None = None, token: str | None = None,
 
     @app.get("/healthz")
     async def healthz():
-        return {"status": "ok"}
+        return {"status": "ok", "download_enabled": settings.enabled}
 
     # Dedicated network benchmark sink: authenticated, bounded, streamed and discarded.
     bench_max_bytes = int(os.environ.get("R2_RELAY_BENCH_MAX_BYTES", str(32 * 1024 * 1024)))
