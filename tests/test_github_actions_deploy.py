@@ -703,6 +703,10 @@ def _prepare_download_config_receiver_test(tmp_path, monkeypatch):
     config_parent = tmp_path / "etc-r2-relay-download"
     config_parent.mkdir(mode=0o710, parents=True)
     config_path = config_parent / "download.toml"
+    unit_path = tmp_path / "r2-relay-vps.service"
+    unit_path.write_text(receiver.UNIT_TEXT, encoding="utf-8")
+    download_cache = tmp_path / "var/lib/r2-relay/downloads"
+    download_cache.mkdir(mode=0o700, parents=True)
     backup_parent = tmp_path / "var/backups/r2-relay"
     backup_parent.mkdir(parents=True)
     backup_root = backup_parent / "download-config"
@@ -716,6 +720,8 @@ def _prepare_download_config_receiver_test(tmp_path, monkeypatch):
     monkeypatch.setattr(receiver, "CURRENT", current)
     monkeypatch.setattr(receiver, "RELEASES", release_root)
     monkeypatch.setattr(receiver, "DOWNLOAD_CONFIG", config_path)
+    monkeypatch.setattr(receiver, "UNIT", unit_path)
+    monkeypatch.setattr(receiver, "DOWNLOAD_CACHE", download_cache)
     monkeypatch.setattr(receiver, "DOWNLOAD_CONFIG_BACKUPS", backup_root)
     monkeypatch.setattr(receiver, "open_deploy_lock", lambda: os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600))
     monkeypatch.setattr(receiver, "validate_host_state", lambda **_kwargs: (os.getuid(), os.getgid(), str(release)))
