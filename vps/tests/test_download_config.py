@@ -15,6 +15,7 @@ def test_vps_download_defaults_are_safe_and_use_owner_values():
     assert settings.part_size_bytes == 16 * 1024 * 1024
     assert settings.split_threshold_bytes == 24 * 1024 * 1024
     assert settings.cache_ttl_seconds == 600
+    assert settings.test_expires_at_epoch == 0
 
 
 def test_vps_download_settings_are_loaded_from_toml(tmp_path):
@@ -42,6 +43,57 @@ def test_vps_download_settings_are_loaded_from_toml(tmp_path):
     assert settings.max_retained_tasks == 32
 
 
+def test_expired_real_r2_test_profile_fails_closed_at_service_start(tmp_path, monkeypatch):
+    import time
+
+    path = tmp_path / "expired-test.toml"
+    path.write_text(
+        "[download]\n"
+        "enabled = true\n"
+        "part_size_mib = 16\n"
+        "split_threshold_mib = 24\n"
+        "cache_ttl_seconds = 600\n"
+        "max_cache_bytes = 67108864\n"
+        "min_free_bytes = 5368709120\n"
+        "max_active_tasks = 1\n"
+        "max_retained_tasks = 2\n"
+        "max_waiters = 4\n"
+        "wait_timeout_seconds = 30\n"
+        "test_expires_at_epoch = 1\n",
+        encoding="utf-8",
+    )
+
+    settings = load_download_settings(path)
+
+    assert settings.enabled is False
+    assert settings.test_expires_at_epoch == 1
+
+
+def test_future_real_r2_test_profile_remains_enabled_before_expiry(tmp_path):
+    import time
+
+    path = tmp_path / "future-test.toml"
+    path.write_text(
+        "[download]\n"
+        "enabled = true\n"
+        "part_size_mib = 16\n"
+        "split_threshold_mib = 24\n"
+        "cache_ttl_seconds = 600\n"
+        "max_cache_bytes = 67108864\n"
+        "min_free_bytes = 5368709120\n"
+        "max_active_tasks = 1\n"
+        "max_retained_tasks = 2\n"
+        "max_waiters = 4\n"
+        "wait_timeout_seconds = 30\n"
+        f"test_expires_at_epoch = {int(time.time()) + 600}\n",
+        encoding="utf-8",
+    )
+
+    settings = load_download_settings(path)
+
+    assert settings.enabled is True
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -49,6 +101,7 @@ def test_vps_download_settings_are_loaded_from_toml(tmp_path):
         "split_threshold_mib = 8",
         "cache_ttl_seconds = 0",
         "max_cache_bytes = -1",
+        "test_expires_at_epoch = -1",
     ],
 )
 def test_vps_download_invalid_toml_fails_closed(tmp_path, value):
