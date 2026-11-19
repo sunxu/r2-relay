@@ -121,10 +121,6 @@ ls -l "$SPEC"
 ```toml
 schema_version = 1
 
-[upload]
-max_part_mib = 128
-global_buffer_mib = 1024
-
 [download]
 enabled = true
 max_concurrency = 16
@@ -182,7 +178,7 @@ max_temp_mib = 4096
 temp_dir = "~/.cache/r2-relay/downloads"
 ```
 
-这里的 4096 MiB 只是示例，不能在未检查 Mac 磁盘空间时照抄。VPS 的 `/etc/r2-relay/config.toml` 也必须配置并启用独立的 `[download]` 资源预算。
+本节继续使用独立的 `real-r2-test.toml`。VPS 不再读取 `/etc/r2-relay/config.toml`；Receiver v7 通过固定测试配置写入 `/etc/r2-relay-download/download.toml`，并限制缓存 64 MiB、最低剩余磁盘 5 GiB、1 个活动任务、2 个保留任务和 4 个等待者。
 
 在已安装当前 Stage 2 分支的仓库根目录，打开一个终端启动本地代理：
 
@@ -197,7 +193,7 @@ python -m r2relay_local --listen-host 127.0.0.1 --listen-port 18586
 
 首次启动后，mitmproxy 会生成本地客户端 CA 公共证书：`~/.mitmproxy/mitmproxy-ca-cert.pem`。不要分享或提交 CA 私钥。
 
-在另一个终端中恢复签名 URL 到当前 shell（不打印它），再经 18585 发起相同 Range GET：
+在另一个终端中恢复签名 URL 到当前 shell（不打印它），再经 18586 发起相同 Range GET：
 
 ```bash
 export SOURCE="$HOME/r2-relay-25mib.bin"
@@ -236,7 +232,7 @@ echo "mitmproxy real R2 GET: PASS (HTTP 206, Content-Range/Length, bytes identic
 4. Mac → VPS 下载请求正常完成，报告中的 `http2_ok` 必须为 true，协商版本必须包含 `HTTP/2`。
 5. VPS 下载任务 DELETE 成功（或已不存在）；报告中的 `vps_task_cleanup_ok` 和 `local_temp_cleanup_ok` 均为 true；本地临时文件和内存/磁盘预算在响应消费完成后释放。
 
-此脚本直接验证 RelayClient → VPS → 真实 R2，不经过 mitmproxy 的原始客户端接管层。mitmproxy GET 接管、Loopback response streaming 和不提前连接原始 R2 主机，已由隔离 Mock R2 的 Runner 全栈测试覆盖；如需对真实业务应用做最终验收，还必须让该应用经本地 18585 代理发起同一类真实 GET。
+此脚本直接验证 RelayClient → VPS → 真实 R2，不经过 mitmproxy 的原始客户端接管层。mitmproxy GET 接管、Loopback response streaming 和不提前连接原始 R2 主机，已由隔离 Mock R2 的 Runner 全栈测试覆盖；如需对真实业务应用做最终验收，还必须让该应用经本地隔离 18586 测试代理发起同一类真实 GET。
 
 ## 5. 安全收尾
 
