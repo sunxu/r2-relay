@@ -36,6 +36,7 @@ def make_archive(path: Path, *, marker=SHA, extra=None, unit=None, include_confi
     }
     if include_config_marker:
         files["deploy/download-config-dropin-v1"] = b"r2-relay-download-config-dropin-v1\n"
+        files["deploy/leased-download-test-v1"] = b"r2-relay-leased-download-test-v1\n"
     with tarfile.open(path, "w:") as archive:
         for name, data in files.items():
             info = tarfile.TarInfo(name)
@@ -697,6 +698,8 @@ def _prepare_download_config_receiver_test(tmp_path, monkeypatch):
     marker = release / "deploy/download-config-dropin-v1"
     marker.parent.mkdir(parents=True)
     marker.write_text(receiver.DOWNLOAD_CONFIG_MARKER + "\n", encoding="ascii")
+    test_marker = release / "deploy/leased-download-test-v1"
+    test_marker.write_text(receiver.DOWNLOAD_TEST_CAPABILITY_MARKER + "\n", encoding="ascii")
 
     current = tmp_path / "current"
     current.symlink_to(release)
@@ -1014,6 +1017,32 @@ def test_legacy_release_archive_without_download_marker_remains_deployable(tmp_p
 
     assert info["files"] == 5
     assert "deploy/download-config-dropin-v1" not in {member.name for member in members}
+
+
+def test_archive_rejects_invalid_leased_download_test_capability_marker(tmp_path):
+    archive = tmp_path / "invalid-test-marker.tar"
+    files = {
+        "vps/pyproject.toml": b"[build-system]\n",
+        "vps/r2relay_vps/app.py": b"app = True\n",
+        "deploy/vps.service": receiver.UNIT_TEXT.encode(),
+        "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
+        "deploy/download-config-dropin-v1": (receiver.DOWNLOAD_CONFIG_MARKER + "\n").encode(),
+        "deploy/leased-download-test-v1": b"unsupported-test-profile\n",
+        ".deployment-commit": (SHA + "\n").encode(),
+    }
+    with tarfile.open(archive, "w:") as output:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o644
+            output.addfile(info, io.BytesIO(data))
+
+    try:
+        receiver.validate_archive(archive, SHA)
+    except receiver.DeployError as exc:
+        assert str(exc) == "download_test_capability_marker_invalid"
+    else:
+        raise AssertionError("invalid leased download test marker accepted")
 
 
 def test_archive_rejects_invalid_download_config_capability_marker(tmp_path):
