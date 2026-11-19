@@ -222,7 +222,7 @@ class RelayClient:
                 f"VPS READY Part 读取中断：{type(exc).__name__}"
             ) from exc
 
-    async def download_body(self, task_id: str, *, max_bytes: int) -> bytes:
+    async def download_body(self, task_id: str, *, max_bytes: int) -> bytearray:
         body = bytearray()
         try:
             async with self.client.stream(
@@ -244,7 +244,9 @@ class RelayClient:
             raise RelayOutcomeUnknown(
                 f"VPS 小响应取回结果未知：{type(exc).__name__}"
             ) from exc
-        return bytes(body)
+        # Return the owned bytearray directly: converting to bytes doubles the
+        # full response payload at peak while both objects coexist.
+        return body
 
     async def download_delete(self, task_id: str) -> None:
         try:
