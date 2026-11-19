@@ -840,3 +840,33 @@ def test_archive_rejects_invalid_download_config_capability_marker(tmp_path):
         assert str(exc) == "download_config_capability_marker_invalid"
     else:
         raise AssertionError("invalid download config marker accepted")
+
+
+
+def test_health_check_can_require_download_disabled(monkeypatch):
+    from types import SimpleNamespace
+
+    responses = [
+        b'{"status":"ok"}',
+        b'{"status":"ok","download_enabled":true}',
+        b'{"status":"ok","download_enabled":false}',
+    ]
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return responses.pop(0)
+
+    monkeypatch.setattr(receiver, "urlopen", lambda *_args, **_kwargs: Response())
+    monkeypatch.setattr(receiver.time, "sleep", lambda _seconds: None)
+
+    assert receiver.health_check(attempts=1) is True
+    assert receiver.health_check(attempts=1, expected_download_enabled=False) is False
+    assert receiver.health_check(attempts=1, expected_download_enabled=False) is True
