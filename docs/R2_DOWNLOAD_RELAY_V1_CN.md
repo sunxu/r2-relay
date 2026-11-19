@@ -2,7 +2,7 @@
 
 - 需求编号：RLY-020～RLY-039
 - 跟踪任务：[Issue #63](https://github.com/sunxu/r2-relay/issues/63)
-- 状态：仓库负责人已确认设计基线；Stage 0 PoC 已通过；Stage 1 VPS 核心已合并（PR #66）；Stage 2 Mac 客户端在 Draft PR #68，当前 HEAD `8f935fa` 的本地/VPS pytest 97 passed、RC1 offline gate 143 passed，Mock R2 全栈、Smoke、PR governance 均通过；本轮 P1 修复已纳入；真实 R2 验收待执行，尚未部署 VPS。
+- 状态：仓库负责人已确认设计基线；Stage 0 PoC 已通过；Stage 1 VPS 核心已合并（PR #66）；Stage 2 Mac 客户端在 Draft PR #68，最近一轮本地/VPS pytest 97 passed、RC1 offline gate 143 passed，Mock R2 全栈、Smoke、PR governance 均通过；本轮 P1 修复已纳入；真实 R2 验收待执行，尚未部署 VPS。
 - 原则：下载是独立能力，不改变现有 UploadPart PUT 上传行为。
 
 ## 1. 目标
