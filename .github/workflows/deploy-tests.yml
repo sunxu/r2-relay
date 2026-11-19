@@ -6,6 +6,9 @@ on:
   pull_request:
     paths:
       - "ops/r2relay_deploy_receiver.py"
+      - "vps/r2relay_vps/config.py"
+      - "vps/r2relay_vps/app.py"
+      - "vps/tests/test_download_config.py"
       - "ops/bootstrap_github_actions_deploy.py"
       - "tests/test_github_actions_deploy.py"
       - "ops/r2_loopback_control.py"
