@@ -924,6 +924,39 @@ def test_download_test_expiry_disables_only_matching_expired_lease(tmp_path, mon
     assert restarts == [["/usr/bin/systemctl", "restart", receiver.SERVICE]]
 
 
+def test_download_test_timer_keeps_future_lease_active_until_expiry(tmp_path, monkeypatch):
+    _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    lease_id = "f" * 32
+    config_path.write_text(receiver.DOWNLOAD_TEST_PROFILE_TEXT, encoding="utf-8")
+    receiver.DOWNLOAD_TEST_LEASE.write_text(
+        __import__("json").dumps({
+            "lease_id": lease_id, "expires_at": int(__import__("time").time()) + 600,
+            "commit": SHA,
+        }) + "\\n",
+        encoding="utf-8",
+    )
+    receiver.DOWNLOAD_TEST_LEASE.chmod(0o600)
+    real_lstat = Path.lstat
+    def fake_lstat(path):
+        info = real_lstat(path)
+        if path == receiver.DOWNLOAD_TEST_LEASE:
+            return type("RootOwnedStat", (), {
+                "st_mode": stat.S_IFREG | 0o600, "st_uid": 0, "st_nlink": 1,
+                "st_size": info.st_size,
+            })()
+        return info
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    restarts = []
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: restarts.append(argv))
+
+    result = receiver.expire_download_test(lease_id)
+
+    assert result["status"] == "DOWNLOAD_TEST_EXPIRY_NOT_DUE"
+    assert config_path.read_text(encoding="utf-8") == receiver.DOWNLOAD_TEST_PROFILE_TEXT
+    assert receiver.DOWNLOAD_TEST_LEASE.exists()
+    assert restarts == []
+
+
 def test_download_test_expiry_with_corrupt_lease_fails_closed(tmp_path, monkeypatch):
     _release, config_path, _backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
     config_path.write_text(receiver.DOWNLOAD_TEST_PROFILE_TEXT, encoding="utf-8")
