@@ -16,7 +16,7 @@ concurrency:
 jobs:
   deploy:
     if: >-
-      github.event.issue.number == 41 &&
+      (github.event.issue.number == 41 || github.event.issue.number == 63) &&
       github.event.issue.pull_request == null &&
       github.event.issue.state == 'open' &&
       github.event.comment.user.login == 'sunxu' &&
