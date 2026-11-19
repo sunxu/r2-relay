@@ -147,18 +147,18 @@ def test_managed_download_dropin_rejects_invalid_values(tmp_path):
 def _write_disabled_dropin(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "schema_version = 1\\n"
-        "[download]\\n"
-        "enabled = false\\n"
-        "part_size_mib = 16\\n"
-        "split_threshold_mib = 24\\n"
-        "cache_ttl_seconds = 600\\n"
-        "max_cache_bytes = 0\\n"
-        "min_free_bytes = 0\\n"
-        "max_active_tasks = 0\\n"
-        "max_retained_tasks = 0\\n"
-        "max_waiters = 0\\n"
-        "wait_timeout_seconds = 30\\n",
+        "schema_version = 1\n"
+        "[download]\n"
+        "enabled = false\n"
+        "part_size_mib = 16\n"
+        "split_threshold_mib = 24\n"
+        "cache_ttl_seconds = 600\n"
+        "max_cache_bytes = 0\n"
+        "min_free_bytes = 0\n"
+        "max_active_tasks = 0\n"
+        "max_retained_tasks = 0\n"
+        "max_waiters = 0\n"
+        "wait_timeout_seconds = 30\n",
         encoding="utf-8",
     )
 
