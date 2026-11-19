@@ -38,6 +38,7 @@ DOWNLOAD_CONFIG = DOWNLOAD_CONFIG_DIR / "download.toml"
 DOWNLOAD_CONFIG_BACKUPS = Path("/var/backups/r2-relay/download-config")
 DOWNLOAD_TEST_STATE_DIR = Path("/var/lib/r2-relay-deploy")
 DOWNLOAD_TEST_LEASE = DOWNLOAD_TEST_STATE_DIR / "download-test-lease.json"
+SYSTEMD_UNIT_DIR = Path("/etc/systemd/system")
 RECEIVER_INSTALLED = Path("/usr/local/libexec/r2relay_deploy_receiver.py")
 LOCK = Path("/run/lock/r2-relay-github-deploy.lock")
 SERVICE = "r2-relay-vps.service"
@@ -79,6 +80,7 @@ max_waiters = 4
 wait_timeout_seconds = 30
 """
 DOWNLOAD_TEST_LEASE_SECONDS = 1800
+DOWNLOAD_TEST_TIMER_INTERVAL_SECONDS = 30
 DOWNLOAD_TEST_TIMER_PREFIX = "r2-relay-download-test-expiry-"
 RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v7-leased-real-r2-test"
 REQUIRED = {
@@ -985,17 +987,90 @@ def _clear_download_test_lease() -> None:
         _fsync_directory(DOWNLOAD_TEST_STATE_DIR)
 
 
+def _validate_download_test_systemd_dir() -> None:
+    if SYSTEMD_UNIT_DIR.is_symlink() or not SYSTEMD_UNIT_DIR.is_dir():
+        raise DeployError("download_test_systemd_unit_dir_unsafe")
+    info = SYSTEMD_UNIT_DIR.stat()
+    if info.st_uid != 0 or info.st_mode & 0o022:
+        raise DeployError("download_test_systemd_unit_dir_permissions_invalid")
+
+
+def _download_test_timer_unit_name(lease_id: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{32}", lease_id):
+        raise DeployError("invalid_download_test_lease_id")
+    return DOWNLOAD_TEST_TIMER_PREFIX + lease_id
+
+
 def _schedule_download_test_expiry(lease_id: str, expires_at: int) -> None:
-    when = datetime.fromtimestamp(expires_at, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    unit = DOWNLOAD_TEST_TIMER_PREFIX + lease_id
-    run_fixed([
-        "/usr/bin/systemd-run", "--quiet", "--collect",
-        "--unit=" + unit,
-        "--on-calendar=" + when,
-        "--timer-property=Persistent=true",
-        "/usr/bin/python3", str(RECEIVER_INSTALLED),
-        "--expire-download-test", lease_id,
-    ], timeout=30)
+    _validate_download_test_systemd_dir()
+    unit = _download_test_timer_unit_name(lease_id)
+    service_path = SYSTEMD_UNIT_DIR / (unit + ".service")
+    timer_path = SYSTEMD_UNIT_DIR / (unit + ".timer")
+    if service_path.exists() or timer_path.exists() or service_path.is_symlink() or timer_path.is_symlink():
+        raise DeployError("download_test_timer_unit_already_exists")
+    service_text = f"""[Unit]
+Description=R2 Relay leased download test expiry ({lease_id})
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 {RECEIVER_INSTALLED} --expire-download-test {lease_id}
+"""
+    timer_text = f"""[Unit]
+Description=R2 Relay leased download test expiry timer ({lease_id})
+
+[Timer]
+OnBootSec={DOWNLOAD_TEST_TIMER_INTERVAL_SECONDS}s
+OnUnitActiveSec={DOWNLOAD_TEST_TIMER_INTERVAL_SECONDS}s
+AccuracySec=1s
+Unit={unit}.service
+
+[Install]
+WantedBy=timers.target
+"""
+    try:
+        write_atomic(service_path, service_text, mode=0o644)
+        write_atomic(timer_path, timer_text, mode=0o644)
+        run_fixed(["/usr/bin/systemctl", "daemon-reload"], timeout=30)
+        run_fixed(["/usr/bin/systemctl", "enable", "--now", unit + ".timer"], timeout=30)
+    except Exception:
+        for path in (timer_path, service_path):
+            try:
+                if path.is_file() and not path.is_symlink():
+                    path.unlink()
+            except OSError:
+                pass
+        try:
+            run_fixed(["/usr/bin/systemctl", "daemon-reload"], timeout=30)
+        except Exception:
+            pass
+        raise
+
+
+def _cleanup_download_test_expiry_timer(lease_id: str) -> None:
+    unit = _download_test_timer_unit_name(lease_id)
+    service_path = SYSTEMD_UNIT_DIR / (unit + ".service")
+    timer_path = SYSTEMD_UNIT_DIR / (unit + ".timer")
+    try:
+        run_fixed(["/usr/bin/systemctl", "disable", "--now", unit + ".timer"], timeout=30)
+    except Exception:
+        # It may already have fired or been manually disabled. Remove only the
+        # nonce-specific unit files; a stale timer cannot affect a newer lease.
+        pass
+    _validate_download_test_systemd_dir()
+    for path in (timer_path, service_path):
+        if path.is_symlink():
+            raise DeployError("download_test_timer_unit_symlink")
+        if path.exists():
+            info = path.lstat()
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                    or stat.S_IMODE(info.st_mode) != 0o644 or info.st_nlink != 1):
+                raise DeployError("download_test_timer_unit_permissions_invalid")
+            path.unlink()
+    _fsync_directory(SYSTEMD_UNIT_DIR)
+    try:
+        run_fixed(["/usr/bin/systemctl", "daemon-reload"], timeout=30)
+    except Exception:
+        pass
 
 
 def _backup_current_download_config(sha: str, profile: str) -> tuple[Path, bytes, int, int]:
