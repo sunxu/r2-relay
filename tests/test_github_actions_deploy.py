@@ -718,7 +718,7 @@ def _prepare_download_config_receiver_test(tmp_path, monkeypatch):
     monkeypatch.setattr(receiver, "DOWNLOAD_CONFIG", config_path)
     monkeypatch.setattr(receiver, "DOWNLOAD_CONFIG_BACKUPS", backup_root)
     monkeypatch.setattr(receiver, "open_deploy_lock", lambda: os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600))
-    monkeypatch.setattr(receiver, "validate_host_state", lambda: (os.getuid(), os.getgid(), str(release)))
+    monkeypatch.setattr(receiver, "validate_host_state", lambda **_kwargs: (os.getuid(), os.getgid(), str(release)))
     monkeypatch.setattr(receiver.os, "geteuid", lambda: 0)
     monkeypatch.setattr(receiver.os, "chown", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(receiver.os, "fchown", lambda *_args, **_kwargs: None)
