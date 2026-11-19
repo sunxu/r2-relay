@@ -212,6 +212,7 @@ jobs:
           git fetch origin main --no-tags
           git cat-file -e "$TARGET_SHA^{commit}"
           git merge-base --is-ancestor "$TARGET_SHA" origin/main
+          git cat-file -e "$TARGET_SHA:deploy/download-config-dropin-v1"
           checks="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/check-runs?per_page=100")"
           check="$(printf '%s\n' "$checks" | jq -s --arg sha "$TARGET_SHA" '[.[].check_runs[] | select(.name == "deploy-tests" and .head_sha == $sha and .app.slug == "github-actions")] | sort_by(.id) | last // empty')"
           if [ -z "$check" ] || [ "$check" = "null" ]; then
