@@ -365,6 +365,9 @@ def _ensure_download_cache_directory(uid: int, gid: int) -> None:
         DOWNLOAD_CACHE.mkdir(mode=0o700, parents=False)
     except FileExistsError:
         pass
+    else:
+        os.chown(DOWNLOAD_CACHE, uid, gid)
+        os.chmod(DOWNLOAD_CACHE, 0o700)
     info = DOWNLOAD_CACHE.lstat()
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
             or info.st_gid != gid or stat.S_IMODE(info.st_mode) != 0o700):
