@@ -1,7 +1,11 @@
 from pathlib import Path
 
+import httpx
 import pytest
 
+import r2relay_vps.config as config
+from r2relay_vps.app import create_app
+from r2relay_vps.cache import CacheStore
 from r2relay_vps.config import load_download_settings
 
 
@@ -137,3 +141,78 @@ def test_managed_download_dropin_rejects_invalid_values(tmp_path):
         load_download_settings(
             Path("/path/that/does/not/exist.toml"), dropin
         )
+
+
+
+def _write_disabled_dropin(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "schema_version = 1\\n"
+        "[download]\\n"
+        "enabled = false\\n"
+        "part_size_mib = 16\\n"
+        "split_threshold_mib = 24\\n"
+        "cache_ttl_seconds = 600\\n"
+        "max_cache_bytes = 0\\n"
+        "min_free_bytes = 0\\n"
+        "max_active_tasks = 0\\n"
+        "max_retained_tasks = 0\\n"
+        "max_waiters = 0\\n"
+        "wait_timeout_seconds = 30\\n",
+        encoding="utf-8",
+    )
+
+
+def _deny_legacy_general_config_probe(monkeypatch):
+    original_is_file = Path.is_file
+    legacy_path = Path("/etc/r2-relay/config.toml")
+
+    def guarded_is_file(path):
+        if path == legacy_path:
+            raise PermissionError("legacy general config directory is root-only")
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", guarded_is_file)
+
+
+def test_default_loader_uses_isolated_dropin_without_probing_root_only_config(
+    tmp_path, monkeypatch
+):
+    dropin = tmp_path / "etc-r2-relay-download" / "download.toml"
+    _write_disabled_dropin(dropin)
+    monkeypatch.setattr(config, "DOWNLOAD_CONFIG", dropin)
+    _deny_legacy_general_config_probe(monkeypatch)
+
+    settings = config.load_download_settings()
+
+    assert settings.enabled is False
+    assert settings.part_size_bytes == 16 * 1024 * 1024
+    assert settings.split_threshold_bytes == 24 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_create_app_healthz_with_disabled_dropin_and_unreadable_general_config(
+    tmp_path, monkeypatch
+):
+    dropin = tmp_path / "etc-r2-relay-download" / "download.toml"
+    _write_disabled_dropin(dropin)
+    monkeypatch.setattr(config, "DOWNLOAD_CONFIG", dropin)
+    _deny_legacy_general_config_probe(monkeypatch)
+
+    app = create_app(
+        CacheStore(tmp_path / "cache"),
+        token="test-token",
+        download_root=tmp_path / "downloads",
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/healthz")
+        assert response.status_code == 200
+        assert response.json() == {
+            "status": "ok",
+            "download_enabled": False,
+        }
+    finally:
+        await app.state.downloads.close()
