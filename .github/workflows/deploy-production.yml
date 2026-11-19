@@ -313,6 +313,8 @@ jobs:
         if: always()
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha || 'not-parsed' }}
+          TARGET_MODE: ${{ steps.target.outputs.mode || 'not-parsed' }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
           JOB_RESULT: ${{ job.status }}
         run: |
           set -euo pipefail
@@ -332,4 +334,4 @@ jobs:
           elif [ "$JOB_RESULT" != "success" ]; then
             printf -v body '%s\n\nConfiguration receipt: no receiver response was produced; inspect the failing workflow step.' "$body"
           fi
-          gh issue comment 41 --repo "$GITHUB_REPOSITORY" --body "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$body"
