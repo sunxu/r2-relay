@@ -32,6 +32,7 @@ def make_archive(path: Path, *, marker=SHA, extra=None, unit=None):
         "vps/r2relay_vps/app.py": b"app = True\n",
         "deploy/vps.service": (unit if unit is not None else receiver.UNIT_TEXT).encode(),
         "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
+        "deploy/download-config-dropin-v1": b"r2-relay-download-config-dropin-v1\\n",
         ".deployment-commit": (marker + "\n").encode(),
     }
     with tarfile.open(path, "w:") as archive:
