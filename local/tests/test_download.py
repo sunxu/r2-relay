@@ -487,7 +487,7 @@ def test_pwrite_all_retries_short_writes_until_buffer_is_complete(tmp_path, monk
         os.close(fd)
 
     assert len(calls) > 1
-    assert path.read_bytes() == b"\\x00" * 7 + b"0123456789"
+    assert path.read_bytes() == b"\x00" * 7 + b"0123456789"
 
 
 @pytest.mark.asyncio
