@@ -86,6 +86,10 @@ class RelayOutcomeUnknown(Exception):
     """VPS may already be uploading to R2; do not start a competing direct PUT."""
 
 
+class DownloadPartTransportError(RelayOutcomeUnknown):
+    """A READY immutable Part read was interrupted; retrying the same GET is safe."""
+
+
 class RelayClient:
     def __init__(
         self, endpoint: str, token: str, *,
@@ -214,8 +218,8 @@ class RelayClient:
                 self.download_http_versions.append(response.http_version)
                 yield response
         except (httpx.TransportError, httpx.TimeoutException) as exc:
-            raise RelayOutcomeUnknown(
-                f"VPS Part 取回结果未知：{type(exc).__name__}"
+            raise DownloadPartTransportError(
+                f"VPS READY Part 读取中断：{type(exc).__name__}"
             ) from exc
 
     async def download_body(self, task_id: str, *, max_bytes: int) -> bytes:
