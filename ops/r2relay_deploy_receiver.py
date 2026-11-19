@@ -39,6 +39,22 @@ MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_UNPACKED_BYTES = 256 * 1024 * 1024
 MAX_MEMBERS = 6000
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+DOWNLOAD_CONFIG_MARKER = "r2-relay-download-config-dropin-v1"
+DOWNLOAD_CONFIG_TEXT = """schema_version = 1
+
+# 由受控 GitHub Actions 管理；当前只应用关闭配置。
+[download]
+enabled = false
+part_size_mib = 16
+split_threshold_mib = 24
+cache_ttl_seconds = 600
+max_cache_bytes = 0
+min_free_bytes = 0
+max_active_tasks = 0
+max_retained_tasks = 0
+max_waiters = 0
+wait_timeout_seconds = 30
+"""
 RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v5-controlled-download-config"
 REQUIRED = {
     "vps/pyproject.toml",
@@ -204,7 +220,7 @@ def validate_archive(archive_path: Path, expected_sha: str):
             config_marker = archive.extractfile(
                 archive.getmember("deploy/download-config-dropin-v1")
             )
-            if config_marker is None or config_marker.read(128).decode("ascii") != DOWNLOAD_CONFIG_MARKER + "\\n":
+            if config_marker is None or config_marker.read(128).decode("ascii") != DOWNLOAD_CONFIG_MARKER + "\n":
                 raise DeployError("download_config_capability_marker_invalid")
             unit_member = archive.getmember("deploy/vps.service")
             unit_stream = archive.extractfile(unit_member)
@@ -816,7 +832,7 @@ def apply_download_config_disabled(sha: str) -> dict:
             os.chown(previous_backup, 0, 0)
             os.chmod(previous_backup, 0o600)
         state_path = backup / "state.json"
-        state_path.write_text(json.dumps(state, sort_keys=True) + "\\n", encoding="utf-8")
+        state_path.write_text(json.dumps(state, sort_keys=True) + "\n", encoding="utf-8")
         os.chown(state_path, 0, 0)
         os.chmod(state_path, 0o600)
         _fsync_directory(backup)
