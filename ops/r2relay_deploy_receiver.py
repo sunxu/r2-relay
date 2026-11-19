@@ -78,6 +78,7 @@ max_active_tasks = 1
 max_retained_tasks = 2
 max_waiters = 4
 wait_timeout_seconds = 30
+test_expires_at_epoch = {expires_at}
 """
 DOWNLOAD_TEST_LEASE_SECONDS = 1800
 DOWNLOAD_TEST_TIMER_INTERVAL_SECONDS = 30
@@ -1118,7 +1119,8 @@ def apply_download_config_real_test(sha: str) -> dict:
         lease = {"lease_id": lease_id, "expires_at": expires_at, "commit": sha}
         try:
             _write_download_test_lease(lease)
-            _atomic_write_download_config(DOWNLOAD_TEST_PROFILE_TEXT.encode("utf-8"), gid)
+            test_profile = DOWNLOAD_TEST_PROFILE_TEXT.format(expires_at=expires_at)
+            _atomic_write_download_config(test_profile.encode("utf-8"), gid)
             _schedule_download_test_expiry(lease_id)
             run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
             if not health_check(expected_download_enabled=True):
