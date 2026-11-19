@@ -305,7 +305,7 @@ def extract_archive(archive_path: Path, stage: Path, members, expected_sha: str)
         raise
 
 
-def validate_host_state() -> tuple[int, int, str]:
+def validate_host_state(*, require_active: bool = True) -> tuple[int, int, str]:
     if os.geteuid() != 0:
         raise DeployError("root_required")
     try:
@@ -338,7 +338,7 @@ def validate_host_state() -> tuple[int, int, str]:
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, check=False, timeout=10,
     )
-    if active.returncode != 0:
+    if require_active and active.returncode != 0:
         raise DeployError("service_not_active_before_deploy")
     if CURRENT.exists() and not CURRENT.is_symlink():
         raise DeployError("current_path_not_symlink")
@@ -1091,7 +1091,7 @@ def expire_download_test(lease_id: str) -> dict:
                 "status": "DOWNLOAD_TEST_EXPIRY_RESCHEDULED",
                 "expires_at": lease["expires_at"],
             }
-        _uid, gid, _current_target = validate_host_state()
+        _uid, gid, _current_target = validate_host_state(require_active=False)
         _validate_download_config_paths(gid)
         _atomic_write_download_config(DOWNLOAD_CONFIG_TEXT.encode("utf-8"), gid)
         _clear_download_test_lease()
