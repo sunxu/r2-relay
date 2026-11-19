@@ -108,6 +108,8 @@ sudo namei -l /etc/r2-relay/vps.env
 
 确认 `/etc/r2-relay` 为 `root:root 0700`、`vps.env` 仍为 `root:root 0600` 后，再按本次 PR 合并后的精确 SHA 执行 Bootstrap v6。新 receiver 会在 `/download-config disabled <SHA>` 时自动创建独立 drop-in 目录，不需要手工开放旧目录。
 
+本次安装 Receiver v6 使用 PR #71 的 Bootstrap SHA：`12de7b52ba5e824455da15640f0cba8b6454ea08`。这只是用于上传 Bootstrap 脚本和 Receiver 的固定代码版本；后续应用配置与部署应用必须使用合并后最新 `main` 上、且 `deploy-tests` 成功的同一个目标 SHA。不要把 Bootstrap SHA 与应用部署目标 SHA 混为一谈。
+
 ### Bootstrap 后的无部署连通性验证
 
 在 GitHub Secrets 配置完成前，可用专用私钥向受限入口发送一个**空归档**，验证 SSH 公钥认证、ForcedCommand、sudoers 和 Root receiver 全链路。该命令不会进入 `deploy()`，不会切换版本或重启服务：
