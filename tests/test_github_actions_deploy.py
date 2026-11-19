@@ -891,6 +891,7 @@ def test_download_test_expiry_disables_only_matching_expired_lease(tmp_path, mon
         if path == receiver.DOWNLOAD_TEST_LEASE:
             return type("RootOwnedStat", (), {
                 "st_mode": stat.S_IFREG | 0o600, "st_uid": 0, "st_nlink": 1,
+                "st_size": info.st_size,
             })()
         return info
     monkeypatch.setattr(Path, "lstat", fake_lstat)
