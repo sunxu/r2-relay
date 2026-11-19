@@ -69,7 +69,8 @@ def load_spec() -> dict:
     digest = data["expected_sha256"]
     expected_headers = data["expected_headers"]
     if (
-        not isinstance(expected_headers, dict) or len(expected_headers) > 32
+        not isinstance(expected_headers, dict) or not expected_headers
+        or len(expected_headers) > 32
         or any(
             not isinstance(name, str) or not isinstance(value, str)
             or not name or "\r" in name or "\n" in name
@@ -77,7 +78,18 @@ def load_spec() -> dict:
             for name, value in expected_headers.items()
         )
     ):
-        raise ValueError("expected_headers must be a map of safe header names and values")
+        raise ValueError("expected_headers must be a non-empty map of safe header names and values")
+    expected_header_names = {name.lower() for name in expected_headers}
+    range_requested = any(name.lower() == "range" for name, _ in normalized)
+    if range_requested:
+        required_range_headers = {"content-range", "content-length"}
+        missing_range_headers = required_range_headers - expected_header_names
+        if missing_range_headers:
+            missing = ", ".join(sorted(missing_range_headers))
+            raise ValueError(
+                "Range requests require expected_headers for Content-Range "
+                f"and Content-Length; missing: {missing}"
+            )
     if type(status) is not int or not 200 <= status <= 599:
         raise ValueError("expected_status_code must be an HTTP response status")
     if type(size) is not int or size < 0:
@@ -142,7 +154,7 @@ async def run() -> int:
             name: expected in actual_headers.get(name, [])
             for name, expected in spec["expected_headers"].items()
         }
-        headers_ok = all(header_matches.values())
+        headers_ok = bool(spec["expected_headers"]) and all(header_matches.values())
         remote_cleanup_ok = coordinator.remote_cleanup_failures == 0
         actual_status = result.status_code
         http_versions = sorted(set(relay.download_http_versions))
