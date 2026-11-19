@@ -150,8 +150,10 @@ async def run() -> int:
         local_path = result.path
         if result.cleanup is not None:
             await result.cleanup()
+        local_body_released = result.body is None or len(result.body) == 0
         local_temp_cleanup_ok = (
             (local_path is None or not local_path.exists())
+            and local_body_released
             and coordinator.disk_budget.used == 0
             and coordinator.memory_budget.used == 0
         )
@@ -179,6 +181,7 @@ async def run() -> int:
             "status_match": status_ok,
             "vps_task_cleanup_ok": remote_cleanup_ok,
             "local_temp_cleanup_ok": local_temp_cleanup_ok,
+            "local_body_released": local_body_released,
             "mac_to_vps_http_versions": http_versions,
             "http2_ok": http2_ok,
             "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
