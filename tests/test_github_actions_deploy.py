@@ -1021,9 +1021,10 @@ def _prepare_download_config_path_validation(tmp_path, monkeypatch, *, existing_
 
 
 def test_vps_service_unit_grants_only_dedicated_download_cache_write_path():
+    import inspect
     assert "ReadWritePaths=/var/lib/r2-relay/cache /var/lib/r2-relay/downloads" in receiver.UNIT_TEXT
     assert "ReadWritePaths=/var/lib/r2-relay/cache" in receiver.PREVIOUS_UNIT_TEXT
-    assert receiver.PREVIOUS_UNIT_TEXT.strip() in receiver.validate_host_state.__code__.co_consts
+    assert "PREVIOUS_UNIT_TEXT.strip()" in inspect.getsource(receiver.validate_host_state)
 
 
 def test_download_cache_directory_is_created_private_for_relay_user(tmp_path, monkeypatch):
