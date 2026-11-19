@@ -7,7 +7,7 @@
 - VPS Stage 1 已部署，当前 Release 为 `12de7b52ba5e824455da15640f0cba8b6454ea08`；下载配置为 `enabled=false`。
 - Receiver v7 PR 合并后，Owner 必须先用该 PR 的精确 Merge SHA Bootstrap Root Receiver v7，再通过 Issue #63 的 `/deploy <SHA>` 部署同一个 SHA。这个 Release 更新仅增加下载缓存目录和 systemd 写入白名单，部署健康检查必须仍报告 `download_enabled=false`。
 - 只有 Receiver v7 已 Bootstrap、v7 Release 已实际运行且部署 SHA 一致，才可以使用 Issue #63 的 30 分钟固定测试配置命令。**在这两个前置步骤完成前，不执行任何启用命令。**
-- Receiver v7 的测试配置固定限制：VPS 缓存预算 64 MiB、最低剩余磁盘 5 GiB、最多 1 个活动任务、2 个保留任务、4 个等待者；30 分钟后由 systemd 持久 timer 自动关闭。手动测试结束仍应立即执行关闭命令，不等待计时器。
+- Receiver v7 的测试配置固定限制：VPS 缓存预算 64 MiB、最低剩余磁盘 5 GiB、最多 1 个活动任务、2 个保留任务、4 个等待者；30 分钟后由持久化 systemd timer 自动关闭。Timer 每 30 秒检查租约，VPS 重启后自动恢复，过期后最多约 30 秒关闭。手动测试结束仍应立即执行关闭命令，不等待计时器。
 - Mac 已检出当前 Stage 2 分支代码；真实测试必须使用独立的本地测试配置和独立代理端口，不得修改现有 18585 生产代理配置。
 - Mac → VPS HTTPS 证书验证正常；自签发证书通过 `R2_RELAY_VPS_CA_FILE` 指定。
 - 准备一条新鲜、未过期、实际可用的 R2 GET 签名 URL，以及该请求必须携带的原始请求头。
