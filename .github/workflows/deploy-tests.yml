@@ -42,5 +42,7 @@ jobs:
         run: python -m pytest -q tests/test_github_actions_deploy.py
       - name: Test deployment state verification
         run: python -m pytest -q tests/test_r2_loopback_control.py
-      - name: Compile deployment code
-        run: python -m py_compile ops/r2relay_deploy_receiver.py ops/bootstrap_github_actions_deploy.py
+      - name: Test VPS download configuration
+        run: PYTHONPATH=vps python -m pytest -q vps/tests/test_download_config.py
+      - name: Compile deployment and VPS configuration code
+        run: python -m py_compile ops/r2relay_deploy_receiver.py ops/bootstrap_github_actions_deploy.py vps/r2relay_vps/config.py vps/r2relay_vps/app.py
