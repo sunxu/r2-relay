@@ -155,7 +155,7 @@ wait_timeout_seconds = 30
 
 该文件由 Root 原子写入，权限为 `root:r2relay 0640`；应用前备份旧文件，重启仅限 `r2-relay-vps.service`，健康检查失败则恢复旧配置并再次重启。回执明确报告 `download_enabled=false`。配置应用不修改 Token、EnvironmentFile、上传缓存、Caddy 或 443/8443。当前命令只能关闭下载，后续若要启用，必须另行审查容量预算和授权，不属于本次授权。
 
-新增此操作需要把 Root receiver 升级到 build ID `r2-relay-deploy-receiver-v5-controlled-download-config`。这仍使用原有 `r2relay-deploy` ForcedCommand 和零参数 sudo 授权，不扩大 SSH/sudo 权限；但因 receiver 是独立安装的，合并后 Owner 需通过可信 Root SSH 通道再运行一次现有 Bootstrap（先 dry-run、核对原有 Ed25519 指纹，再 apply）。Bootstrap 只原子更新 Root receiver / sudoers / authorized_keys，不重启 R2 Relay、Caddy 或 sshd。升级后用空归档 `deploy <SHA>` 烟测，预期 v5 回执 `reason=empty_archive`、SSH exit 1。
+新部署的 Release 会包含能力标记；旧 Release 仍可按原流程部署/回滚，但不能对不含该标记的旧 Release 应用下载配置。新增此操作需要把 Root receiver 升级到 build ID `r2-relay-deploy-receiver-v5-controlled-download-config`。这仍使用原有 `r2relay-deploy` ForcedCommand 和零参数 sudo 授权，不扩大 SSH/sudo 权限；但因 receiver 是独立安装的，合并后 Owner 需通过可信 Root SSH 通道再运行一次现有 Bootstrap（先 dry-run、核对原有 Ed25519 指纹，再 apply）。Bootstrap 只原子更新 Root receiver / sudoers / authorized_keys，不重启 R2 Relay、Caddy 或 sshd。升级后用空归档 `deploy <SHA>` 烟测，预期 v5 回执 `reason=empty_archive`、SSH exit 1。
 
 推荐顺序：先通过 `/deploy <SHA>` 部署包含 drop-in 支持的 main Release；再通过 `/download-config disabled <同一 SHA>` 应用显式关闭配置。两条命令都只接受 Issue #41 上由 `sunxu` 发布的精确评论。
 
