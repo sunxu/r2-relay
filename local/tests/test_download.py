@@ -108,6 +108,7 @@ async def test_mac_download_small_response_uses_bounded_memory_and_preserves_r2_
         assert ("etag", '"r2-error"') in [(k.lower(), v) for k, v in result.headers]
         assert coordinator.memory_budget.used == len(body)
         await result.cleanup()
+        assert result.body == bytearray()
         assert coordinator.memory_budget.used == 0
         assert not app.state.downloads.tasks
     finally:
