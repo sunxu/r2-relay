@@ -61,6 +61,7 @@ max_active_tasks = 0
 max_retained_tasks = 0
 max_waiters = 0
 wait_timeout_seconds = 30
+test_expires_at_epoch = 0
 """
 
 # 仅用于一次真实 R2 验收；固定资源上限，30 分钟后由 systemd timer 自动关闭。
