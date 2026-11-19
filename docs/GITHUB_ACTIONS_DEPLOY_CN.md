@@ -171,7 +171,7 @@ wait_timeout_seconds = 30
 
 生产配置加载器默认只读取包内 `defaults.toml` 和独立下载 drop-in；不会探测 `/etc/r2-relay/config.toml`。只有显式传入通用配置路径的调用方才会加载该文件。
 
-新部署的 Release 会包含能力标记；旧 Release 仍可按原流程部署/回滚，但不能对不含该标记的旧 Release 应用下载配置。新增此操作需要把 Root receiver 升级到 build ID `r2-relay-deploy-receiver-v6-isolated-download-config-dir`。这仍使用原有 `r2relay-deploy` ForcedCommand 和零参数 sudo 授权，不扩大 SSH/sudo 权限；但因 receiver 是独立安装的，合并后 Owner 需通过可信 Root SSH 通道再运行一次现有 Bootstrap（先 dry-run、核对原有 Ed25519 指纹，再 apply）。Bootstrap 只原子更新 Root receiver / sudoers / authorized_keys，不重启 R2 Relay、Caddy 或 sshd。升级后用空归档 `deploy <SHA>` 烟测，预期 v5 回执 `reason=empty_archive`、SSH exit 1。
+新部署的 Release 会包含能力标记；旧 Release 仍可按原流程部署/回滚，但不能对不含该标记的旧 Release 应用下载配置。新增此操作需要把 Root receiver 升级到 build ID `r2-relay-deploy-receiver-v6-isolated-download-config-dir`。这仍使用原有 `r2relay-deploy` ForcedCommand 和零参数 sudo 授权，不扩大 SSH/sudo 权限；但因 receiver 是独立安装的，合并后 Owner 需通过可信 Root SSH 通道再运行一次现有 Bootstrap（先 dry-run、核对原有 Ed25519 指纹，再 apply）。Bootstrap 只原子更新 Root receiver / sudoers / authorized_keys，不重启 R2 Relay、Caddy 或 sshd。升级后用空归档 `deploy <SHA>` 烟测，预期 v6 回执 `reason=empty_archive`、SSH exit 1。
 
 推荐顺序：先通过 `/download-config disabled <目标 SHA>` 应用关闭配置（目标 SHA 必须已在 main 且含 drop-in 能力标记）；再通过 `/deploy <同一 SHA>` 部署应用。这样新版本第一次启动时就会读取 `enabled=false`。两条命令都只接受 Issue #41 上由 `sunxu` 发布的精确评论。
 
