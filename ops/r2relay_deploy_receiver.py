@@ -283,6 +283,12 @@ def validate_archive(archive_path: Path, expected_sha: str):
                 )
                 if test_marker is None or test_marker.read(128).decode("ascii") != DOWNLOAD_TEST_CAPABILITY_MARKER + "\n":
                     raise DeployError("download_test_capability_marker_invalid")
+            if "deploy/production-download-v1" in names:
+                production_marker = archive.extractfile(
+                    archive.getmember("deploy/production-download-v1")
+                )
+                if production_marker is None or production_marker.read(128).decode("ascii") != DOWNLOAD_PRODUCTION_CAPABILITY_MARKER + "\n":
+                    raise DeployError("download_production_capability_marker_invalid")
             unit_member = archive.getmember("deploy/vps.service")
             unit_stream = archive.extractfile(unit_member)
             if unit_stream is None or unit_stream.read(65536).decode("utf-8") != UNIT_TEXT:
