@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 import tomllib
 
 DEFAULT_CONFIG = Path(__file__).with_name("defaults.toml")
-SYSTEM_CONFIG = Path("/etc/r2-relay/config.toml")
+DOWNLOAD_CONFIG = Path("/etc/r2-relay-download/download.toml")
+DOWNLOAD_CONFIG_SCHEMA = "r2-relay-download-config-dropin-v1"
 _MIB = 1024 * 1024
 
 
@@ -22,27 +24,36 @@ class DownloadSettings:
     max_retained_tasks: int
     max_waiters: int
     wait_timeout_seconds: int
+    test_expires_at_epoch: int = 0
 
 
-def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
-    """Load packaged defaults and the optional system TOML override.
+def load_download_settings(
+    config_path: Path | None = None,
+    download_config_path: Path | None = None,
+) -> DownloadSettings:
+    """Load package defaults, an explicitly supplied general config, then the managed drop-in.
 
-    The download service is disabled until an operator supplies explicit disk
-    and task budgets in /etc/r2-relay/config.toml. The four agreed transfer
-    values are TOML settings and are never read from environment variables.
+    Production startup intentionally does not probe /etc/r2-relay/config.toml:
+    that root-only directory also contains the private EnvironmentFile.
+    The controlled download drop-in lives in /etc/r2-relay-download/download.toml,
+    whose directory grants the service account search-only access.
     """
     with DEFAULT_CONFIG.open("rb") as stream:
         data = tomllib.load(stream)
     if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
         raise ValueError("unsupported VPS Relay config schema_version")
-    path = config_path or SYSTEM_CONFIG
-    if path.is_file():
+
+    def merge_download_override(path: Path, *, strict: bool) -> None:
+        if not path.is_file():
+            return
         with path.open("rb") as stream:
             override = tomllib.load(stream)
         if "schema_version" in override and (
             type(override["schema_version"]) is not int or override["schema_version"] != 1
         ):
             raise ValueError("unsupported system config schema_version")
+        if strict and set(override) - {"schema_version", "download"}:
+            raise ValueError("download config drop-in contains unknown top-level fields")
         section = override.get("download", {})
         if not isinstance(section, dict):
             raise ValueError("[download] must be a TOML table")
@@ -50,6 +61,10 @@ def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
         if unknown:
             raise ValueError(f"unknown [download] setting(s): {', '.join(sorted(unknown))}")
         data["download"].update(section)
+
+    if config_path is not None:
+        merge_download_override(config_path, strict=False)
+    merge_download_override(download_config_path or DOWNLOAD_CONFIG, strict=True)
 
     section = data["download"]
     enabled = section["enabled"]
@@ -66,6 +81,7 @@ def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
         "max_retained_tasks": (0, 65536),
         "max_waiters": (0, 65536),
         "wait_timeout_seconds": (1, 300),
+        "test_expires_at_epoch": (0, 2**63 - 1),
     }
     for key, (minimum, maximum) in integer_ranges.items():
         value = section[key]
@@ -81,6 +97,10 @@ def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
             if section[key] <= 0:
                 raise ValueError(f"download.{key} must be positive when download.enabled=true")
 
+    test_expires_at_epoch = section["test_expires_at_epoch"]
+    if test_expires_at_epoch and int(time.time()) >= test_expires_at_epoch:
+        enabled = False
+
     return DownloadSettings(
         enabled=enabled,
         part_size_bytes=part_size * _MIB,
@@ -92,4 +112,5 @@ def load_download_settings(config_path: Path | None = None) -> DownloadSettings:
         max_retained_tasks=section["max_retained_tasks"],
         max_waiters=section["max_waiters"],
         wait_timeout_seconds=section["wait_timeout_seconds"],
+        test_expires_at_epoch=test_expires_at_epoch,
     )

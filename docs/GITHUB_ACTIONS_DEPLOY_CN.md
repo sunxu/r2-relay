@@ -50,12 +50,12 @@ ssh-keygen -t ed25519 -a 64 -N "" \
 > **职责边界：这是一项由 Owner 执行的一次性初始化，不纳入 GitHub Actions 自动化范围。** Owner 可以通过现有可信 Root SSH 管理通道执行下面的 Bootstrap；完成后，日常部署不再需要人工登录 VPS 或执行命令。无需新增 Bootstrap Workflow、VPS MCP Server 或独立管理项目。
 
 
-**必须使用 PR #42 合并后记录的精确 Merge Commit SHA，不要直接使用不断变化的 main HEAD。** ChatGPT 会在 PR 合并后给出该 SHA。先在可信 Mac 上检出该固定提交，并确认工作区：
+**必须使用 PR #71 合并后记录的精确 Merge Commit SHA，不要直接使用不断变化的 main HEAD。** 本轮固定 Bootstrap SHA 为 `12de7b52ba5e824455da15640f0cba8b6454ea08`。先在可信 Mac 上检出该固定提交，并确认工作区：
 
 ```bash
 git fetch origin main
-git checkout --detach d4af052d5d075514e6820a4e5071c24812343be5
-test "$(git rev-parse HEAD)" = "d4af052d5d075514e6820a4e5071c24812343be5"
+git checkout --detach 12de7b52ba5e824455da15640f0cba8b6454ea08
+test "$(git rev-parse HEAD)" = "12de7b52ba5e824455da15640f0cba8b6454ea08"
 git status --short
 ```
 
@@ -96,12 +96,26 @@ Bootstrap 会：
 
 部署密钥不能获得 Root Shell，也不能执行其他 sudo 命令。它只能通过固定 Root receiver 完成受限发布。现有 Root 管理密钥不受影响。
 
+### Bootstrap v6 前的目录恢复
+
+在可信 Root SSH 通道先恢复私有环境目录，不要移动或读取 Token：
+
+```bash
+sudo chown root:root /etc/r2-relay
+sudo chmod 0700 /etc/r2-relay
+sudo namei -l /etc/r2-relay/vps.env
+```
+
+确认 `/etc/r2-relay` 为 `root:root 0700`、`vps.env` 仍为 `root:root 0600` 后，再按本次 PR 合并后的精确 SHA 执行 Bootstrap v6。新 receiver 会在 `/download-config disabled <SHA>` 时自动创建独立 drop-in 目录，不需要手工开放旧目录。
+
+本次安装 Receiver v6 使用 PR #71 的 Bootstrap SHA：`12de7b52ba5e824455da15640f0cba8b6454ea08`。这只是用于上传 Bootstrap 脚本和 Receiver 的固定代码版本；后续应用配置与部署应用必须使用合并后最新 `main` 上、且 `deploy-tests` 成功的同一个目标 SHA。不要把 Bootstrap SHA 与应用部署目标 SHA 混为一谈。
+
 ### Bootstrap 后的无部署连通性验证
 
 在 GitHub Secrets 配置完成前，可用专用私钥向受限入口发送一个**空归档**，验证 SSH 公钥认证、ForcedCommand、sudoers 和 Root receiver 全链路。该命令不会进入 `deploy()`，不会切换版本或重启服务：
 
 ```bash
-MERGE_SHA="d4af052d5d075514e6820a4e5071c24812343be5"
+MERGE_SHA="12de7b52ba5e824455da15640f0cba8b6454ea08"
 set +e
 printf '' | ssh -T \
   -i ~/.ssh/r2-relay-github-actions \
@@ -116,7 +130,7 @@ set -e
 printf 'ssh_exit=%s\\n' "$SSH_STATUS"
 ```
 
-预期 receiver 返回 `{"reason":"empty_archive","status":"REJECTED_OR_FAILED"}` 且 SSH 退出码为 1（这是故意的拒绝结果）。若出现 SSH authentication、locked account、sudo 或 receiver 执行错误，则先停止，不要触发生产部署。
+预期 receiver build ID 为 `r2-relay-deploy-receiver-v6-isolated-download-config-dir`，返回 `{"reason":"empty_archive","status":"REJECTED_OR_FAILED"}` 且 SSH 退出码为 1（这是故意的拒绝结果）。若出现 SSH authentication、locked account、sudo 或 receiver 执行错误，则先停止，不要触发生产部署。
 
 
 ## ChatGPT 触发部署
@@ -128,6 +142,40 @@ PR 合并、Owner 完成一次性 VPS Bootstrap，并配置好两个 GitHub Acti
 ```
 
 ChatGPT 在 Issue #41 留下 `/deploy <SHA>` 评论。该评论就是触发事件；无需额外 Dispatch 服务或 MCP。
+
+应用下载配置使用同一个固定控制 Issue 和同一把受限 SSH key，命令为：
+
+```text
+/download-config disabled <40-char-lowercase-commit-sha>
+```
+
+该命令只支持 `disabled`，不提供启用命令、任意 TOML 输入或 `workflow_dispatch`。目标 SHA 必须属于 main、通过 deploy-tests，并在 Git tree 中包含 `deploy/download-config-dropin-v1` 能力标记；配置可以先于应用版本部署，确保新版本第一次启动前下载已明确关闭。Workflow 通过固定 Root receiver 写入独立的 `/etc/r2-relay-download/download.toml`，不覆盖现有 `/etc/r2-relay/config.toml`：
+
+```toml
+schema_version = 1
+
+[download]
+enabled = false
+part_size_mib = 16
+split_threshold_mib = 24
+cache_ttl_seconds = 600
+max_cache_bytes = 0
+min_free_bytes = 0
+max_active_tasks = 0
+max_retained_tasks = 0
+max_waiters = 0
+wait_timeout_seconds = 30
+```
+
+该文件由 Root 原子写入，权限为 `root:r2relay 0640`；其独立父目录 `/etc/r2-relay-download` 为 `root:r2relay 0710`（服务账户仅有目录搜索权限）。应用前备份旧文件，重启仅限 `r2-relay-vps.service`，健康检查失败则恢复旧配置并再次重启。回执明确报告 `download_enabled=false`。配置应用不修改 Token、EnvironmentFile、上传缓存、Caddy 或 443/8443。当前命令只能关闭下载，后续若要启用，必须另行审查容量预算和授权，不属于本次授权。
+
+**目录隔离要求：** `/etc/r2-relay` 同时包含私有 `vps.env`，必须保持 `root:root 0700`；不得为了读取下载 drop-in 而放宽该目录权限。下载 drop-in 独立存放在 `/etc/r2-relay-download/download.toml`，由 v6 receiver 在受控配置应用时创建并校验目录为 `root:r2relay 0710`、文件为 `root:r2relay 0640`。此前遗留的 `/etc/r2-relay/download.toml` 不再被新版本读取，可留在 root-only 目录内，不要将其父目录重新开放。
+
+生产配置加载器默认只读取包内 `defaults.toml` 和独立下载 drop-in；不会探测 `/etc/r2-relay/config.toml`。只有显式传入通用配置路径的调用方才会加载该文件。
+
+新部署的 Release 会包含能力标记；旧 Release 仍可按原流程部署/回滚，但不能对不含该标记的旧 Release 应用下载配置。新增此操作需要把 Root receiver 升级到 build ID `r2-relay-deploy-receiver-v6-isolated-download-config-dir`。这仍使用原有 `r2relay-deploy` ForcedCommand 和零参数 sudo 授权，不扩大 SSH/sudo 权限；但因 receiver 是独立安装的，合并后 Owner 需通过可信 Root SSH 通道再运行一次现有 Bootstrap（先 dry-run、核对原有 Ed25519 指纹，再 apply）。Bootstrap 只原子更新 Root receiver / sudoers / authorized_keys，不重启 R2 Relay、Caddy 或 sshd。升级后用空归档 `deploy <SHA>` 烟测，预期 v6 回执 `reason=empty_archive`、SSH exit 1。
+
+推荐顺序：先通过 `/download-config disabled <目标 SHA>` 应用关闭配置（目标 SHA 必须已在 main 且含 drop-in 能力标记）；再通过 `/deploy <同一 SHA>` 部署应用。这样新版本第一次启动时就会读取 `enabled=false`。两条命令都只接受 Issue #41 上由 `sunxu` 发布的精确评论。
 
 控制 Workflow 只接受：
 - Issue #41（固定控制 Issue，不能在 PR 评论中触发）；
@@ -207,3 +255,26 @@ The unified `vps_r2_deployment_status` entry point now invokes this fixed root-o
 The one-time bootstrap updates the fixed root helper, loopback verifier, generic MCP module and deployment receiver, then restarts only `r2-rootd.service` and `r2-mcp.service`. It does not restart `r2-relay-vps.service`, Caddy or the MCP tunnel. A backup is created under `/var/backups/vps-mcp/r2-loopback-control-upgrade/`.
 
 The retired legacy inspector source and its tests/docs are removed from this repository. Any already-installed legacy file or MCP tool registration on the VPS is intentionally left untouched and must be handled in a separate, explicitly approved maintenance window.
+
+
+## Receiver v7：限时真实 R2 下载验收（不等于生产启用）
+
+Receiver v6 只支持 `/download-config disabled <SHA>`。本仓库的 Receiver v7 增加唯一的临时测试 profile：
+
+- `/download-config real-test <SHA>`：只接受当前 VPS 正在运行的 Release SHA；要求该 Release 包含下载配置能力标记、systemd unit 已包含下载目录写入白名单、下载缓存目录为 `r2relay:r2relay 0700)，且当前配置必须是固定 disabled profile。
+- 固定资源预算：VPS 下载缓存 64 MiB、最低剩余磁盘 5 GiB、最多 1 个活动任务、2 个保留任务、4 个等待者；Part 16 MiB、阈值 24 MiB、TTL 600 秒。
+- 启用租约为 30 分钟。Receiver 在 `/etc/systemd/system` 安装并启用 nonce 专属的持久 `.service/.timer`；timer 每 30 秒检查一次租约，VPS 重启后由 `OnBootSec` 自动恢复检查，过期后自动关闭。配置同时写入 `test_expires_at_epoch`；VPS 应用在每次启动时检查绝对过期时间，过期配置即使 timer 尚未运行也会按 disabled 加载。租约 nonce 防止旧 timer 误关后续测试。手动关闭会清除租约并清理对应 timer；旧 timer 即使残留也只会得到 stale/no-op 回执。
+- `/download-config disabled <SHA>` 永远写入固定关闭配置；失败时不回滚到先前 enabled 配置，必要时停止 Relay 服务以 fail-closed。
+- Release 部署在活动测试租约期间被拒绝，防止部署重启打断测试或留下不确定状态。
+
+### 推荐执行顺序
+
+1. PR 合并后，记录 Receiver v7 的精确 Merge Commit SHA。Owner 在可信 Root SSH 通道 Bootstrap v7：检出该 SHA，上传 `ops/bootstrap_github_actions_deploy.py` 和 `ops/r2relay_deploy_receiver.py`，先 dry-run，再核对原有 Ed25519 fingerprint，最后 apply。不得重启 sshd。
+2. 用专用部署密钥发送空归档烟测，预期 build ID 为 `r2-relay-deploy-receiver-v7-leased-real-r2-test`，`reason=empty_archive`，SSH exit 1。
+3. 在 Issue #63 由 Owner 评论 `/deploy <PR-merge-SHA>`。这一步部署新的 systemd unit 和下载缓存目录，但必须保持 `/healthz.download_enabled=false`。新 unit 只额外允许 `/var/lib/r2-relay/downloads` 写入；目录必须为 `r2relay:r2relay 0700`。不改变 Caddy、端口、Token、EnvironmentFile 或 PUT 路径。
+4. 核实活动 Release SHA 与部署 SHA 一致、统一 verifier PASS、下载仍关闭。
+5. 仅在准备好真实测试时，在 Issue #63 评论 `/download-config real-test <同一 SHA>`。回执必须是 `DOWNLOAD_TEST_ENABLED` 且 profile、64 MiB、5 GiB、1 task、30 分钟等字段全部匹配。
+6. 使用 Mac 独立测试 TOML 和临时代理端口（18586，不得修改当前 18585 生产代理）执行真实 R2 GET/Range 验收。
+7. 测试完成后立即在 Issue #63 评论 `/download-config disabled <同一 SHA>`，确认 `download_enabled=false`。不要等待自动过期。自动 timer 只是兜底。
+
+**安全边界：** 此 profile 仅用于一次受限真实 R2 验收，不是生产启用命令，不开放生产 GET 接管。测试时 VPS 下载 API 仍可接受持有现有 Relay Bearer Token 的调用，因此只在 Owner 控制测试窗口内启用，并保持本地生产代理配置关闭。
