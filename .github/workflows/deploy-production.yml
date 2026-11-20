@@ -238,6 +238,12 @@ jobs:
           conclusion="$(jq -r '.conclusion // ""' <<< "$check")"
           [ "$status" = "completed" ] || { echo "Required check is not complete: $status"; exit 1; }
           [ "$conclusion" = "success" ] || { echo "Required check did not pass: $conclusion"; exit 1; }
+          if [ "$TARGET_MODE" = "production" ]; then
+            python_check="$(printf '%s\n' "$checks" | jq -s --arg sha "$TARGET_SHA" '[.[].check_runs[] | select(.name == "pytest" and .head_sha == $sha and .app.slug == "github-actions")] | sort_by(.id) | last // empty')"
+            [ -n "$python_check" ] && [ "$python_check" != "null" ] || { echo "Required main pytest check is missing."; exit 1; }
+            [ "$(jq -r '.status' <<< "$python_check")" = "completed" ] || { echo "Required main pytest is incomplete."; exit 1; }
+            [ "$(jq -r '.conclusion' <<< "$python_check")" = "success" ] || { echo "Required main pytest did not pass."; exit 1; }
+          fi
 
       - name: Configure pinned SSH identity
         env:
@@ -309,9 +315,11 @@ jobs:
                   "DOWNLOAD_PRODUCTION_ENABLED", "DOWNLOAD_PRODUCTION_ALREADY_ENABLED")
               enabled = result.get("download_enabled") is True
               bounded = (result.get("profile") == "production-download-v1"
-                         and (result.get("max_cache_bytes") in (None, 8589934592))
-                         and (result.get("min_free_bytes") in (None, 8589934592))
-                         and (result.get("max_active_tasks") in (None, 2)))
+                         and result.get("max_cache_bytes") == 8589934592
+                         and result.get("min_free_bytes") == 8589934592
+                         and result.get("max_active_tasks") == 2
+                         and result.get("max_retained_tasks") == 4
+                         and result.get("max_waiters") == 8)
           else:
               accepted = result.get("status") in ("DOWNLOAD_CONFIG_APPLIED", "DOWNLOAD_CONFIG_ALREADY_APPLIED")
               enabled = result.get("download_enabled") is False
