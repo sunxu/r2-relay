@@ -2,6 +2,71 @@
 
 本文档用于在 VPS 下载服务部署并启用后，验证一条真实签名 R2 GET 是否能经 Mac RelayClient → VPS → Cloudflare R2 完整取回。CI 不执行本流程，不需要把真实 R2 凭据放入 GitHub。
 
+## 0.1 既有 IOTA 对象：全对象 Range 与真实分片验收
+
+2026-11-20 已完成同一对象 `bytes=12-12650557` 的直连和 RelayClient 真实 R2 小响应验收：`PASS_REAL`，12,650,546 bytes、HTTP 206、HTTP/2、Content-Range / Content-Length / ETag / SHA-256 / 删除任务和本地资源归还全部匹配。受控测试 profile 已通过 Issue #63 关闭，VPS 继续保持 `download_enabled=false`。
+
+下一轮**不创建、不覆盖、不删除生产 Bucket 对象**，复用原来存于 Mac 私有文件 `~/.config/r2-relay/private/iota-get-request.json` 的签名 URL；原请求只签名 `host`（`X-Amz-SignedHeaders=host`），因此可以只修改未签名的 Range 请求头，不修改 URL 查询参数、Host 或其他原始请求头。
+
+前次响应的 `Content-Range` 已确认对象总长为 **25,301,339 bytes**，大于 24 MiB 分片阈值。下一轮使用 `Range: bytes=0-25301338`，预期 HTTP 206、25,301,339 bytes，VPS 单次 R2 GET，生成 2 Part：**16,777,216 + 8,524,123 bytes**。新的全对象 SHA-256 需要通过独立直连 R2 基线计算，不能沿用之前局部 Range 的摘要。
+
+在 Mac 上（先 `git fetch` 并切换到 PR #68 的 `feat/r2-download-mac-client-v2` 分支）使用本地私有请求，不输出签名 URL：
+
+```bash
+set +x
+umask 077
+python3 - <<'PY'
+import json, os
+from pathlib import Path
+from urllib.parse import urlsplit, parse_qs
+src = Path.home() / ".config/r2-relay/private/iota-get-request.json"
+dst = Path.home() / ".config/r2-relay/private/iota-get-full-request.json"
+req = json.loads(src.read_text(encoding="utf-8"))
+assert req["method"] == "GET"
+assert parse_qs(urlsplit(req["url"]).query).get("X-Amz-SignedHeaders") == ["host"]
+ranges = [h for h in req["headers"] if h[0].lower() == "range"]
+assert len(ranges) == 1
+req["headers"] = [
+    [name, "bytes=0-25301338" if name.lower() == "range" else value]
+    for name, value in req["headers"]
+]
+with dst.open("w", encoding="utf-8") as out:
+    json.dump(req, out)
+os.chmod(dst, 0o600)
+print("FULL_RANGE_PRIVATE_REQUEST_READY")
+PY
+
+python3 "$HOME/Downloads/prepare_r2_real_get.py" \
+  --request "$HOME/.config/r2-relay/private/iota-get-full-request.json" \
+  --spec "$HOME/.config/r2-relay/private/real-get-full-spec.json" \
+  --baseline "$HOME/.cache/r2-relay/real-r2-test/direct-full-range.bin"
+```
+
+其中 `prepare_r2_real_get.py` 是前次基线测试已使用的本地脚本；请替换为该脚本在 Mac 上的**实际路径**，不要假定一定在 Downloads。必须先得到 `DIRECT_R2_BASELINE_PASS`，且 `size=25301339`、`content-range=bytes 0-25301338/25301339`，才可申请新测试租约。
+
+准备好临时配置 `real-r2-test.toml`（内存预算 32 MiB、磁盘预算 64 MiB）、有效 CA、Relay Token，并确认现有 18585 生产代理不受影响后，才在 Issue #63 显式启用：
+
+```text
+/download-config real-test a77f2414bd32370cf8f6f5ac78014fbf923e605a
+```
+
+在租约有效期内：
+
+```bash
+export R2_RELAY_REAL_GET_SPEC="$HOME/.config/r2-relay/private/real-get-full-spec.json"
+export R2_RELAY_CONFIG="$HOME/.config/r2-relay/real-r2-test.toml"
+PYTHONPATH=local .venv/bin/python local/poc/real_r2_download_acceptance.py
+```
+
+**完整代理验收** 使用独立 18586 启动 Stage 2 代理后，以同一私有 spec 执行安全的流式比对（不会在进程命令行、GitHub 或输出中显示签名 URL）：
+
+```bash
+export R2_RELAY_REAL_GET_SPEC="$HOME/.config/r2-relay/private/real-get-full-spec.json"
+PYTHONPATH=local .venv/bin/python local/poc/real_r2_mitmproxy_acceptance.py
+```
+
+必须同时得到 `PASS_REAL` 和 `PASS_REAL_PROXY`；代理结果必须校验 206、完整长度、SHA-256、Content-Range、Content-Length 和 ETag。完成后**立即**在 Issue #63 执行 `/download-config disabled a77f2414bd32370cf8f6f5ac78014fbf923e605a`，要求 `download_enabled=false`，并停止 18586 临时代理。自动过期不是替代手工关闭的理由。
+
 ## 1. 前置条件
 
 - Receiver v7 已 Bootstrap 并通过空归档拒绝烟测；v7 Release 已通过 Issue #63 的 Owner 命令部署到 VPS。当前活动 Release 为 `a77f2414bd32370cf8f6f5ac78014fbf923e605a`。
@@ -167,19 +232,7 @@ PYTHONPATH=local python local/poc/real_r2_download_acceptance.py
 
 上面的验收脚本直接调用 Mac RelayClient → VPS → R2，**不经过 mitmproxy**。Stage 2 的 mitmproxy 接管目前由 Mock R2 全栈 CI 验证。要把真实 R2 也走过本地代理，再做下面这项人工验收。这里使用独立端口 18586，不能复用或重启现有 18585 生产代理。
 
-先确认 Mac 的 `~/.config/r2-relay/config.toml` 已启用下载，并按本机真实资源填写预算，例如：
-
-```toml
-[download]
-enabled = true
-max_concurrency = 16
-global_max_concurrency = 32
-small_response_memory_mib = 32
-max_temp_mib = 4096
-temp_dir = "~/.cache/r2-relay/downloads"
-```
-
-本节继续使用独立的 `real-r2-test.toml`。VPS 不再读取 `/etc/r2-relay/config.toml`；Receiver v7 通过固定测试配置写入 `/etc/r2-relay-download/download.toml`，并限制缓存 64 MiB、最低剩余磁盘 5 GiB、1 个活动任务、2 个保留任务和 4 个等待者。
+**不要修改 Mac 的生产配置 `~/.config/r2-relay/config.toml`。** 本节继续使用独立的 `real-r2-test.toml`（磁盘预算 64 MiB、内存预算 32 MiB）以及隔离端口 18586。VPS 不再读取 `/etc/r2-relay/config.toml`；Receiver v7 通过固定测试配置写入 `/etc/r2-relay-download/download.toml`，并限制缓存 64 MiB、最低剩余磁盘 5 GiB、1 个活动任务、2 个保留任务和 4 个等待者。
 
 在已安装当前 Stage 2 分支的仓库根目录，打开一个终端启动本地代理：
 
