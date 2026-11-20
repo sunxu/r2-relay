@@ -666,14 +666,14 @@ def test_deployment_tests_run_on_main_push():
 
 
 
-def test_download_config_command_accepts_only_disabled_or_real_test_and_full_sha():
+def test_download_config_command_accepts_only_disabled_real_test_or_production_and_full_sha():
     assert receiver.parse_download_config_command("download-config disabled " + SHA) == ("disabled", SHA)
     assert receiver.parse_download_config_command("download-config real-test " + SHA) == ("real-test", SHA)
+    assert receiver.parse_download_config_command("download-config production " + SHA) == ("production", SHA)
     for command in (
         None,
         "",
         "download-config enabled " + SHA,
-        "download-config production " + SHA,
         "download-config real-test main",
         "download-config disabled main",
         "download-config real-test " + "A" * 40,
@@ -700,6 +700,8 @@ def _prepare_download_config_receiver_test(tmp_path, monkeypatch):
     marker.write_text(receiver.DOWNLOAD_CONFIG_MARKER + "\n", encoding="ascii")
     test_marker = release / "deploy/leased-download-test-v1"
     test_marker.write_text(receiver.DOWNLOAD_TEST_CAPABILITY_MARKER + "\n", encoding="ascii")
+    prod_marker = release / "deploy/production-download-v1"
+    prod_marker.write_text(receiver.DOWNLOAD_PRODUCTION_CAPABILITY_MARKER + "\n", encoding="ascii")
 
     current = tmp_path / "current"
     current.symlink_to(release)
@@ -1201,3 +1203,85 @@ def test_download_config_directory_rejects_permissive_existing_mode(
         assert str(exc) == "download_config_parent_permissions_invalid"
     else:
         raise AssertionError("permissive download config directory accepted")
+
+
+def test_production_enabled_requires_exact_sha_marker_disabled_health_and_disk(tmp_path, monkeypatch):
+    release, config_path, backup_root = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    config_path.write_text(receiver.DOWNLOAD_CONFIG_TEXT, encoding="utf-8")
+    actual = []
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: actual.append(argv))
+    monkeypatch.setattr(receiver, "health_check", lambda attempts=25, expected_download_enabled=None: True)
+    monkeypatch.setattr(receiver.shutil, "disk_usage", lambda _path: type("Disk", (), {"free": 20 * 1024**3})())
+
+    result = receiver.apply_download_config_production(SHA)
+    assert result["status"] == "DOWNLOAD_PRODUCTION_ENABLED"
+    assert result["commit"] == SHA
+    assert result["download_enabled"] is True
+    assert result["profile"] == "production-download-v1"
+    assert result["max_cache_bytes"] == 8 * 1024**3
+    assert result["min_free_bytes"] == 8 * 1024**3
+    assert result["max_active_tasks"] == 2
+    assert result["max_retained_tasks"] == 4
+    assert result["max_waiters"] == 8
+    assert config_path.read_text(encoding="utf-8") == receiver.DOWNLOAD_PRODUCTION_PROFILE_TEXT
+    assert config_path.stat().st_mode & 0o777 == 0o640
+    assert actual == [["/usr/bin/systemctl", "restart", receiver.SERVICE]]
+    assert list(backup_root.iterdir())
+    assert not receiver.DOWNLOAD_TEST_LEASE.exists()
+    again = receiver.apply_download_config_production(SHA)
+    assert again["status"] == "DOWNLOAD_PRODUCTION_ALREADY_ENABLED"
+    assert again["service_restarted"] is False
+    assert len(actual) == 1
+
+
+def test_production_enable_rejects_insufficient_disk_without_write(tmp_path, monkeypatch):
+    _release, config_path, _backups = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    config_path.write_text(receiver.DOWNLOAD_CONFIG_TEXT, encoding="utf-8")
+    monkeypatch.setattr(receiver, "health_check", lambda *args, **kwargs: True)
+    monkeypatch.setattr(receiver.shutil, "disk_usage", lambda _path: type("Disk", (), {"free": 16 * 1024**3 - 1})())
+    commands = []
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: commands.append(argv))
+    with __import__("pytest").raises(receiver.DeployError, match="insufficient_free_disk"):
+        receiver.apply_download_config_production(SHA)
+    assert config_path.read_text(encoding="utf-8") == receiver.DOWNLOAD_CONFIG_TEXT
+    assert commands == []
+
+
+def test_production_enable_rejects_incorrect_profile_and_missing_marker(tmp_path, monkeypatch):
+    release, config_path, _backups = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    config_path.write_text(receiver.DOWNLOAD_TEST_PROFILE_TEXT.format(expires_at=9999999999), encoding="utf-8")
+    monkeypatch.setattr(receiver, "health_check", lambda *args, **kwargs: True)
+    with __import__("pytest").raises(receiver.DeployError, match="requires_fixed_disabled_profile"):
+        receiver.apply_download_config_production(SHA)
+    config_path.write_text(receiver.DOWNLOAD_CONFIG_TEXT, encoding="utf-8")
+    (release / "deploy/production-download-v1").unlink()
+    with __import__("pytest").raises(receiver.DeployError, match="capability_marker_missing"):
+        receiver.apply_download_config_production(SHA)
+
+
+def test_production_enable_failed_health_fails_closed(tmp_path, monkeypatch):
+    _release, config_path, _backups = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    config_path.write_text(receiver.DOWNLOAD_CONFIG_TEXT, encoding="utf-8")
+    checks = iter([True, False, True])
+    monkeypatch.setattr(receiver, "health_check", lambda attempts=25, expected_download_enabled=None: next(checks))
+    monkeypatch.setattr(receiver.shutil, "disk_usage", lambda _path: type("Disk", (), {"free": 20 * 1024**3})())
+    commands = []
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: commands.append(argv))
+    with __import__("pytest").raises(receiver.DeployError, match="enable_failed_disabled"):
+        receiver.apply_download_config_production(SHA)
+    assert config_path.read_text(encoding="utf-8") == receiver.DOWNLOAD_CONFIG_TEXT
+    assert commands == [
+        ["/usr/bin/systemctl", "restart", receiver.SERVICE],
+        ["/usr/bin/systemctl", "restart", receiver.SERVICE],
+    ]
+
+
+def test_production_disable_is_fail_closed_even_after_enabled(tmp_path, monkeypatch):
+    _release, config_path, _backups = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    config_path.write_text(receiver.DOWNLOAD_PRODUCTION_PROFILE_TEXT, encoding="utf-8")
+    monkeypatch.setattr(receiver, "health_check", lambda attempts=25, expected_download_enabled=None: expected_download_enabled is False)
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: None)
+    result = receiver.apply_download_config_disabled(SHA)
+    assert result["status"] == "DOWNLOAD_CONFIG_APPLIED"
+    assert result["download_enabled"] is False
+    assert config_path.read_text(encoding="utf-8") == receiver.DOWNLOAD_CONFIG_TEXT
