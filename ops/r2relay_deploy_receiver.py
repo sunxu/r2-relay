@@ -48,6 +48,7 @@ MAX_MEMBERS = 6000
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 DOWNLOAD_CONFIG_MARKER = "r2-relay-download-config-dropin-v1"
 DOWNLOAD_TEST_CAPABILITY_MARKER = "r2-relay-leased-download-test-v1"
+DOWNLOAD_PRODUCTION_CAPABILITY_MARKER = "r2-relay-production-download-v1"
 DOWNLOAD_CONFIG_TEXT = """schema_version = 1
 
 # 由受控 GitHub Actions 管理；生产默认关闭。
@@ -82,10 +83,29 @@ max_waiters = 4
 wait_timeout_seconds = 30
 test_expires_at_epoch = {expires_at}
 """
+# 生产固定限额：VPS 约 38 GiB 根盘、2 GiB 内存时，保留至少 8 GiB 空闲。
+# 生产启用需另行取得 Owner 明确授权；不得自动从 real-test 转换。
+DOWNLOAD_PRODUCTION_PROFILE_TEXT = """schema_version = 1
+
+# PRODUCTION_DOWNLOAD_PROFILE_V1；仅由受控 Owner Actions 启用。
+[download]
+enabled = true
+part_size_mib = 16
+split_threshold_mib = 24
+cache_ttl_seconds = 600
+max_cache_bytes = 8589934592
+min_free_bytes = 8589934592
+max_active_tasks = 2
+max_retained_tasks = 4
+max_waiters = 8
+wait_timeout_seconds = 30
+test_expires_at_epoch = 0
+"""
+DOWNLOAD_PRODUCTION_MIN_INITIAL_FREE = 17179869184
 DOWNLOAD_TEST_LEASE_SECONDS = 1800
 DOWNLOAD_TEST_TIMER_INTERVAL_SECONDS = 30
 DOWNLOAD_TEST_TIMER_PREFIX = "r2-relay-download-test-expiry-"
-RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v7-leased-real-r2-test"
+RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v8-production-download-v1"
 REQUIRED = {
     "vps/pyproject.toml",
     "vps/r2relay_vps/app.py",
@@ -263,6 +283,12 @@ def validate_archive(archive_path: Path, expected_sha: str):
                 )
                 if test_marker is None or test_marker.read(128).decode("ascii") != DOWNLOAD_TEST_CAPABILITY_MARKER + "\n":
                     raise DeployError("download_test_capability_marker_invalid")
+            if "deploy/production-download-v1" in names:
+                production_marker = archive.extractfile(
+                    archive.getmember("deploy/production-download-v1")
+                )
+                if production_marker is None or production_marker.read(128).decode("ascii") != DOWNLOAD_PRODUCTION_CAPABILITY_MARKER + "\n":
+                    raise DeployError("download_production_capability_marker_invalid")
             unit_member = archive.getmember("deploy/vps.service")
             unit_stream = archive.extractfile(unit_member)
             if unit_stream is None or unit_stream.read(65536).decode("utf-8") != UNIT_TEXT:
@@ -699,6 +725,8 @@ def deploy(sha: str, archive_path: Path) -> dict:
 
         if _read_download_test_lease() is not None:
             raise DeployError("deployment_blocked_while_real_r2_test_lease_active")
+        if DOWNLOAD_CONFIG.exists() and DOWNLOAD_CONFIG.read_bytes() == DOWNLOAD_PRODUCTION_PROFILE_TEXT.encode("utf-8"):
+            raise DeployError("deployment_blocked_while_production_download_enabled")
         uid, gid, previous_target = validate_host_state()
         previous_was_symlink = CURRENT.is_symlink()
         release = RELEASES / sha
@@ -802,7 +830,7 @@ def deploy(sha: str, archive_path: Path) -> dict:
 def parse_download_config_command(command: str | None) -> tuple[str, str]:
     if not isinstance(command, str):
         raise DeployError("missing_forced_command")
-    match = re.fullmatch(r"download-config (disabled|real-test) ([0-9a-f]{40})", command)
+    match = re.fullmatch(r"download-config (disabled|real-test|production) ([0-9a-f]{40})", command)
     if not match:
         raise DeployError("download_config_command_not_allowed")
     return match.group(1), match.group(2)
@@ -1085,6 +1113,110 @@ def _cleanup_download_test_expiry_timer(lease_id: str) -> None:
         run_fixed(["/usr/bin/systemctl", "daemon-reload"], timeout=30)
     except Exception:
         pass
+
+
+def apply_download_config_production(sha: str) -> dict:
+    """Enable only the pinned and bounded production profile, after disabled preflight.
+
+    On any change/health failure, restore the fixed disabled profile, never
+    the previous enabled profile; stop the service if that rollback fails.
+    """
+    if not SHA_RE.fullmatch(sha):
+        raise DeployError("invalid_commit_sha")
+    if os.geteuid() != 0:
+        raise DeployError("root_required")
+    lock_fd = open_deploy_lock()
+    with os.fdopen(lock_fd, "r+") as lock:
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise DeployError("deployment_already_running") from None
+
+        uid, gid, current_target = validate_host_state()
+        if not current_target or Path(current_target).name != sha:
+            raise DeployError("download_production_target_must_be_active_release")
+        release = Path(current_target)
+        for path, marker in (
+            ("deploy/download-config-dropin-v1", DOWNLOAD_CONFIG_MARKER),
+            ("deploy/production-download-v1", DOWNLOAD_PRODUCTION_CAPABILITY_MARKER),
+        ):
+            item = release / path
+            if not item.is_file() or item.is_symlink() or item.read_text(encoding="ascii").strip() != marker:
+                raise DeployError("download_production_capability_marker_missing")
+        _validate_download_config_paths(gid)
+        _validate_download_cache_directory(uid, gid)
+        if _read_download_test_lease() is not None:
+            raise DeployError("download_production_blocked_by_test_lease")
+        current = DOWNLOAD_CONFIG.read_bytes() if DOWNLOAD_CONFIG.exists() else None
+        disabled = DOWNLOAD_CONFIG_TEXT.encode("utf-8")
+        production = DOWNLOAD_PRODUCTION_PROFILE_TEXT.encode("utf-8")
+        if current == production:
+            if not health_check(expected_download_enabled=True):
+                # An unhealthy already-enabled instance must not continue in
+                # the production profile after a failed idempotent operation.
+                try:
+                    _atomic_write_download_config(disabled, gid)
+                    run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+                    if not health_check(expected_download_enabled=False):
+                        raise DeployError("download_production_existing_disable_health_failed")
+                except Exception:
+                    try:
+                        run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+                    except Exception:
+                        pass
+                    raise DeployError("download_production_existing_unhealthy_service_stopped") from None
+                raise DeployError("download_production_existing_unhealthy_disabled")
+            return {
+                "status": "DOWNLOAD_PRODUCTION_ALREADY_ENABLED", "commit": sha,
+                "download_enabled": True, "profile": "production-download-v1",
+                "max_cache_bytes": 8589934592,
+                "min_free_bytes": 8589934592,
+                "max_active_tasks": 2,
+                "max_retained_tasks": 4,
+                "max_waiters": 8,
+                "config_path": str(DOWNLOAD_CONFIG), "service_restarted": False,
+            }
+        if current != disabled:
+            raise DeployError("download_production_requires_fixed_disabled_profile")
+        if not health_check(expected_download_enabled=False):
+            raise DeployError("download_production_requires_healthy_disabled_service")
+        if shutil.disk_usage(DOWNLOAD_CACHE).free < DOWNLOAD_PRODUCTION_MIN_INITIAL_FREE:
+            raise DeployError("download_production_insufficient_free_disk")
+        backup = _write_download_config_backup(current, 0o640, gid, sha, "production-download-v1")
+        try:
+            _atomic_write_download_config(production, gid)
+            run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+            if not health_check(expected_download_enabled=True):
+                raise DeployError("download_production_enable_health_check_failed")
+            return {
+                "status": "DOWNLOAD_PRODUCTION_ENABLED",
+                "commit": sha, "download_enabled": True,
+                "profile": "production-download-v1",
+                "max_cache_bytes": 8589934592,
+                "min_free_bytes": 8589934592,
+                "max_active_tasks": 2,
+                "max_retained_tasks": 4,
+                "max_waiters": 8,
+                "config_path": str(DOWNLOAD_CONFIG),
+                "config_mode": "0640", "backup": str(backup),
+                "service_restarted": True,
+                "caddy_modified": False,
+                "environment_modified": False,
+                "upload_cache_modified": False,
+            }
+        except Exception as exc:
+            try:
+                _atomic_write_download_config(disabled, gid)
+                run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+                if not health_check(expected_download_enabled=False):
+                    raise DeployError("download_production_rollback_health_failed")
+            except Exception:
+                try:
+                    run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+                except Exception:
+                    pass
+                raise DeployError("download_production_enable_failed_service_stopped") from None
+            raise DeployError("download_production_enable_failed_disabled:" + type(exc).__name__) from None
 
 
 def apply_download_config_real_test(sha: str) -> dict:
@@ -1385,6 +1517,8 @@ def main() -> int:
                 raise DeployError("download_config_stdin_must_be_empty")
             if mode == "disabled":
                 result = apply_download_config_disabled(sha)
+            elif mode == "production":
+                result = apply_download_config_production(sha)
             else:
                 result = apply_download_config_real_test(sha)
             emit(result.pop("status"), **result)

@@ -205,7 +205,7 @@ jobs:
           if issue == 41:
               pattern = r"/download-config (disabled) ([0-9a-f]{40})"
           elif issue == 63:
-              pattern = r"/download-config (disabled|real-test) ([0-9a-f]{40})"
+              pattern = r"/download-config (disabled|real-test|production) ([0-9a-f]{40})"
           else:
               raise SystemExit("Rejected: unsupported control issue")
           match = re.fullmatch(pattern, body)
@@ -218,12 +218,16 @@ jobs:
       - name: Verify target is on main and has deployment safety check
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
+          TARGET_MODE: ${{ steps.target.outputs.mode }}
         run: |
           set -euo pipefail
           git fetch origin main --no-tags
           git cat-file -e "$TARGET_SHA^{commit}"
           git merge-base --is-ancestor "$TARGET_SHA" origin/main
           git cat-file -e "$TARGET_SHA:deploy/download-config-dropin-v1"
+          if [ "$TARGET_MODE" = "production" ]; then
+            git cat-file -e "$TARGET_SHA:deploy/production-download-v1"
+          fi
           checks="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$TARGET_SHA/check-runs?per_page=100")"
           check="$(printf '%s\n' "$checks" | jq -s --arg sha "$TARGET_SHA" '[.[].check_runs[] | select(.name == "deploy-tests" and .head_sha == $sha and .app.slug == "github-actions")] | sort_by(.id) | last // empty')"
           if [ -z "$check" ] || [ "$check" = "null" ]; then
@@ -234,6 +238,12 @@ jobs:
           conclusion="$(jq -r '.conclusion // ""' <<< "$check")"
           [ "$status" = "completed" ] || { echo "Required check is not complete: $status"; exit 1; }
           [ "$conclusion" = "success" ] || { echo "Required check did not pass: $conclusion"; exit 1; }
+          if [ "$TARGET_MODE" = "production" ]; then
+            python_check="$(printf '%s\n' "$checks" | jq -s --arg sha "$TARGET_SHA" '[.[].check_runs[] | select(.name == "pytest" and .head_sha == $sha and .app.slug == "github-actions")] | sort_by(.id) | last // empty')"
+            [ -n "$python_check" ] && [ "$python_check" != "null" ] || { echo "Required main pytest check is missing."; exit 1; }
+            [ "$(jq -r '.status' <<< "$python_check")" = "completed" ] || { echo "Required main pytest is incomplete."; exit 1; }
+            [ "$(jq -r '.conclusion' <<< "$python_check")" = "success" ] || { echo "Required main pytest did not pass."; exit 1; }
+          fi
 
       - name: Configure pinned SSH identity
         env:
@@ -300,6 +310,16 @@ jobs:
                          and result.get("lease_minutes") == 30
                          and result.get("max_cache_bytes") == 67108864
                          and result.get("max_active_tasks") == 1)
+          elif mode == "production":
+              accepted = result.get("status") in (
+                  "DOWNLOAD_PRODUCTION_ENABLED", "DOWNLOAD_PRODUCTION_ALREADY_ENABLED")
+              enabled = result.get("download_enabled") is True
+              bounded = (result.get("profile") == "production-download-v1"
+                         and result.get("max_cache_bytes") == 8589934592
+                         and result.get("min_free_bytes") == 8589934592
+                         and result.get("max_active_tasks") == 2
+                         and result.get("max_retained_tasks") == 4
+                         and result.get("max_waiters") == 8)
           else:
               accepted = result.get("status") in ("DOWNLOAD_CONFIG_APPLIED", "DOWNLOAD_CONFIG_ALREADY_APPLIED")
               enabled = result.get("download_enabled") is False
