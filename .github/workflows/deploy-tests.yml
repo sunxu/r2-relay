@@ -3,27 +3,9 @@ name: VPS deployment controller tests
 on:
   push:
     branches: [main]
+  # This job is a required branch-protection check; do not use paths filters.
+  # Every pull request must publish the deploy-tests status, including Mac-only PRs.
   pull_request:
-    paths:
-      - "ops/r2relay_deploy_receiver.py"
-      - "vps/r2relay_vps/config.py"
-      - "vps/r2relay_vps/app.py"
-      - "vps/tests/test_download_config.py"
-      - "ops/bootstrap_github_actions_deploy.py"
-      - "tests/test_github_actions_deploy.py"
-      - "ops/r2_loopback_control.py"
-      - "ops/deployment_inspect.py"
-      - "ops/r2_rootd.py"
-      - "ops/generic_vps_mcp.py"
-      - "tests/test_deployment_inspect.py"
-      - "tests/test_r2_rootd.py"
-      - "tests/test_generic_vps_mcp.py"
-      - "docs/requirements/ACCEPTANCE.md"
-      - "tests/test_r2_loopback_control.py"
-      - "deploy/**"
-      - ".github/workflows/deploy-production.yml"
-      - ".github/workflows/deploy-tests.yml"
-      - "docs/GITHUB_ACTIONS_DEPLOY_CN.md"
 
 permissions:
   contents: read
