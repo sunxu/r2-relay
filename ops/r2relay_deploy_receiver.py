@@ -1152,10 +1152,28 @@ def apply_download_config_production(sha: str) -> dict:
         production = DOWNLOAD_PRODUCTION_PROFILE_TEXT.encode("utf-8")
         if current == production:
             if not health_check(expected_download_enabled=True):
-                raise DeployError("download_production_existing_health_failed")
+                # An unhealthy already-enabled instance must not continue in
+                # the production profile after a failed idempotent operation.
+                try:
+                    _atomic_write_download_config(disabled, gid)
+                    run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
+                    if not health_check(expected_download_enabled=False):
+                        raise DeployError("download_production_existing_disable_health_failed")
+                except Exception:
+                    try:
+                        run_fixed(["/usr/bin/systemctl", "stop", SERVICE], timeout=30)
+                    except Exception:
+                        pass
+                    raise DeployError("download_production_existing_unhealthy_service_stopped") from None
+                raise DeployError("download_production_existing_unhealthy_disabled")
             return {
                 "status": "DOWNLOAD_PRODUCTION_ALREADY_ENABLED", "commit": sha,
                 "download_enabled": True, "profile": "production-download-v1",
+                "max_cache_bytes": 8589934592,
+                "min_free_bytes": 8589934592,
+                "max_active_tasks": 2,
+                "max_retained_tasks": 4,
+                "max_waiters": 8,
                 "config_path": str(DOWNLOAD_CONFIG), "service_restarted": False,
             }
         if current != disabled:
