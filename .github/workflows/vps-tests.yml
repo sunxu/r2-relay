@@ -4,11 +4,10 @@ on:
     paths:
       - "vps/**"
       - ".github/workflows/vps-tests.yml"
+  # Production configuration requires a pytest check on the exact main SHA.
+  # Do not suppress the required check when only ops/deploy files change.
   push:
     branches: [main]
-    paths:
-      - "vps/**"
-      - ".github/workflows/vps-tests.yml"
 permissions:
   contents: read
 jobs:
