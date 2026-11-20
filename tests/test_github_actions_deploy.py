@@ -1285,3 +1285,47 @@ def test_production_disable_is_fail_closed_even_after_enabled(tmp_path, monkeypa
     assert result["status"] == "DOWNLOAD_CONFIG_APPLIED"
     assert result["download_enabled"] is False
     assert config_path.read_text(encoding="utf-8") == receiver.DOWNLOAD_CONFIG_TEXT
+
+
+def test_production_existing_unhealthy_profile_is_disabled(tmp_path, monkeypatch):
+    _release, config_path, _backups = _prepare_download_config_receiver_test(tmp_path, monkeypatch)
+    config_path.write_text(receiver.DOWNLOAD_PRODUCTION_PROFILE_TEXT, encoding="utf-8")
+    checks = iter([False, True])
+    monkeypatch.setattr(receiver, "health_check", lambda attempts=25, expected_download_enabled=None: next(checks))
+    commands = []
+    monkeypatch.setattr(receiver, "run_fixed", lambda argv, timeout=120: commands.append(argv))
+    with __import__("pytest").raises(receiver.DeployError, match="existing_unhealthy_disabled"):
+        receiver.apply_download_config_production(SHA)
+    assert config_path.read_text(encoding="utf-8") == receiver.DOWNLOAD_CONFIG_TEXT
+    assert commands == [["/usr/bin/systemctl", "restart", receiver.SERVICE]]
+
+
+def test_production_workflow_requires_main_pytest_and_exact_receipt_limits():
+    workflow = (ROOT / ".github/workflows/deploy-production.yml").read_text(encoding="utf-8")
+    assert 'select(.name == "pytest"' in workflow
+    assert 'result.get("max_cache_bytes") == 8589934592' in workflow
+    assert 'result.get("min_free_bytes") == 8589934592' in workflow
+    assert 'result.get("max_active_tasks") == 2' in workflow
+    assert 'result.get("max_retained_tasks") == 4' in workflow
+    assert 'result.get("max_waiters") == 8' in workflow
+
+
+def test_archive_rejects_invalid_production_capability_marker(tmp_path):
+    archive = tmp_path / "invalid-production-marker.tar"
+    files = {
+        "vps/pyproject.toml": b"[build-system]\n",
+        "vps/r2relay_vps/app.py": b"app = True\n",
+        "deploy/vps.service": receiver.UNIT_TEXT.encode(),
+        "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
+        "deploy/download-config-dropin-v1": (receiver.DOWNLOAD_CONFIG_MARKER + "\n").encode(),
+        "deploy/production-download-v1": b"unsupported-production-profile\n",
+        ".deployment-commit": (SHA + "\n").encode(),
+    }
+    with tarfile.open(archive, "w:") as output:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o644
+            output.addfile(info, io.BytesIO(data))
+    with __import__("pytest").raises(receiver.DeployError, match="production_capability_marker_invalid"):
+        receiver.validate_archive(archive, SHA)
