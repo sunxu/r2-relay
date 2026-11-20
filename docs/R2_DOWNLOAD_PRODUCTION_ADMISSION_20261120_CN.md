@@ -57,3 +57,15 @@ Owner 已于 2026-11-20 明确授权 R2 Relay 下载的生产准入、正式部�
 **生产准入代码就绪** 不等于 **VPS 已启用**，也不等于 **Mac 18585 已启用**。分别保留 SHA、Actions URL、Receiver 回执、VPS 状态、Mac 进程及配置的脱敏验收证据。真实运行前不要标记 `PRODUCTION_ENABLED`。
 
 Production 运行不具有自动租约到期，必须依靠显式关闭、磁盘保护和监控。不能把此行为描述为与 30 分钟测试配置同等自动恢复。
+
+
+## 6. 正式生产签收（2026-11-20，已执行）
+
+> **本节是执行结果，优先于前文“资源准入快照”和“待执行流程”的历史状态。** 前文旧 Release、disabled 等描述对应的是生产启用前快照，不代表当前状态。
+
+- 正式 VPS Release 与 Mac worktree：`ffccaac302df167078c97cbe9968699f62242f0a`；Receiver 已受控升级 v8，正式生产 Actions [44701872701](https://github.com/sunxu/r2-relay/actions/runs/44701872701) 成功，下载配置 `production-download-v1` / `enabled=true`。
+- Owner 重启 Mac 后 `127.0.0.1:18585` 使用生产虚拟环境和原 `~/.config/r2-relay/config.toml`，下载开关已打开；上传保持单 Part 1 MiB、全局 1024 MiB。
+- 本地自动化测试 115 passed + 8 subtests passed；真实 18585 GET 全 Range HTTP 206、25,301,339 字节，SHA-256 `aeb9681c80723f604b8926542b4372e3dd3641b4f1bd1275ee023b821a4c4ddd`，Content-Range、Content-Length、ETag 均与 R2 直连基准一致。
+- 独立只读 VPS 验证 `UNIFIED_DEPLOYMENT_STATUS_PASS` 和 `SERVICE_VERIFY_PASS`；但未独立读取本次任务的 VPS manifest / 实际上游 GET 次数。
+- Owner 当前无真实 R2 PUT 上传环境，本轮 **NOT_TESTED_ENV_UNAVAILABLE**；不搭建额外环境、不阻塞已验证的 GET 上线，也不宣称上传回归 PASS。
+- 详细签收及当前回滚边界见：[R2 GET 生产部署与验收签收](R2_DOWNLOAD_PRODUCTION_ACCEPTANCE_20261120_CN.md)。
