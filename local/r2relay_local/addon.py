@@ -1,21 +1,32 @@
 """Mitmproxy addon. In default mode, request() runs after full body buffering."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
 from mitmproxy import http
 
 from .config import Settings, load_settings
-from .relay import RelayClient, RelayUnavailable, RelayOutcomeUnknown, is_upload_part
+from .relay import RelayClient, RelayUnavailable, RelayOutcomeUnknown, is_upload_part, is_r2_get
+from .download import DownloadCoordinator
+from .disk_response import DiskResponseServer
 
 LOG = logging.getLogger("r2relay.local")
 
 
 class R2RelayAddon:
-    def __init__(self, relay: RelayClient, *, settings: Settings | None = None):
+    def __init__(
+        self, relay: RelayClient, *, settings: Settings | None = None,
+        download_coordinator: DownloadCoordinator | None = None,
+        disk_response_server: DiskResponseServer | None = None,
+    ):
         self.relay = relay
         self.settings = settings or load_settings()
+        self.downloads = download_coordinator
+        if self.downloads is None and self.settings.download_enabled:
+            self.downloads = DownloadCoordinator(relay, self.settings)
+        self.disk_responses = disk_response_server or DiskResponseServer()
         self.max_part_bytes = self.settings.max_part_bytes
         self.global_budget_bytes = self.settings.global_budget_bytes
         LOG.info(
@@ -51,6 +62,41 @@ class R2RelayAddon:
 
     async def request(self, flow: http.HTTPFlow) -> None:
         req = flow.request
+        if is_r2_get(req.method, req.pretty_url) and self.downloads is not None:
+            original_headers = [
+                (k, v) for k, v in req.headers.items(multi=True)
+                if k.lower() not in {
+                    "connection", "keep-alive", "proxy-connection",
+                    "transfer-encoding", "te", "trailer", "upgrade",
+                }
+            ]
+            result = None
+            try:
+                result = await self.downloads.download(req.pretty_url, original_headers)
+                token = await self.disk_responses.register(result)
+                flow.metadata["r2relay_download_token"] = token
+                flow.metadata["r2relay_download"] = True
+                req.scheme = "http"
+                req.host = "127.0.0.1"
+                req.port = int(self.disk_responses.port)
+                req.path = f"/download/{token}"
+                req.headers.clear()
+                req.headers["Host"] = f"127.0.0.1:{self.disk_responses.port}"
+                req.headers["Connection"] = "close"
+            except asyncio.CancelledError:
+                if result is not None and result.cleanup is not None:
+                    await result.cleanup()
+                raise
+            except Exception as exc:
+                if result is not None and result.cleanup is not None:
+                    asyncio.get_running_loop().create_task(result.cleanup())
+                LOG.error("R2 GET download relay failed: %s", type(exc).__name__)
+                flow.response = http.Response.make(
+                    status_code=502,
+                    content=b"R2 Relay: download failed; no direct R2 fallback was attempted",
+                    headers={"Content-Type": "text/plain"},
+                )
+            return
         if not is_upload_part(req.method, req.pretty_url):
             return
         if getattr(req, "stream", False):
@@ -103,10 +149,23 @@ class R2RelayAddon:
             flow.response.headers.add(name, value)
         flow.response.headers["Content-Length"] = str(len(result.body))
 
+    def responseheaders(self, flow: http.HTTPFlow) -> None:
+        if getattr(flow, "metadata", {}).get("r2relay_download"):
+            flow.response.stream = True
+
     def error(self, flow: http.HTTPFlow) -> None:
         self._release(flow)
+        token = getattr(flow, "metadata", {}).get("r2relay_download_token")
+        if token:
+            try:
+                asyncio.get_running_loop().create_task(self.disk_responses.discard(token))
+            except RuntimeError:
+                pass
 
     async def done(self) -> None:
+        await self.disk_responses.close()
+        if self.downloads is not None:
+            await self.downloads.close()
         await self.relay.close()
 
 

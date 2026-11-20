@@ -1,6 +1,6 @@
 # 本地 Python HTTPS 代理（开发分支）
 
-程序由 `python -m r2relay_local` 启动 mitmdump，并加载项目自己的 Python addon。默认监听 `127.0.0.1:18585`；只有 `*.r2.cloudflarestorage.com` 的 CONNECT 进入 TLS MITM，其他 HTTPS 原样隧道转发。目标域名中的非 UploadPart 请求不会进入缓存逻辑。
+程序由 `python -m r2relay_local` 启动 mitmdump，并加载项目自己的 Python addon。默认监听 `127.0.0.1:18585`；只有 `*.r2.cloudflarestorage.com` 的 CONNECT 进入 TLS MITM，其他 HTTPS 原样隧道转发。下载默认关闭；下载启用时接管 R2 GET，并将响应改写到仅监听 loopback 的磁盘响应服务。mitmproxy allow-hosts 同时允许 R2 endpoint 和 `127.0.0.1:<port>`，否则本地 Loopback 响应无法送回原始客户端。
 
 ## 运行
 
@@ -61,10 +61,37 @@ schema_version = 1
 [upload]
 max_part_mib = 128
 global_buffer_mib = 1024
+
+# 下载默认关闭；启用前必须根据 Mac 内存和临时磁盘容量填写预算。
+[download]
+enabled = false
+max_concurrency = 16
+global_max_concurrency = 32
+small_response_memory_mib = 0
+max_temp_mib = 0
+temp_dir = "~/.cache/r2-relay/downloads"
 ```
 
 - `max_part_mib`：单个 UploadPart 进入缓存加速的最大请求体，默认 128 MiB。
 - `global_buffer_mib`：所有正在缓存的 UploadPart 共享的 Content-Length 预留预算，默认 1024 MiB。
-- 超过任一限制的请求仍由 mitmproxy 流式转发到原始 R2，不会被拒绝。
+- 超过任一上传限制的请求仍由 mitmproxy 流式转发到原始 R2，不会被拒绝。
+- `download.max_concurrency = 16`：单文件同时取回的 Part 数上限。
+- `download.global_max_concurrency = 32`：所有下载任务共享的 Part 传输上限；等待 VPS READY 的 Part 不占用传输名额。
+- `download.small_response_memory_mib`：所有小响应共享的内存预算；启用下载时至少为 24 MiB，预算耗尽时排队。
+- `download.max_temp_mib`：所有大响应共享的本地临时磁盘预算；启用下载时至少为 25 MiB，超预算的单个对象明确失败，不会无限占用磁盘。
+- `download.temp_dir`：本地任务级临时文件目录。大响应只使用一个任务文件，按 Part 偏移写入，不保存第二套 Part 文件。
+- 下载默认关闭。只有明确填写小响应内存预算和临时磁盘预算后，才能设置 `enabled = true`；不在没有 Mac 资源测量的情况下预设预算值。
+- 所有发往 Cloudflare R2 S3 endpoint 的 GET 在下载启用后由本地代理接管；原始 URL、Range/条件请求头和签名头交给 VPS。VPS 不可用或下载失败时返回明确 502，不静默直连 R2。
+- Mac 只并发取回 VPS 已 READY 的 Part：单文件最多 16、所有任务合计最多 32。每片验证长度和 SHA-256 后直接写入一个任务级文件；所有 Part 完成且 VPS 任务 COMPLETE 后才返回原始响应。
+- 大文件通过仅监听 `127.0.0.1` 的 Loopback 文件响应服务交给 mitmproxy，并开启 response streaming；不把完整大文件读入 Python 内存。
+- 本地代理启动时使用 mitmproxy `connection_strategy=lazy`：先让 addon 决定是否接管，再建立上游连接，避免已接管的 R2 GET/UploadPart 预先连接原始 R2 主机。
 - 修改配置后重启本地 R2 Relay（18585）进程生效。
 - 可用 `R2_RELAY_CONFIG=/absolute/path/config.toml` 指定另一份配置文件；该变量只指定配置文件路径，不承载数值配置。
+
+
+
+## 真实 Cloudflare R2 GET 验收
+
+Stage 2 的 Mock R2 全栈验收已覆盖 mitmproxy CONNECT、Caddy TLS/HTTP/2、VPS、16 MiB Part 组装和 Loopback 流式返回。真实 Cloudflare R2 验收必须在 VPS 下载服务部署并启用后，由操作者提供一条有效签名 GET 请求。
+
+操作步骤见 [真实 R2 GET 验收手册](../docs/R2_DOWNLOAD_REAL_R2_ACCEPTANCE_CN.md)。手册先建立 25 MiB 对象的 R2 直连 Range 基线，再使用权限为 0600 的本地 JSON 请求描述文件运行 `local/poc/real_r2_download_acceptance.py`。脚本只输出状态码、长度、SHA-256、HTTP 版本及 VPS/本地清理结果，不输出签名 URL 或请求头；`PASS_REAL` 要求远端任务删除成功且本地临时资源释放。脚本直接验证 RelayClient → VPS → R2；随后手册还要求用 curl 经本地 18585 再完成一次真实 mitmproxy GET。该脚本不会在 CI 中运行，也不会部署或启用 VPS 下载服务。

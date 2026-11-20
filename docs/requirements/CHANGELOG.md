@@ -60,3 +60,30 @@
 - 修复全局等待者计数跨任务并发竞争、Part 失败状态映射和 reader 与 TTL/删除之间的竞态。
 - 下载目录增加 Linux 单进程独占锁，关停时先取消 writer、等待 reader 结束再释放锁。
 - 限制 URL 与请求头输入规模；manifest 不回显底层异常文本，降低签名 URL 泄露风险。
+
+
+## v2.0 — 2026-11-19
+- Stage 1 VPS 下载核心 PR #66 已合并；VPS 专项测试 45 passed，7 个 GitHub Actions 流程全部通过；未部署 VPS。
+- Stage 2 Mac 客户端新增下载协调器、16/32 共享并发调度、READY Part SHA-256 校验、单文件 pwrite 组装和小响应内存/大响应磁盘预算。
+- 新增仅监听 127.0.0.1 的响应服务，通过 mitmproxy response streaming 返回已验证的本地内存/磁盘响应。
+- Mac 下载默认关闭；内存和临时磁盘预算必须显式配置，不猜测设备容量。
+
+
+## v2.1 — 2026-11-19
+- Runner 全栈验收扩展为真实进程 GET 下载：25 MiB Range 206、单次 Mock R2 GET、16 MiB + 9 MiB Part、签名请求头标记、SHA-256、Loopback response streaming。
+- 在 Mac → VPS 下载 API 上验证 HTTP/2。
+- mitmproxy 设置 `connection_strategy=lazy`，避免 addon 接管前先连接原始 R2 主机；Runner 断言没有原始 R2 预连接。
+- 增加两文件并发测试，明确验证单文件最多 16、全局最多 32 个 Part 同时传输。
+
+
+## v2.2 — 2026-11-19
+- 增加手动真实 Cloudflare R2 GET 验收脚本与中文手册；从权限 0600 的本地私有 spec 读取签名 URL/请求头，不输出敏感内容。
+- 真实验收要求状态码、响应长度、SHA-256 和 Mac → VPS HTTP 版本符合预期，并在报告 PASS_REAL 前完成本地临时资源清理。
+
+
+## v2.3 — 2026-11-19
+- 修复真实 R2 验收脚本在清理 result/RelayClient 后再读取状态和 HTTP 版本的问题；报告先快照状态与版本。
+- `PASS_REAL` 现在同时要求 VPS DELETE 成功、本地临时文件消失、内存/磁盘预算归零。
+- 记录 Part/body 流式 API 实际协商的 HTTP 版本，而不只记录创建任务/manifest 请求。
+- 修正 mitmproxy allow-hosts，明确允许 R2 endpoint 与本地 Loopback 响应服务；新增命令参数回归测试。
+- 真实 R2 手册增加 25 MiB 测试对象、直连 Range 基线、0600 私有 spec 和真实 18585 mitmproxy 路径验收步骤。

@@ -2,7 +2,7 @@
 
 - 需求编号：RLY-020～RLY-039
 - 跟踪任务：[Issue #63](https://github.com/sunxu/r2-relay/issues/63)
-- 状态：仓库负责人已确认设计基线；Stage 0 PoC 已通过；Stage 1 VPS 核心已进入实现 PR；尚未部署 VPS。
+- 状态：Stage 1 VPS PR #66 与 Receiver v7 PR #73 已合并并部署，活动 VPS Release 为 `a77f2414bd32370cf8f6f5ac78014fbf923e605a`，下载现为关闭；Stage 2 Mac 客户端位于 Draft PR #68。真实 R2 小响应与完整 Range 大响应 RelayClient/18586 代理验收均已 PASS_REAL，合并前仍需当前 HEAD 的独立 CI 与代码审查，未授权生产 GET 启用。
 - 原则：下载是独立能力，不改变现有 UploadPart PUT 上传行为。
 
 ## 1. 目标
@@ -22,7 +22,7 @@
 
 VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、cache_ttl_seconds=600。Mac 的 [download] 配置段包含 max_concurrency=16、global_max_concurrency=32，并与现有上传配置共存。
 
-VPS 通用配置路径为 /etc/r2-relay/config.toml；下载默认 enabled=false。受控 GitHub Actions 另可应用 /etc/r2-relay/download.toml 独立 drop-in，其 [download] 配置优先于通用配置，不改写其他上传/服务设置。当前受控 Actions 只允许应用 enabled=false 的固定 profile（16 MiB Part、24 MiB 阈值、600 秒 TTL，磁盘预算和任务上限为 0），不提供启用命令。启用前必须另行核对 VPS 实际磁盘并明确授权，填写 max_cache_bytes、min_free_bytes、max_active_tasks、max_retained_tasks 和 max_waiters 的有效正值；未填写有效正值时 fail-closed。Mac 配置路径为 ~/.config/r2-relay/config.toml。
+VPS 通用配置路径为 /etc/r2-relay/config.toml；受控下载配置使用 /etc/r2-relay-download/download.toml 独立 drop-in（其 [download] 配置优先于通用配置），不会改写上传或其他服务设置。下载默认 enabled=false；Receiver v7 只允许在 Issue #63 显式授权下应用固定 30 分钟 real-r2-test-v1 测试 profile（64 MiB 缓存、最低磁盘空闲 5 GiB、活动任务 1、保留任务 2、等待者 4），到期自动关闭；测试完成必须立即手动 disabled。这不是生产 GET 启用授权。Mac 配置路径为 ~/.config/r2-relay/config.toml；真实验收使用独立 real-r2-test.toml 和 18586 端口，不修改 18585。
 
 四个核心参数必须通过 TOML 加载、严格校验，不得硬编码或要求通过环境变量维护。Token、VPS 地址、TLS CA 等凭据和连接信息继续按现有安全方式管理。VPS manifest 是每个任务 Part 布局的唯一权威来源。
 
@@ -32,7 +32,7 @@ VPS 通用配置路径为 /etc/r2-relay/config.toml；下载默认 enabled=false
 - **RLY-021 原始请求：** 转发原始 URL、查询参数和必要请求头，保留请求头多值语义；仅移除必须由 HTTP 客户端重新生成的 hop-by-hop 头。不得擅自修改 SigV4 签名相关 URL、查询参数、Host 或签名头。不设计签名 URL 权限缓存。
 - **RLY-022 单次上游请求：** VPS 对每个原始 GET 只发起一次 R2 GET，不发起多个 Range 请求。
 - **RLY-023 响应模式：** 实际响应体 <=24 MiB 时，Mac 使用内存；>24 MiB 时，VPS 生成 16 MiB Part，Mac 使用磁盘。204/304 等无响应体响应直接返回。3xx/4xx/5xx 保留真实状态、响应头和响应体，不得伪造成成功；不自动跟随重定向。
-- **RLY-024 未知长度：** 缺少 Content-Length 时不得无限制缓冲内存。VPS 使用有界临时 spool；超过 24 MiB 时将已暂存前缀交给 Part writer 并继续生成 Part，最终不超过阈值则作为小响应返回。临时 spool 不得被读取接口当作 READY Part。
+- **RLY-024 未知长度：** 缺少 Content-Length 时不得无限制缓冲内存。VPS 使用有界临时 spool；超过 24 MiB 时将已暂存前缀交给 Part writer 并继续生成 Part，最终不超过阈值则作为小响应返回。临时 spool 不得被读取接口当作 READY Part。Mac v1 在未知长度场景下等待 VPS COMPLETE，取得最终总长度后一次性预留磁盘预算，再取回 READY Part；因此未知长度响应暂不具备 Mac 侧边生成边取回能力。这是有意接受的 v1 限制，避免多个未知长度任务分别持有部分预算而互相等待。
 
 ## 4. VPS Part 生成与任务管理
 
@@ -47,7 +47,15 @@ VPS 通用配置路径为 /etc/r2-relay/config.toml；下载默认 enabled=false
 - **RLY-030 并发：** 单文件最多 16 个 Part 同时传输；所有任务合计最多 32 个。使用一个共享全局调度器；等待未 READY Part 不占数据传输名额；重试也必须经过调度器。
 - **RLY-031 小响应：** <=24 MiB 使用内存，不创建大文件缓存。必须有独立的全局小响应内存预算；预算耗尽时排队，不得无限分配。预算默认值在内存压力测试后确定。
 - **RLY-032 大响应：** >24 MiB 使用一个本地任务级临时文件。按 VPS manifest 的偏移和长度定位写入，不在 Mac 保存第二套 Part 文件、不二次合并。每片校验实际长度；建议 VPS 同时计算 SHA-256 并由本地验证。
-- **RLY-033 完整后返回（已接受方案 A）：** Mac 可以在 VPS 下载期间提前取回 READY Part，但必须等待所有 Part 收齐、长度/摘要校验通过且 VPS 任务 COMPLETE，才向原始客户端发送响应体。大文件从本地临时文件流式返回，不得整体读入 Python 内存。确认不再需要 VPS 文件后通知删除。
+- **RLY-033 完整后返回（已接受方案 A）：** 对 Content-Length 已知的大响应，Mac 可以在 VPS 下载期间提前取回 READY Part；未知长度响应按 RLY-024 等待 VPS COMPLETE 并预留最终磁盘预算后再取回。两种情况都必须等待所有 Part 收齐、长度/摘要校验通过且 VPS 任务 COMPLETE，才向原始客户端发送响应体。大文件从本地临时文件流式返回，不得整体读入 Python 内存。确认不再需要 VPS 文件后通知删除。
+
+### 5.1 Mac 小响应内存峰值
+
+小响应在 Mac 端使用 bytearray 累积并直接交给 Loopback 响应服务，不再转换成另一份完整 bytes 对象，避免 24 MiB 响应在转换瞬间出现两份完整 payload。响应消费完成或客户端断开后，cleanup 会清空 bytearray，再归还 memory budget；真实验收也检查 body buffer 已释放。预算按响应 payload 字节数计量；Python 对象和分配器的少量管理开销不属于 payload 预算。
+
+### 5.2 Mac 下载超时（v1 暂定值）
+
+当前 Mac RelayClient 的控制 API 请求超时为 15 秒，单个 Part/body 流读取超时为 90 秒（连接 15 秒、写入 30 秒），单个下载任务整体期限为 180 秒。这些值暂未进入 TOML。先通过真实 R2 和不同网络条件测量实际吞吐、慢速窗口与失败恢复，再决定是否增加配置项；v1 不采用无限等待，也不在缺少实测数据时直接放宽期限。
 
 ## 6. HTTP 语义
 
@@ -100,12 +108,12 @@ Part 写入使用 N.part.tmp；完整写入、fsync 并计算 SHA-256 后原子�
 | DL-T07 | 全局并发 | 所有任务合计最多 32 个传输中的 Part |
 | DL-T08 | 内存 | 小响应使用内存且受总预算限制 |
 | DL-T09 | 大文件 | 1 GiB 不整体进内存，按偏移写入一个本地临时文件 |
-| DL-T10 | 边下边取 | VPS 未完成对象时，本地可取 READY Part |
+| DL-T10 | 边下边取 | Content-Length 已知的大响应中，VPS 未完成对象时本地可取 READY Part；未知长度按 RLY-024 等待 COMPLETE |
 | DL-T11 | 完整返回 | 所有 Part 和任务 COMPLETE 前客户端未收到响应体 |
 | DL-T12 | Range | 原始 Range 正确返回 206/Content-Range；内部使用 Part ID |
 | DL-T13 | 状态码 | 204/304/重定向/403/404/5xx 语义正确，304 无响应体及其元数据头处理符合 HTTP 语义 |
 | DL-T14 | 响应头 | 原始字节、Content-Encoding、Length、ETag 一致；逐跳头过滤 |
-| DL-T15 | 未知长度 | 不无限缓冲；模式切换和最终长度正确 |
+| DL-T15 | 未知长度 | 不无限缓冲；VPS spool/模式切换和最终长度正确；Mac 等待 COMPLETE 后预留最终预算再取回（v1 已知限制） |
 | DL-T16 | 上游失败 | 不发布半成品、不混合重试对象 |
 | DL-T17 | Part 重试 | 只重取完整 READY Part，仍受 16/32 限制 |
 | DL-T18 | TTL | 正常完成主动删除；600 秒空闲过期；活动读写不被删除 |
@@ -120,12 +128,12 @@ Part 写入使用 N.part.tmp；完整写入、fsync 并计算 SHA-256 后原子�
 ## 11. 实施阶段
 
 1. Stage 0：mitmproxy 磁盘响应 PoC，已通过 DL-T21（对应仓库总验收 T31）。
-2. Stage 1：VPS 任务状态、单 GET、流式 Part、manifest、等待式 Part API、TTL 和磁盘保护（实现中，见 VPS 核心实现 PR）。
-3. Stage 2：Mac GET 接管、TOML、16/32 调度、小响应内存和大响应磁盘组装。
+2. Stage 1：VPS 任务状态、单 GET、流式 Part、manifest、等待式 Part API、TTL 和磁盘保护（已合并 PR #66；VPS 45 项测试及 7 个 Actions 流程通过；已部署至 VPS，当前生产配置仍为 `enabled=false`）。
+3. Stage 2：Mac GET 接管、TOML、16/32 调度、小响应内存和大响应磁盘组装（已实现并通过隔离 Mock R2 全栈验收，见 Draft PR #68；真实 Cloudflare R2 小/大响应及隔离 18586 代理已通过人工验收）。
 4. Stage 3：HTTP 语义、失败恢复、删除、Mock R2 全栈和上传回归。
-5. Stage 4：真实 R2 验收和性能测量。
+5. Stage 4：真实 R2 小/大响应与独立代理验收已通过；单上游 GET 次数、manifest Part 数量及更广泛性能测量仍需独立证据。
 
-每阶段通过独立 PR 和 CI。生产 VPS 部署仍通过 Issue #41 的 Owner-only GitHub Actions 显式触发；本轮明确授权仅覆盖受控的下载关闭配置应用及随后部署包含 drop-in 支持的 Release，不授权启用下载。
+每阶段通过独立 PR 和 CI。生产 VPS 部署必须另行取得仓库负责人明确授权；Stage 1 已按独立部署授权完成部署。真实 R2 测试只允许使用 Receiver v7 的限时固定测试 profile，不能视为生产启用授权。
 
 ## 12. v1 不做
 

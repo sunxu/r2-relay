@@ -18,8 +18,9 @@ def command(listen: str, port: int, addon_entry: Path) -> list[str]:
     return [
         executable, "--mode", "regular",
         "--listen-host", listen, "--listen-port", str(port),
-        "--allow-hosts", r".*\.r2\.cloudflarestorage\.com(:443)?$",
+        "--allow-hosts", r"(.*\.r2\.cloudflarestorage\.com(:443)?|127\.0\.0\.1(:[0-9]+)?)$",
         "--set", "ssl_insecure=false",
+        "--set", "connection_strategy=lazy",
         "-s", str(addon_entry),
     ]
 

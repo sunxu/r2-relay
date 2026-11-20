@@ -57,6 +57,18 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
     # The host-network container uses an explicit test certificate.
     caddy_port = 8443
     calls = tmp_path / "mock_calls.jsonl"
+    get_calls = tmp_path / "mock_get_calls.jsonl"
+    download_config = tmp_path / "download.toml"
+    download_config.write_text(
+        "[download]\n"
+        "enabled = true\n"
+        "max_concurrency = 16\n"
+        "global_max_concurrency = 32\n"
+        "small_response_memory_mib = 32\n"
+        "max_temp_mib = 128\n"
+        f'temp_dir = "{tmp_path / "mac-downloads"}"\n',
+        encoding="utf-8",
+    )
     token = "runner-integration-token"
     hmac_key = "runner-independent-test-key"
     cert, key = tmp_path / "runner.crt", tmp_path / "runner.key"
@@ -79,11 +91,13 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
     logfiles = {name: tmp_path / f"{name}.log"
                 for name in ("mock", "vps", "caddy", "proxy")}
     mock_env = dict(os.environ, R2_TEST_HMAC_KEY=hmac_key,
-                    R2_TEST_CALL_LOG=str(calls))
+                    R2_TEST_CALL_LOG=str(calls), R2_TEST_GET_LOG=str(get_calls))
     vps_env = dict(os.environ, R2_TEST_CACHE_DIR=str(tmp_path / "cache"),
+                   R2_TEST_DOWNLOAD_CACHE_DIR=str(tmp_path / "download-cache"),
                    R2_TEST_MOCK_PORT=str(mock_port), R2_RELAY_TOKEN=token)
     proxy_env = dict(os.environ, R2_RELAY_VPS_URL=f"https://localhost:{caddy_port}",
-                     R2_RELAY_VPS_CA_FILE=str(cert), R2_RELAY_TOKEN=token)
+                     R2_RELAY_VPS_CA_FILE=str(cert), R2_RELAY_TOKEN=token,
+                     R2_RELAY_CONFIG=str(download_config), R2_RELAY_HTTP2="1")
     cmds = [
         ("mock", [sys.executable, "-m", "uvicorn", "mock_r2:app", "--app-dir",
                   str(fixture_dir), "--host", "127.0.0.1", "--port", str(mock_port)]),
@@ -95,7 +109,8 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
         ("proxy", ["mitmdump", "--mode", "regular", "--listen-host", "127.0.0.1",
                    "--listen-port", str(proxy_port), "--set",
                    f"confdir={tmp_path / 'mitmconf'}", "--set", "upstream_cert=false",
-                   "--allow-hosts", r".*\.r2\.cloudflarestorage\.com(:443)?$",
+                   "--set", "connection_strategy=lazy",
+                   "--allow-hosts", r"(.*\.r2\.cloudflarestorage\.com(:443)?|127\.0\.0\.1(:[0-9]+)?)$",
                    "-s", str(root / "local" / "addon_entry.py")]),
     ]
     envs = [mock_env, vps_env, dict(os.environ), proxy_env]
@@ -139,6 +154,46 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
                     if expected_status == 200:
                         assert response.headers["ETag"] == f'"{digest}"'
                     await response.read()
+        # New GET path: the real Mac addon and RelayClient traverse mitmproxy,
+        # Caddy TLS/HTTP2, the real VPS DownloadManager, and a streaming Mock R2.
+        total = 25 * 1024 * 1024
+        range_header = f"bytes=0-{total - 1}"
+        get_url = "https://acct.r2.cloudflarestorage.com/bucket/object?version=download-test"
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as client:
+            async with client.get(
+                get_url,
+                headers={
+                    "Range": range_header,
+                    "Authorization": "AWS4-HMAC-SHA256 signed-get-test",
+                    "X-Test-Signed-Marker": "signed-get-marker",
+                },
+                ssl=trust,
+                proxy=f"http://127.0.0.1:{proxy_port}",
+            ) as response:
+                assert response.status == 206
+                assert response.headers["Content-Range"] == f"bytes 0-{total - 1}/{total}"
+                assert response.headers["Content-Length"] == str(total)
+                assert response.headers["ETag"] == '"mock-get-v1"'
+                assert response.headers["X-Mock-Signed-Marker"] == "signed-get-marker"
+                downloaded = await response.read()
+        expected = bytes((index % 251 for index in range(total)))
+        assert len(downloaded) == total
+        assert hashlib.sha256(downloaded).digest() == hashlib.sha256(expected).digest()
+        get_rows = [json.loads(x) for x in get_calls.read_text().splitlines()]
+        assert len(get_rows) == 1
+        assert get_rows[0]["original_url"] == get_url
+        assert get_rows[0]["original_host"] == "acct.r2.cloudflarestorage.com"
+        assert get_rows[0]["range"] == range_header
+        assert get_rows[0]["signed_marker"] == "signed-get-marker"
+        assert get_rows[0]["authorization_present"] is True
+        outputs[3].flush()
+        proxy_log = logfiles["proxy"].read_text()
+        assert "download_relay_http_version=HTTP/2" in proxy_log
+        assert "/parts/1" in proxy_log and "/parts/2" in proxy_log
+        # The addon must rewrite to the VPS/loopback before mitmproxy opens
+        # any connection to the original R2 host.
+        assert "server connect acct.r2.cloudflarestorage.com" not in proxy_log
+
         # Hit/miss accounting goes through real Caddy TLS and HTTP/2.
         async with httpx.AsyncClient(http2=True, verify=str(cert), trust_env=False) as http:
             response = await http.get(
@@ -198,6 +253,9 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
             "components": ["aiohttp", "mitmproxy", "caddy_tls_8443",
                            "vps_asgi_tcp", "mock_r2_tcp"],
             "simulated_put_count": len(rows),
+            "simulated_get_count": len(get_rows),
+            "simulated_get_bytes": len(downloaded),
+            "mac_to_vps_download_http2_verified": True,
             "vps_restart_cache_recovered": True,
             "caddy_http2_verified": True,
             "cache_miss_before_restart": metrics["prepare_miss"],
@@ -210,6 +268,11 @@ async def test_caddy_https_to_real_vps_to_real_mock_r2(tmp_path):
         }
         Path(os.environ["R2_RELAY_RUNNER_REPORT"]).write_text(
             json.dumps(result, sort_keys=True, indent=2) + "\n")
+    except Exception:
+        for name, logfile in logfiles.items():
+            if logfile.exists():
+                print(f"\n===== {name.upper()} LOG =====\n{logfile.read_text()[-12000:]}")
+        raise
     finally:
         for proc in reversed(procs):
             stop(proc)
