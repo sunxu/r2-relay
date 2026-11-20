@@ -52,7 +52,7 @@ def test_receiver_build_id_is_in_every_emitted_receipt(capsys):
     receiver.emit("TEST", marker="ok")
     import json
     payload = json.loads(capsys.readouterr().out)
-    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v7-leased-real-r2-test"
+    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v8-production-download-v1"
     assert payload["marker"] == "ok"
 
 
@@ -513,7 +513,7 @@ def test_production_workflow_is_owner_gated_and_requires_deployment_checks():
     assert "github.event.comment.user.login == 'sunxu'" in workflow
     assert 're.fullmatch(r"/deploy ([0-9a-f]{40})"' in workflow
     assert "github.event.issue.number == 63" in workflow
-    assert 'r"/download-config (disabled|real-test) ([0-9a-f]{40})"' in workflow
+    assert 'r"/download-config (disabled|real-test|production) ([0-9a-f]{40})"' in workflow
     assert 'result.get("profile") == "real-r2-test-v1"' in workflow
     assert 'gh issue comment "$ISSUE_NUMBER"' in workflow
     assert "git merge-base --is-ancestor" in workflow
