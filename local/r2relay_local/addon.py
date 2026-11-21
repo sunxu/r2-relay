@@ -10,6 +10,7 @@ from mitmproxy import http
 from .config import Settings, load_settings
 from .relay import RelayClient, RelayUnavailable, RelayOutcomeUnknown, is_upload_part, is_r2_get
 from .download import DownloadCoordinator
+from .local_range import LocalRangeDownloader
 from .disk_response import DiskResponseServer
 
 LOG = logging.getLogger("r2relay.local")
@@ -20,12 +21,17 @@ class R2RelayAddon:
         self, relay: RelayClient, *, settings: Settings | None = None,
         download_coordinator: DownloadCoordinator | None = None,
         disk_response_server: DiskResponseServer | None = None,
+        upload_relay_enabled: bool = True,
     ):
         self.relay = relay
         self.settings = settings or load_settings()
         self.downloads = download_coordinator
+        self.upload_relay_enabled = upload_relay_enabled
         if self.downloads is None and self.settings.download_enabled:
-            self.downloads = DownloadCoordinator(relay, self.settings)
+            if self.settings.download_backend == "local":
+                self.downloads = LocalRangeDownloader(self.settings)
+            else:
+                self.downloads = DownloadCoordinator(relay, self.settings)
         self.disk_responses = disk_response_server or DiskResponseServer()
         self.max_part_bytes = self.settings.max_part_bytes
         self.global_budget_bytes = self.settings.global_budget_bytes
@@ -45,7 +51,7 @@ class R2RelayAddon:
     def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Avoid buffering huge/unknown-size request bodies at the MITM layer."""
         req = flow.request
-        if not is_upload_part(req.method, req.pretty_url):
+        if not self.upload_relay_enabled or not is_upload_part(req.method, req.pretty_url):
             return
         raw_length = req.headers.get("content-length")
         try:
@@ -97,7 +103,7 @@ class R2RelayAddon:
                     headers={"Content-Type": "text/plain"},
                 )
             return
-        if not is_upload_part(req.method, req.pretty_url):
+        if not self.upload_relay_enabled or not is_upload_part(req.method, req.pretty_url):
             return
         if getattr(req, "stream", False):
             return
@@ -172,9 +178,13 @@ class R2RelayAddon:
 def build_addon() -> R2RelayAddon:
     endpoint = os.environ.get("R2_RELAY_VPS_URL", "https://127.0.0.1:8443")
     token = os.environ.get("R2_RELAY_TOKEN", "")
-    if not token:
+    settings = load_settings()
+    if not token and (not settings.download_enabled or settings.download_backend != "local"):
         raise RuntimeError("R2_RELAY_TOKEN missing")
-    return R2RelayAddon(RelayClient(endpoint, token))
+    return R2RelayAddon(
+        RelayClient(endpoint, token), settings=settings,
+        upload_relay_enabled=bool(token),
+    )
 
 
 addons = [build_addon()] if os.environ.get("R2_RELAY_ENABLE_ADDON") == "1" else []
