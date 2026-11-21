@@ -1,6 +1,6 @@
 # R2 Relay：Mac 本地 HTTPX Range 下载（v1）
 
-状态：开发分支功能验证阶段；默认关闭，未获生产切换授权。需求基线：2026-11-21 v1.0。
+状态：**直接 R2 下载协议验收完成（14/14 PASS）**；PR #82 仍为 Draft，未合并、未部署、未启用生产。需求基线：2026-11-21 v1.0。IOTA 集成验收按用户决定取消。
 
 ## 边界
 
@@ -57,9 +57,9 @@ Local 需要 2 MiB 固定分片。每个 GET 响应长度小于等于 2 MiB 或�
 ## 验证与限制
 
 - 自动化：\`cd local && python -m pytest -q\`，覆盖 Range、配置默认值、单连接、原始 200/206、错误状态、版本不一致、并发额度、取消与资源清理，且保留现有 Remote/Upload 回归。
-- 可接入独立的 iota-tools replacement_proxy 做隔离协议验证；不改变生产代理。
+- 不执行 IOTA 集成验收；也不声称 IOTA 慢速接管或已交付前缀校验经过端到端验证。
 - 不设置速度收益验收门槛，不声称已测出收益。
-- 上线前仍需在隔离环境确认真实 R2 签名头、Accept-Ranges/Content-Range/ETag 语义、内容 SHA-256、原始 200/206/403/404/416/5xx 及异常截断行为，再单独申请合并、部署和启用授权。
+- 14/14 条 Mac 私有真实签名请求已完成原始直连与 Local 对照（HTTP 200/206、状态、关键响应头、长度、完整 SHA-256、资源清理）。403/404/416/5xx、异常截断和版本漂移是 Mock/离线 CI 覆盖，**不能冒充真实 R2 错误场景验收**；合并、部署、生产切换另需授权。
 
 已知限制：没有强 ETag、未知 Content-Length、压缩编码、条件 GET、多 Range、签名包含 Range/If-Match/If-Range 或临时磁盘不足时，不拆分。也不支持跨 GET 共享缓存、动态分片或自动回退到 VPS。
 
@@ -80,9 +80,9 @@ python local/poc/real_r2_download_acceptance.py
 
 只有 \`PASS_REAL_LOCAL\` 且状态、长度、指定头、SHA-256、清理均通过，才算真实 R2 协议正确性通过。输出 \`split_gets\` / \`child_range_requests\` 用于辨别是否真的触发了并发子 Range：两者均为 0 只证明单连接回退正确，**不能**证明并发 Range 的真实协议正确性。无需设置 VPS URL、Token 或 CA，也不需要速度测速。
 
-已验证协议后，仍使用原有 \`local/poc/real_r2_mitmproxy_acceptance.py\` 在单独的 127.0.0.1:18586 mitmdump 实例上核对 TLS 代理和完整响应。该步骤要求独立临时配置、单独证书与私有样本；不得占用生产 18585，不能将这一步当作 iota-tools 的慢速接管已验证。最终 IOTA 兼容性需在独立 replacement_proxy 及可复现的慢速触发环境下验证，且必须继续保留 IOTA 前缀 SHA-256 责任边界。
+既有独立 18586 mitmproxy 验收工具可以留作以后代理层排障，但**不作为本次直接下载协议验收的剩余必做项**。按用户决定不执行 IOTA 集成验收，其相关端到端行为不属于此次 PASS 范围；生产 18585 保持不动。
 
-**真实验收仍待在拥有私有请求样本的 Mac 运行。** 公开 GitHub Actions 的 Mock 测试结果不代表 R2 真机通过，严禁向 GitHub Secrets、Issue、PR 日志或本文件复制签名 URL / Token。
+**真实 R2 验收已由用户在 Mac 私有工作区完成，并提供不含敏感凭据的 JSON 回执。** 公开 GitHub Actions 仅提供 Mock/离线证据；原始签名 URL、Token、响应正文未上传 GitHub。
 
 
 ## 独立 Mac 测试工作区（PR #82）
@@ -125,7 +125,7 @@ bash "$HOME/workspace/r2-relay-local-range-test/local/poc/local_range_workspace.
   real "/absolute/path/to/existing-private-0600.json"
 ~~~
 
-脚本会复用同一测试配置和 real_r2_download_acceptance.py，不会输出签名 URL/认证头。PASS_REAL_LOCAL 且 child_range_requests > 0 说明真实样本触发了子 Range；还须检查哈希/响应头及回收结果。该命令会主动发真实 R2 请求，不属于初始化过程。独立 18586 mitmdump/原始 IOTA 替代接管属于后续验收，**初始化不会自动启动**。
+脚本仅说明工作区初始设施，仍可复用既有 real_r2_download_acceptance.py 的单请求测试；本次实际的 14/14 验收由用户在 Mac 私有目录中使用未脱敏请求、以原始直连和 Local 后端双路比对完成。初始化不会启动 18586 mitmdump 或 IOTA。
 
 
 ## 真实日志提取的离线协议包（只读 Mock）
@@ -140,4 +140,15 @@ bash "$HOME/workspace/r2-relay-local-range-test/local/poc/local_range_workspace.
 
 offline 只读取经白名单核对的 5 个 ZIP 成员，包括 25,301,339 字节纯合成对象和 SHA-256 期望清单。利用现有 test_local_range.py 的 HTTPX MockTransport、LocalRangeDownloader 和原始 HTTP 响应头逻辑，完整验证 10 种场景的状态、Content-Range、流式正文长度/哈希、首次请求及子 Range 的数量/If-Match、清理；绝不访问真实 R2，绝不调用 VPS。不会将 ZIP 文件内容放入 CI、Git 或日志。其他既有 Mock 故障注入测试继续覆盖对象版本变化/异常与取消，不重复开发。
 
-私人包 r2_local_range_private_replay_candidates.zip 包含原始签名 URL。**不要传给 offline，不能上传 GitHub**，也不能直接交给 real：私人包是 14 条候选请求的集合，不是 real_r2_download_acceptance.py 要求的单请求 0600 JSON 验收格式，且其 expected_sha256 为空。真实签名凭据的有效期需在实际运行时重新检查；“提取时未过期”不代表现在有效。真实 R2 仍须先取得独立内容哈希/响应基准，或采用基线响应和 Local 响应双路一致性验证后才能给出 PASS_REAL_LOCAL；离线 Mock PASS 不代替这一验收。
+私人包 r2_local_range_private_replay_candidates.zip 含原始签名 URL，不能上传 GitHub，不能传给只读 offline Mock，也不能直接交给既有单请求 real 格式。实际本地验收已使用独立私有脚本读取原始请求、直接 R2 基线与 Local 响应比对，无需把缺失的 expected_sha256 硬填成猜测值。原始数据和独立测试脚本留在 Mac 本地，离线 Mock 不能代替真实 R2 回执。
+
+
+## 最终验收记录与范围（2026-11-22 汇总）
+
+- **直接 R2 协议：14/14 PASS**，8 条原始请求和 6 条派生边界请求，失败数 0。首个原始样本独立通过，其余 7+6 之后通过。
+- **拆分：9 个真实场景实际触发，合计 47 次子 Range 请求**，其他 5 个为单连接。全部对照状态、关键响应头、响应长度、全量 SHA-256、临时资源清理。
+- **边界：** 1 MiB 和恰好 2 MiB 不拆分；2 MiB+1 字节、4 MiB、8 MiB、约 12 MiB 固定 Range、25,301,339 字节无 Range 的已知长度响应成功拆分；12 字节固定 Range、235 字节开放 Range 不拆分。
+- **归类：** `derived_no_range_unknown_size` 实际得到已知 Content-Length（25,301,339 字节），不应计作真实未知长度回退。历史 `slow_takeover_failed` 样本的直接 GET 对照通过，不证明历史 IOTA 接管问题已经端到端修复。
+- **CI：** 开发分支 HEAD `0374e2f56bec38a91d0a065c5d0d9a48bca2c1d7` 6/6 SUCCESS；168 passed、1 skipped（可选离线 ZIP 没有提供给 CI）、12 subtests passed。真实 R2 请求与本地原始测试脚本均不提交 Git。
+- **明确不执行：** IOTA 集成验收与下载性能测速；本次也不新增 VPS 开发、上传改造、重复测试框架。
+- **后续另需授权：** 合并 PR #82、Mac 部署、生产切换。当前保持 Draft 和默认 Remote。
