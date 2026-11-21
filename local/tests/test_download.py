@@ -386,6 +386,9 @@ async def test_plan_b_completed_bytes_client_close_during_cleanup_is_not_truncat
         assert await asyncio.wait_for(reader.readexactly(8), timeout=3) == b"verified"
         writer.close()
         await writer.wait_closed()
+        # Ensure the loopback observes EOF while completion cleanup is pending.
+        await asyncio.sleep(0.05)
+        assert not finished.is_set()
         cleanup_unblock.set()
         await asyncio.wait_for(finished.wait(), timeout=3)
         for _ in range(50):
