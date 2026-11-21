@@ -210,6 +210,9 @@ class FakeDownloads:
         self.calls.append((url, headers))
         return self.result
 
+    async def download_stream(self, url, headers):
+        return await self.download(url, headers)
+
     async def close(self):
         self.closed = True
 
