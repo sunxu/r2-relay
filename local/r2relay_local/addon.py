@@ -72,7 +72,7 @@ class R2RelayAddon:
             ]
             result = None
             try:
-                result = await self.downloads.download(req.pretty_url, original_headers)
+                result = await self.downloads.download_stream(req.pretty_url, original_headers)
                 token = await self.disk_responses.register(result)
                 flow.metadata["r2relay_download_token"] = token
                 flow.metadata["r2relay_download"] = True
