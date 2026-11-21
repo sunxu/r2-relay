@@ -62,3 +62,24 @@ Local 需要 2 MiB 固定分片。每个 GET 响应长度小于等于 2 MiB 或�
 - 上线前仍需在隔离环境确认真实 R2 签名头、Accept-Ranges/Content-Range/ETag 语义、内容 SHA-256、原始 200/206/403/404/416/5xx 及异常截断行为，再单独申请合并、部署和启用授权。
 
 已知限制：没有强 ETag、未知 Content-Length、压缩编码、条件 GET、多 Range、签名包含 Range/If-Match/If-Range 或临时磁盘不足时，不拆分。也不支持跨 GET 共享缓存、动态分片或自动回退到 VPS。
+
+
+## 隔离真实 R2 协议验收（不启用生产）
+
+**复用已有脚本** \`local/poc/real_r2_download_acceptance.py\` 和原来的私有 0600 JSON 请求样本；不建立第二套签名请求验收工具。该脚本现在按 TOML \`download.backend\` 自动选择 Remote / Local；Remote 的现有逻辑、验收输出不变。Local 会读取完整原始 GET 响应流、核对状态/长度/指定响应头及 SHA-256，并检查临时文件与预算清理。报告只包含布尔检查与未签名的统计数字，不显示 URL、Token 或认证头。
+
+隔离验收建议使用**独立配置**，例如在 Mac 的私有目录建立 \`config.local-acceptance.toml\`，设置 \`[download] enabled=true, backend="local", max_temp_mib=64\`，并把 \`temp_dir\` 设到与现有生产缓存不同的私有目录。不要改写生产 \`~/.config/r2-relay/config.toml\`。私有 JSON 样本继续设置 \`R2_RELAY_REAL_GET_SPEC\`，必须为 0600，含原 URL、请求头、参考 HTTP 状态、大小、完整 SHA-256 和至少一组预期响应头。
+
+在仓库已有 Python 环境（\`local\` 可导入）中执行：
+
+\`\`\`sh
+R2_RELAY_CONFIG="$PRIVATE_LOCAL_ACCEPTANCE_TOML" \
+R2_RELAY_REAL_GET_SPEC="$PRIVATE_MODE_0600_JSON" \
+python local/poc/real_r2_download_acceptance.py
+\`\`\`
+
+只有 \`PASS_REAL_LOCAL\` 且状态、长度、指定头、SHA-256、清理均通过，才算真实 R2 协议正确性通过。输出 \`split_gets\` / \`child_range_requests\` 用于辨别是否真的触发了并发子 Range：两者均为 0 只证明单连接回退正确，**不能**证明并发 Range 的真实协议正确性。无需设置 VPS URL、Token 或 CA，也不需要速度测速。
+
+已验证协议后，仍使用原有 \`local/poc/real_r2_mitmproxy_acceptance.py\` 在单独的 127.0.0.1:18586 mitmdump 实例上核对 TLS 代理和完整响应。该步骤要求独立临时配置、单独证书与私有样本；不得占用生产 18585，不能将这一步当作 iota-tools 的慢速接管已验证。最终 IOTA 兼容性需在独立 replacement_proxy 及可复现的慢速触发环境下验证，且必须继续保留 IOTA 前缀 SHA-256 责任边界。
+
+**真实验收仍待在拥有私有请求样本的 Mac 运行。** 公开 GitHub Actions 的 Mock 测试结果不代表 R2 真机通过，严禁向 GitHub Secrets、Issue、PR 日志或本文件复制签名 URL / Token。
