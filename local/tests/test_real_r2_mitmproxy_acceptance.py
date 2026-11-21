@@ -135,3 +135,11 @@ def test_proxy_acceptance_streams_without_logging_signed_url(tmp_path, monkeypat
     assert report["header_before_iota_20s_timeout"] is True
     assert "X-Amz-Signature" not in out
     assert "private" not in out
+
+    # A synthetic 502 may arrive quickly; it cannot satisfy R2 header timing.
+    FakeResponse.status_code = 502
+    assert MODULE.run() == 1
+    failure = json.loads(capsys.readouterr().out)
+    assert failure["status"] == "FAIL_REAL_PROXY"
+    assert failure["status_match"] is False
+    assert failure["header_before_iota_20s_timeout"] is False
