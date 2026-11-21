@@ -7,8 +7,16 @@ global_buffer_mib = 1024
 # 下载默认关闭。启用前需根据 Mac 内存与临时磁盘容量明确设置预算。
 [download]
 enabled = false
+backend = "remote"
 max_concurrency = 16
 global_max_concurrency = 32
 small_response_memory_mib = 0
 max_temp_mib = 0
 temp_dir = "~/.cache/r2-relay/downloads"
+
+# Local-only limits (ignored by the remote VPS download backend).
+[download.local]
+chunk_size_mib = 2
+min_size_mib = 2
+max_connections_per_get = 8
+global_max_connections = 128
