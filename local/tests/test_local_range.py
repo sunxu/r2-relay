@@ -255,3 +255,124 @@ async def test_global_connections_across_gets_never_exceed_limit(tmp_path):
             assert downloader.disk_budget.used == 0
         finally:
             await downloader.close()
+
+
+@pytest.mark.asyncio
+async def test_loopback_headers_precede_body_and_ready_chunks_stream_in_order(tmp_path):
+    """One original GET supplies the first chunk; subranges supply the tail."""
+    from r2relay_local.disk_response import DiskResponseServer
+
+    gate = asyncio.Event()
+    first = BODY[:2*MIB]
+    requests = []
+
+    class OriginalStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await gate.wait()
+            yield first
+            # The initial GET intentionally never delivers its own tail;
+            # successful completion proves subsequent ranges were used.
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            pass
+
+    def handler(request):
+        assert request.method == "GET"
+        rng = request.headers.get("range")
+        requests.append(rng)
+        if rng is None:
+            return httpx.Response(200, headers={
+                "Content-Length": str(len(BODY)), "ETag": ETAG,
+                "Accept-Ranges": "bytes",
+            }, stream=OriginalStream())
+        lo, hi = rng.removeprefix("bytes=").split("-", 1)
+        lo, hi = int(lo), int(hi)
+        assert request.headers.get("if-match") == ETAG
+        part = BODY[lo:hi+1]
+        return httpx.Response(206, headers={
+            "ETag": ETAG,
+            "Content-Range": f"bytes {lo}-{hi}/{len(BODY)}",
+            "Content-Length": str(len(part)),
+        }, stream=httpx.ByteStream(part))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        downloader = LocalRangeDownloader(settings(tmp_path), client=client)
+        server = DiskResponseServer()
+        writer = None
+        try:
+            result = await asyncio.wait_for(downloader.download_stream(URL, []), timeout=3)
+            token = await server.register(result)
+            reader, writer = await asyncio.open_connection("127.0.0.1", server.port)
+            writer.write(
+                f"GET /download/{token} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode()
+            )
+            await writer.drain()
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=3)
+            assert head.startswith(b"HTTP/1.1 200 OK")
+            assert f"Content-Length: {len(BODY)}\r\n".encode() in head
+            assert not gate.is_set()
+            gate.set()
+            body = await asyncio.wait_for(reader.readexactly(len(BODY)), timeout=15)
+            assert body == BODY
+            assert await asyncio.wait_for(reader.read(), timeout=3) == b""
+            assert requests[0] is None
+            assert len(requests) == 3
+            assert downloader.disk_budget.used == 0
+        finally:
+            gate.set()
+            if writer is not None:
+                writer.close()
+                await writer.wait_closed()
+            await server.close()
+            await downloader.close()
+
+
+@pytest.mark.asyncio
+async def test_content_encoded_and_unknown_length_never_split(tmp_path):
+    original = b"\x1f\x8b" + bytes(range(251)) * 256
+    requests = []
+
+    def encoded(request):
+        requests.append(request)
+        return httpx.Response(200, headers={
+            "ETag": ETAG, "Accept-Ranges": "bytes",
+            "Content-Encoding": "gzip", "Content-Length": str(len(original)),
+        }, stream=httpx.ByteStream(original))
+
+    result, content = await run_download(tmp_path, encoded)
+    assert result.status_code == 200
+    assert result.size == len(original)
+    assert content == original
+    assert len(requests) == 1
+
+    calls = []
+
+    def unknown(request):
+        calls.append(request)
+        return httpx.Response(200, headers={
+            "ETag": ETAG, "Accept-Ranges": "bytes",
+        }, stream=httpx.ByteStream(BODY))
+
+    result, content = await run_download(tmp_path, unknown)
+    assert result.size == -1
+    assert content == BODY
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [204, 304, 404, 416, 500, 503])
+async def test_original_error_and_bodyless_statuses_are_not_split(tmp_path, status):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        body = b"" if status in (204, 304) else b"R2 status body"
+        return httpx.Response(status, headers={"ETag": ETAG, "X-Origin": "R2"},
+                              stream=httpx.ByteStream(body))
+
+    result, content = await run_download(tmp_path, handler)
+    assert result.status_code == status
+    assert content == (b"" if status in (204, 304) else b"R2 status body")
+    assert ("x-origin", "R2") in [(k.lower(), v) for k, v in result.headers]
+    assert len(requests) == 1
