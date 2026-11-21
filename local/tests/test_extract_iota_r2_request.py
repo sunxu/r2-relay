@@ -217,3 +217,15 @@ def test_time_remaining_cutoff_and_temporary_credential_caveat(tmp_path, capsys)
     assert "EXPIRING_SOON=1" in printed
     assert "REPLAY_CANDIDATES: 0" in printed
     assert "PRIVATE_TOKEN_NEVER_PRINT" not in printed
+
+
+def test_malformed_summary_values_never_become_stdout(tmp_path, capsys):
+    event = summary(size=SIZE)
+    event["response_status"] = "https://example.invalid/?token=LEAK_STATUS"
+    event["takeover_result"] = "LEAK_TAKEOVER"
+    runtime = private_logs(tmp_path, [request(length=SIZE)], [event])
+    assert extract.main(["--dir", str(runtime)], now=NOW) == 0
+    shown = capsys.readouterr().out
+    assert "REPLAY_CANDIDATES: 1" in shown
+    assert "LEAK_STATUS" not in shown
+    assert "LEAK_TAKEOVER" not in shown
