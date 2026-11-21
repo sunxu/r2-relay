@@ -292,6 +292,75 @@ async def test_plan_b_headers_and_verified_first_part_arrive_before_vps_complete
 
 
 @pytest.mark.asyncio
+async def test_plan_b_first_verified_part_has_download_bandwidth_priority(tmp_path):
+    """Do not start Part 2 while the first verified downstream byte is gated."""
+    first = b"a" * (16 * MIB)
+    tail = b"b" * (9 * MIB)
+    body = first + tail
+    app = make_vps(tmp_path, body, status=206, headers={
+        "ETag": '"unchanged"',
+        "Content-Range": f"bytes 0-{len(body) - 1}/{len(body)}",
+    })
+    transport = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://vps.test"
+    )
+    relay = RelayClient(
+        "https://vps.test", "download-test-token",
+        client=transport, execution_timeout=30, poll_interval=0.002,
+    )
+    started = []
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+    original_part_stream = relay.download_part_stream
+
+    @asynccontextmanager
+    async def gated_part_stream(task_id, part_number):
+        started.append(part_number)
+        if part_number == 1:
+            first_started.set()
+            await release_first.wait()
+        async with original_part_stream(task_id, part_number) as response:
+            yield response
+
+    relay.download_part_stream = gated_part_stream
+    coordinator = DownloadCoordinator(relay, local_settings(tmp_path))
+    disk = DiskResponseServer()
+    writer = None
+    try:
+        result = await coordinator.download_stream(
+            R2_URL, [("Range", f"bytes=0-{len(body) - 1}")],
+        )
+        token = await disk.register(result)
+        reader, writer = await asyncio.open_connection("127.0.0.1", disk.port)
+        writer.write(f"GET /download/{token} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+        await writer.drain()
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+        assert b"206 Partial Content" in head
+        await asyncio.wait_for(first_started.wait(), timeout=5)
+        await asyncio.sleep(0.05)
+        assert started == [1], "later Part fetched before Part 1 passed checksum"
+        release_first.set()
+        assert await asyncio.wait_for(reader.readexactly(len(first)), timeout=20) == first
+        assert await asyncio.wait_for(reader.readexactly(len(tail)), timeout=20) == tail
+        assert await asyncio.wait_for(reader.read(), timeout=5) == b""
+        assert started == [1, 2]
+        for _ in range(100):
+            if coordinator.disk_budget.used == 0 and not app.state.downloads.tasks:
+                break
+            await asyncio.sleep(0.01)
+        assert coordinator.disk_budget.used == 0
+        assert not app.state.downloads.tasks
+    finally:
+        release_first.set()
+        if writer is not None:
+            writer.close()
+            await writer.wait_closed()
+        await disk.close()
+        await coordinator.close()
+        await transport.aclose()
+
+
+@pytest.mark.asyncio
 async def test_plan_b_unknown_length_chunked_and_post_header_failure(tmp_path):
     async def valid_chunks():
         yield b"hello"
