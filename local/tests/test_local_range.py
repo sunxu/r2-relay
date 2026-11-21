@@ -487,3 +487,75 @@ async def test_original_206_short_of_explicit_range_does_not_split(tmp_path):
     assert result.status_code == 206
     assert output == BODY[:observed_length]
     assert requests == [f"bytes=0-{requested_end}"]
+
+
+@pytest.mark.asyncio
+async def test_loopback_version_mismatch_terminates_before_content_length(tmp_path):
+    from r2relay_local.disk_response import DiskResponseServer
+
+    handler, _ = upstream(version_change=True)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        downloader = LocalRangeDownloader(settings(tmp_path), client=client)
+        server = DiskResponseServer()
+        writer = None
+        try:
+            result = await downloader.download_stream(URL, [])
+            token = await server.register(result)
+            reader, writer = await asyncio.open_connection("127.0.0.1", server.port)
+            writer.write(f"GET /download/{token} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+            await writer.drain()
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=3)
+            assert head.startswith(b"HTTP/1.1 200 OK")
+            with pytest.raises((asyncio.IncompleteReadError, ConnectionResetError, OSError)):
+                await asyncio.wait_for(reader.readexactly(len(BODY)), timeout=8)
+            await result.cleanup()
+            assert downloader.disk_budget.used == 0
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except (ConnectionResetError, BrokenPipeError, OSError):
+                    pass
+            await server.close()
+            await downloader.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_while_initial_stream_is_blocked_releases_all_resources(tmp_path):
+    entered = asyncio.Event()
+    closed = asyncio.Event()
+    block = asyncio.Event()
+
+    class HungBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            entered.set()
+            await block.wait()
+            yield BODY
+
+        async def aclose(self):
+            closed.set()
+
+    def upstream_blocked(request):
+        if request.headers.get("range"):
+            return httpx.Response(206, headers={
+                "Content-Range": "bytes 2097152-4194303/5242893",
+                "Content-Length": str(2 * MIB), "ETag": ETAG,
+            }, stream=httpx.ByteStream(BODY[2*MIB:4*MIB]))
+        return httpx.Response(200, headers={
+            "Content-Length": str(len(BODY)), "Accept-Ranges": "bytes", "ETag": ETAG,
+        }, stream=HungBody())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream_blocked)) as client:
+        downloader = LocalRangeDownloader(settings(tmp_path), client=client)
+        try:
+            result = await downloader.download_stream(URL, [])
+            await asyncio.wait_for(entered.wait(), timeout=3)
+            await asyncio.wait_for(result.cleanup(), timeout=8)
+            assert closed.is_set()
+            assert downloader.disk_budget.used == 0
+            assert not list(downloader.root.glob("r2-range-*.bin"))
+            assert not [task for task in downloader.active if not task.done()]
+        finally:
+            block.set()
+            await downloader.close()
