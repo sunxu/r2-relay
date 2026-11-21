@@ -119,9 +119,9 @@ def _plan(
         if match is None:
             return None
         first, last, total = map(int, match.groups())
+        expected_last = min(requested_end, total - 1) if requested_end is not None else total - 1
         if (first != requested_start or last < first or total <= last
-                or last - first + 1 != length
-                or (requested_end is not None and last > requested_end)):
+                or last - first + 1 != length or last != expected_last):
             return None
         return first, length, etag, total
     if response.status_code != 200 or response.headers.get("accept-ranges", "").lower() != "bytes":
