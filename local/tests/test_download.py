@@ -200,6 +200,133 @@ async def test_loopback_response_server_streams_file_and_releases_it_on_disconne
         await server.close()
 
 
+@pytest.mark.asyncio
+async def test_plan_b_headers_and_verified_first_part_arrive_before_vps_complete(tmp_path):
+    release_tail = asyncio.Event()
+    upstream_calls = 0
+    first = b"a" * (16 * MIB)
+    tail = b"b" * (9 * MIB)
+    expected_length = len(first) + len(tail)
+
+    class PausedR2Body(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield first
+            await release_tail.wait()
+            yield tail
+
+        async def aclose(self):
+            pass
+
+    def upstream(request):
+        nonlocal upstream_calls
+        upstream_calls += 1
+        return httpx.Response(
+            206,
+            headers={
+                "Content-Length": str(expected_length),
+                "Content-Range": f"bytes 0-{expected_length - 1}/{expected_length}",
+                "ETag": '"unchanged"',
+            },
+            stream=PausedR2Body(),
+        )
+
+    app = create_app(
+        CacheStore(tmp_path / "upload-cache"),
+        token="download-test-token",
+        download_transport=httpx.MockTransport(upstream),
+        download_settings=vps_settings(),
+        download_root=tmp_path / "vps-downloads",
+    )
+    transport = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://vps.test"
+    )
+    relay = RelayClient(
+        "https://vps.test", "download-test-token",
+        client=transport, execution_timeout=30, poll_interval=0.002,
+    )
+    coordinator = DownloadCoordinator(relay, local_settings(tmp_path))
+    disk = DiskResponseServer()
+    writer = None
+    try:
+        result = await asyncio.wait_for(
+            coordinator.download_stream(R2_URL, [("Range", f"bytes=0-{expected_length - 1}")]),
+            timeout=10,
+        )
+        assert result.status_code == 206
+        assert result.stream is not None
+        token = await disk.register(result)
+        reader, writer = await asyncio.open_connection("127.0.0.1", disk.port)
+        writer.write(
+            f"GET /download/{token} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode()
+        )
+        await writer.drain()
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=10)
+        assert head.startswith(b"HTTP/1.1 206 Partial Content")
+        assert f"Content-Length: {expected_length}\r\n".encode() in head
+        assert b"Content-Range:" in head
+        assert not release_tail.is_set()
+        # At this point the VPS still has 9 MiB of R2 data blocked.
+        observed_first = await asyncio.wait_for(reader.readexactly(len(first)), timeout=20)
+        assert observed_first == first
+        assert not release_tail.is_set()
+        release_tail.set()
+        observed_tail = await asyncio.wait_for(reader.readexactly(len(tail)), timeout=20)
+        assert observed_tail == tail
+        assert await asyncio.wait_for(reader.read(), timeout=5) == b""
+        assert upstream_calls == 1
+        for _ in range(100):
+            if coordinator.disk_budget.used == 0 and not app.state.downloads.tasks:
+                break
+            await asyncio.sleep(0.01)
+        assert coordinator.disk_budget.used == 0
+        assert not app.state.downloads.tasks
+        assert not list(coordinator.root.glob("r2-download-*.bin"))
+    finally:
+        release_tail.set()
+        if writer is not None:
+            writer.close()
+            await writer.wait_closed()
+        await disk.close()
+        await coordinator.close()
+        await transport.aclose()
+
+
+@pytest.mark.asyncio
+async def test_plan_b_unknown_length_chunked_and_post_header_failure(tmp_path):
+    async def valid_chunks():
+        yield b"hello"
+
+    async def failed_chunks():
+        yield b"abc"
+        raise OSError("synthetic stream break")
+
+    disk = DiskResponseServer()
+    try:
+        for size, source, expected, failure in [
+            (-1, valid_chunks(), b"5\r\nhello\r\n0\r\n\r\n", False),
+            (5, failed_chunks(), b"", True),
+        ]:
+            result = DownloadResult(status_code=200, headers=[], size=size, stream=source)
+            token = await disk.register(result)
+            reader, writer = await asyncio.open_connection("127.0.0.1", disk.port)
+            writer.write(f"GET /download/{token} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+            await writer.drain()
+            head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=3)
+            assert b"200 OK" in head
+            if size == -1:
+                assert b"Transfer-Encoding: chunked" in head
+            else:
+                assert b"Content-Length: 5" in head
+            received = await asyncio.wait_for(reader.read(), timeout=3)
+            assert received == expected if not failure else received != b"abcde"
+            if failure:
+                assert b"0\r\n\r\n" not in received
+            writer.close()
+            await writer.wait_closed()
+    finally:
+        await disk.close()
+
+
 class FakeDownloads:
     def __init__(self, result):
         self.result = result
