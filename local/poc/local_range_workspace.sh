@@ -44,7 +44,7 @@ smoke() {
     validate_config
     (
         cd "$root/local"
-        env -u R2_RELAY_TOKEN -u R2_RELAY_VPS_URL -u R2_RELAY_VPS_CA_FILE \
+        env -u R2_RELAY_ENABLE_ADDON -u R2_RELAY_TOKEN -u R2_RELAY_VPS_URL -u R2_RELAY_VPS_CA_FILE \
             R2_RELAY_CONFIG="$config" \
             "$venv/bin/python" -m pytest -q \
             tests/test_config.py tests/test_addon.py \
@@ -116,7 +116,7 @@ TOML
         validate_config
         # The existing acceptance script checks the private spec is mode 0600.
         cd "$root"
-        env -u R2_RELAY_TOKEN -u R2_RELAY_VPS_URL -u R2_RELAY_VPS_CA_FILE \
+        env -u R2_RELAY_ENABLE_ADDON -u R2_RELAY_TOKEN -u R2_RELAY_VPS_URL -u R2_RELAY_VPS_CA_FILE \
             R2_RELAY_CONFIG="$config" R2_RELAY_REAL_GET_SPEC="$spec" \
             "$venv/bin/python" local/poc/real_r2_download_acceptance.py
         ;;
