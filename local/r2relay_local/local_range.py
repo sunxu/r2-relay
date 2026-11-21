@@ -7,6 +7,7 @@ responses are eligible for sub-Range requests.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import fcntl
 import os
 from pathlib import Path
@@ -182,6 +183,29 @@ class LocalRangeDownloader:
                 elif child.is_dir():
                     shutil.rmtree(child)
 
+    def _request(self, url: str, headers: list[tuple[str, str]]) -> httpx.Request:
+        """Keep signed/original end-to-end headers; remove HTTPX implicit defaults.
+
+        Injected Accept-Encoding can make an otherwise identical GET return a
+        different representation. Host remains HTTPX-owned for the R2 URL.
+        """
+        request = self.client.build_request("GET", url, headers=headers)
+        original_names = {name.lower() for name, _ in headers}
+        for name in ("accept", "accept-encoding", "user-agent", "connection"):
+            if name not in original_names:
+                request.headers.pop(name, None)
+        return request
+
+    @asynccontextmanager
+    async def _stream(self, url: str, headers: list[tuple[str, str]]):
+        response = await self.client.send(
+            self._request(url, headers), stream=True, follow_redirects=False,
+        )
+        try:
+            yield response
+        finally:
+            await response.aclose()
+
     async def _read_chunk(
         self, response: httpx.Response, fd: int, offset: int, expected: int,
     ) -> None:
@@ -214,9 +238,7 @@ class LocalRangeDownloader:
             try:
                 async with per_get:
                     async with self.connections:
-                        async with self.client.stream(
-                            "GET", url, headers=child_headers, follow_redirects=False,
-                        ) as response:
+                        async with self._stream(url, child_headers) as response:
                             got = response.headers.get("content-range", "")
                             parsed = _CONTENT_RANGE.fullmatch(got)
                             if (response.status_code != 206 or parsed is None
@@ -325,8 +347,9 @@ class LocalRangeDownloader:
             await per_get.acquire()
             await self.connections.acquire()
             init_held = True
-            request = self.client.build_request("GET", url, headers=headers)
-            response = await self.client.send(request, stream=True, follow_redirects=False)
+            response = await self.client.send(
+                self._request(url, headers), stream=True, follow_redirects=False,
+            )
             original_headers = list(response.headers.multi_items())
             expected = _length(response)
             status = response.status_code
@@ -412,7 +435,10 @@ class LocalRangeDownloader:
                                     await producer
                                     raise LocalRangeError("missing READY Range chunk")
                                 progress.changed.clear()
-                                if index not in progress.ready and not producer.done():
+                                if index not in progress.ready:
+                                    if producer.done():
+                                        await producer
+                                        raise LocalRangeError("missing READY Range chunk")
                                     await progress.changed.wait()
                             if producer.done():
                                 await producer
