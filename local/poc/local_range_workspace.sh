@@ -111,6 +111,24 @@ TOML
         (( $# == 0 )) || fail "smoke takes no arguments"
         smoke
         ;;
+    offline)
+        (( $# == 1 )) || fail "Usage: $0 offline /absolute/path/to/r2_local_range_offline_test_data.zip"
+        archive="$1"
+        [[ "$archive" = /* && -f "$archive" && ! -L "$archive" ]] ||
+            fail "Pass the synthetic offline ZIP as a regular file by absolute path"
+        validate_config
+        (
+            cd "$root/local"
+            # Explicitly do not load private request samples, tokens, or
+            # workstation production/Local config during offline Mock tests.
+            env -u R2_RELAY_CONFIG -u R2_RELAY_REAL_GET_SPEC \
+                -u R2_RELAY_ENABLE_ADDON -u R2_RELAY_TOKEN \
+                -u R2_RELAY_VPS_URL -u R2_RELAY_VPS_CA_FILE \
+                R2_LOCAL_RANGE_OFFLINE_ZIP="$archive" \
+                "$venv/bin/python" -m pytest -q tests/test_local_range.py \
+                -k optional_offline_archive_real_shape_and_sha256
+        )
+        ;;
     real)
         (( $# == 1 )) || fail "Usage: $0 real /absolute/path/to/existing-private-0600.json"
         spec="$1"
@@ -124,6 +142,6 @@ TOML
             "$venv/bin/python" local/poc/real_r2_download_acceptance.py
         ;;
     *)
-        fail "Usage: $0 {setup|smoke|real /absolute/private/0600.json}"
+        fail "Usage: $0 {setup|smoke|offline /absolute/synthetic.zip|real /absolute/private/0600.json}"
         ;;
 esac
