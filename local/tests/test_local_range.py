@@ -1,5 +1,4 @@
 import asyncio
-from collections import Counter
 from pathlib import Path
 
 import httpx
@@ -11,8 +10,7 @@ from r2relay_local.local_range import LocalRangeDownloader, LocalRangeError
 MIB = 1024 * 1024
 URL = "https://test.r2.cloudflarestorage.com/b/object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-SignedHeaders=host&X-Amz-Signature=masked"
 ETAG = '"strong-etag"'
-BODY = bytes(range(251)) * (5 * MIB // 251 + 1)
-BODY = BODY[:5 * MIB + 13]
+BODY = (bytes(range(251)) * ((5 * MIB + 13 + 250) // 251))[:5 * MIB + 13]
 
 
 def settings(tmp_path, **kw):
@@ -86,7 +84,7 @@ async def test_2mib_exact_is_single_and_small_is_single(tmp_path):
 @pytest.mark.asyncio
 async def test_fixed_range_reuses_initial_get_and_orders_bytes(tmp_path):
     start = 17
-    end = 5*MIB+12
+    end = len(BODY) - 1
     handler, calls = upstream()
     headers = [("Range", f"bytes={start}-{end}"), ("X-Test", "preserve")]
     result, content = await run_download(tmp_path, handler, headers)
@@ -96,11 +94,12 @@ async def test_fixed_range_reuses_initial_get_and_orders_bytes(tmp_path):
     ]
     assert content == BODY[start:end+1]
     assert calls[0] == (f"bytes={start}-{end}", None)
-    assert len(calls) == 4  # initial 2 MiB + two full subranges + short tail
+    assert len(calls) == 3  # initial 2 MiB, one full subrange, short tail
     assert set(rng for rng, _ in calls[1:]) == {
         f"bytes={start+2*MIB}-{start+4*MIB-1}",
         f"bytes={start+4*MIB}-{end}",
-    } or len(calls) == 3
+    }
+    assert all(tag == ETAG for _, tag in calls[1:])
 
 
 @pytest.mark.asyncio
