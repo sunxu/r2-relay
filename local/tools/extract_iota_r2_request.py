@@ -131,7 +131,7 @@ def classify(info: dict, summary: dict | None, now: datetime, min_ttl: int):
     info["prior_status"] = raw_status if type(raw_status) is int and 100 <= raw_status <= 599 else None
     info["prior_complete"] = bool(summary and summary.get("final_status") == "completed")
     raw_takeover = summary.get("takeover_result") if summary else None
-    info["takeover"] = raw_takeover if raw_takeover in {
+    info["takeover"] = raw_takeover if isinstance(raw_takeover, str) and raw_takeover in {
         "completed", "succeeded", "failed", "cancelled", "stream_failed",
         "stalled", "not_attempted", "not_attempted_capacity_full",
     } else None
