@@ -5,6 +5,7 @@ import asyncio
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -18,6 +19,9 @@ from urllib.parse import urlsplit
 import httpx
 
 from .config import DownloadSettings
+
+# Deployed uvicorn config sends this INFO logger to journald.
+LOG = logging.getLogger("uvicorn.error")
 
 HOP_HEADERS = {
     "connection", "keep-alive", "proxy-connection", "transfer-encoding",
@@ -135,6 +139,8 @@ class DownloadTask:
     waiters: int = 0
     delete_requested: bool = False
     worker: asyncio.Task | None = None
+    r2_started_at: float | None = None
+    first_part_ready_elapsed_ms: float | None = None
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
 
 
@@ -200,6 +206,10 @@ class PartWriter:
         self.part_record["size"] = self.size
         self.part_record["sha256"] = self.digest.hexdigest()
         self.part_record["status"] = "READY"
+        if self.number == 1 and self.task.r2_started_at is not None:
+            self.task.first_part_ready_elapsed_ms = round(
+                (time.perf_counter() - self.task.r2_started_at) * 1000, 1
+            )
         self.number += 1
         self.size = 0
         self.digest = hashlib.sha256()
@@ -336,6 +346,13 @@ class DownloadManager:
         writer: PartWriter | None = None
         body_file = None
         body_tmp = task.directory / "body.tmp"
+        started_at = time.perf_counter()
+        task.r2_started_at = started_at
+        header_at = None
+        first_body_at = None
+        eof_at = None
+        r2_received_bytes = 0
+        r2_read_wait_ms = 0.0
         try:
             timeout = httpx.Timeout(120.0, connect=15.0, read=120.0, write=30.0)
             async with httpx.AsyncClient(
@@ -345,6 +362,7 @@ class DownloadManager:
                 async with _stream_get(
                     client, task.url, task.request_headers
                 ) as response:
+                    header_at = time.perf_counter()
                     task.status_code = response.status_code
                     task.response_headers = filter_hop_headers(list(response.headers.multi_items()))
                     raw_length = response.headers.get("content-length")
@@ -370,9 +388,22 @@ class DownloadManager:
                         body_file = body_tmp.open("xb")
 
                     if not bodyless:
-                        async for chunk in _raw_chunks(response):
+                        chunks = _raw_chunks(response).__aiter__()
+                        while True:
+                            read_started_at = time.perf_counter()
+                            try:
+                                chunk = await anext(chunks)
+                            except StopAsyncIteration:
+                                r2_read_wait_ms += (time.perf_counter() - read_started_at) * 1000
+                                eof_at = time.perf_counter()
+                                break
+                            arrived_at = time.perf_counter()
+                            r2_read_wait_ms += (arrived_at - read_started_at) * 1000
                             if not chunk:
                                 continue
+                            if first_body_at is None:
+                                first_body_at = arrived_at
+                            r2_received_bytes += len(chunk)
                             if writer is not None:
                                 await writer.write(chunk)
                                 continue
@@ -401,6 +432,8 @@ class DownloadManager:
                                     await writer.write(prefix_chunk, reserve=False)
                             body_tmp.unlink(missing_ok=True)
                             await writer.write(chunk)
+                    else:
+                        eof_at = header_at
 
                     if writer is not None:
                         await writer.finish()
@@ -436,6 +469,32 @@ class DownloadManager:
             }
             task.expires_at = self.clock()
         finally:
+            finished_at = time.perf_counter()
+
+            def elapsed_ms(begin, end):
+                return "NA" if begin is None or end is None else f"{(end - begin) * 1000:.1f}"
+
+            # Effective stream throughput includes local writes/fsync and backpressure.
+            body_seconds = (
+                eof_at - header_at
+                if eof_at is not None and header_at is not None else 0
+            )
+            effective_mbps = (
+                f"{r2_received_bytes * 8 / body_seconds / 1e6:.2f}"
+                if body_seconds > 0 else "NA"
+            )
+            LOG.info(
+                "r2_get_perf status=%s r2_http_status=%s r2_bytes=%d "
+                "r2_header_elapsed_ms=%s r2_first_body_elapsed_ms=%s "
+                "r2_body_elapsed_ms=%s r2_read_wait_ms=%.1f "
+                "r2_effective_mbps=%s r2_first_part_ready_ms=%s r2_total_elapsed_ms=%s",
+                task.status, task.status_code if task.status_code is not None else "NA",
+                r2_received_bytes, elapsed_ms(started_at, header_at),
+                elapsed_ms(started_at, first_body_at), elapsed_ms(header_at, eof_at),
+                r2_read_wait_ms, effective_mbps,
+                task.first_part_ready_elapsed_ms if task.first_part_ready_elapsed_ms is not None else "NA",
+                elapsed_ms(started_at, finished_at),
+            )
             if body_file is not None:
                 body_file.close()
             if writer is not None and writer.file is not None:
