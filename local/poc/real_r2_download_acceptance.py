@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 
 from r2relay_local.config import load_settings
 from r2relay_local.download import DownloadCoordinator
+from r2relay_local.local_range import LocalRangeDownloader
 from r2relay_local.relay import RelayClient
 
 
@@ -125,6 +126,89 @@ def hash_result(result) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
+
+async def _run_local(spec: dict, settings, started: float) -> int:
+    """Reuse the strict private signed-GET spec for Local, without VPS credentials."""
+    downloader = None
+    result = None
+    try:
+        downloader = LocalRangeDownloader(settings)
+        result = await downloader.download_stream(spec["url"], spec["headers"])
+        status = result.status_code
+        actual_headers: dict[str, list[str]] = {}
+        for key, value in result.headers:
+            actual_headers.setdefault(key.lower(), []).append(value)
+        header_checks = {
+            key: expected in actual_headers.get(key, [])
+            for key, expected in spec["expected_headers"].items()
+        }
+        digest = hashlib.sha256()
+        actual_size = 0
+        if result.stream is None:
+            raise ValueError("local backend did not return streaming body")
+        async for chunk in result.stream:
+            actual_size += len(chunk)
+            if actual_size > spec["expected_size"]:
+                raise ValueError("unexpected local response length")
+            digest.update(chunk)
+        actual_hash = digest.hexdigest()
+        status_ok = status == spec["expected_status_code"]
+        size_ok = actual_size == spec["expected_size"]
+        hash_ok = actual_hash == spec["expected_sha256"]
+        headers_ok = bool(header_checks) and all(header_checks.values())
+        if result.cleanup is not None:
+            await result.cleanup()
+        cleanup_ok = (
+            downloader.disk_budget.used == 0
+            and not list(downloader.root.glob("r2-range-*.bin"))
+            and not downloader._cleanups
+        )
+        observed_split = downloader.split_gets
+        observed_subranges = downloader.child_range_requests
+        passed = status_ok and size_ok and hash_ok and headers_ok and cleanup_ok
+        report = {
+            "schema": "r2_relay_local_real_get_acceptance_v1",
+            "backend": "local",
+            "status": "PASS_REAL_LOCAL" if passed else "FAIL_REAL_LOCAL",
+            "http_status": status,
+            "expected_status": spec["expected_status_code"],
+            "actual_size": actual_size,
+            "expected_size": spec["expected_size"],
+            "status_match": status_ok,
+            "size_match": size_ok,
+            "expected_sha256_match": hash_ok,
+            "expected_headers_match": headers_ok,
+            "header_checks": header_checks,
+            "split_gets": observed_split,
+            "child_range_requests": observed_subranges,
+            "local_temp_cleanup_ok": cleanup_ok,
+            "signed_url_or_headers_logged": False,
+        }
+        print(json.dumps(report, sort_keys=True, indent=2))
+        return 0 if passed else 1
+    except Exception as exc:
+        # Never stringify exceptions: httpx can include signed URL / headers.
+        print(json.dumps({
+            "schema": "r2_relay_local_real_get_acceptance_v1",
+            "backend": "local",
+            "status": "FAIL_REAL_LOCAL",
+            "error_type": type(exc).__name__,
+            "signed_url_or_headers_logged": False,
+        }, sort_keys=True, indent=2))
+        return 1
+    finally:
+        if result is not None and result.cleanup is not None:
+            try:
+                await result.cleanup()
+            except Exception:
+                pass
+        if downloader is not None:
+            try:
+                await downloader.close()
+            except Exception:
+                pass
+
+
 async def run() -> int:
     relay = None
     coordinator = None
@@ -135,6 +219,8 @@ async def run() -> int:
         settings = load_settings()
         if not settings.download_enabled:
             raise ValueError("local download relay is disabled in TOML")
+        if getattr(settings, "download_backend", "remote") == "local":
+            return await _run_local(spec, settings, started)
         endpoint = os.environ.get("R2_RELAY_VPS_URL", "")
         token = os.environ.get("R2_RELAY_TOKEN", "")
         if not endpoint or not token:
