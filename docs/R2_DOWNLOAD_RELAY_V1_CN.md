@@ -65,7 +65,7 @@ VPS 通用配置路径为 /etc/r2-relay/config.toml；受控下载配置使用 /
 
 小响应在 Mac 端使用 bytearray 累积并直接交给 Loopback 响应服务，不再转换成另一份完整 bytes 对象，避免 24 MiB 响应在转换瞬间出现两份完整 payload。响应消费完成或客户端断开后，cleanup 会清空 bytearray，再归还 memory budget；真实验收也检查 body buffer 已释放。预算按响应 payload 字节数计量；Python 对象和分配器的少量管理开销不属于 payload 预算。
 
-### 5.2 Mac 下载超时（v1 暂定值）
+### 5.3 Mac 下载超时（v1 历史暂定值）
 
 当前 Mac RelayClient 的控制 API 请求超时为 15 秒，单个 Part/body 流读取超时为 90 秒（连接 15 秒、写入 30 秒），单个下载任务整体期限为 180 秒。这些值暂未进入 TOML。先通过真实 R2 和不同网络条件测量实际吞吐、慢速窗口与失败恢复，再决定是否增加配置项；v1 不采用无限等待，也不在缺少实测数据时直接放宽期限。
 
