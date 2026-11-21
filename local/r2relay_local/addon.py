@@ -18,7 +18,7 @@ LOG = logging.getLogger("r2relay.local")
 
 class R2RelayAddon:
     def __init__(
-        self, relay: RelayClient, *, settings: Settings | None = None,
+        self, relay: RelayClient | None, *, settings: Settings | None = None,
         download_coordinator: DownloadCoordinator | None = None,
         disk_response_server: DiskResponseServer | None = None,
         upload_relay_enabled: bool = True,
@@ -172,7 +172,8 @@ class R2RelayAddon:
         await self.disk_responses.close()
         if self.downloads is not None:
             await self.downloads.close()
-        await self.relay.close()
+        if self.relay is not None:
+            await self.relay.close()
 
 
 def build_addon() -> R2RelayAddon:
@@ -182,7 +183,7 @@ def build_addon() -> R2RelayAddon:
     if not token and (not settings.download_enabled or settings.download_backend != "local"):
         raise RuntimeError("R2_RELAY_TOKEN missing")
     return R2RelayAddon(
-        RelayClient(endpoint, token), settings=settings,
+        RelayClient(endpoint, token) if token else None, settings=settings,
         upload_relay_enabled=bool(token),
     )
 
