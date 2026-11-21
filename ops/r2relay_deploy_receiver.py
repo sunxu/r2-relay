@@ -49,6 +49,7 @@ SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 DOWNLOAD_CONFIG_MARKER = "r2-relay-download-config-dropin-v1"
 DOWNLOAD_TEST_CAPABILITY_MARKER = "r2-relay-leased-download-test-v1"
 DOWNLOAD_PRODUCTION_CAPABILITY_MARKER = "r2-relay-production-download-v1"
+DOWNLOAD_PRODUCTION_CAPABILITY_MARKER_V2 = "r2-relay-production-download-v2"
 DOWNLOAD_CONFIG_TEXT = """schema_version = 1
 
 # 由受控 GitHub Actions 管理；生产默认关闭。
@@ -87,7 +88,7 @@ test_expires_at_epoch = {expires_at}
 # 生产启用需另行取得 Owner 明确授权；不得自动从 real-test 转换。
 DOWNLOAD_PRODUCTION_PROFILE_TEXT = """schema_version = 1
 
-# PRODUCTION_DOWNLOAD_PROFILE_V1；仅由受控 Owner Actions 启用。
+# PRODUCTION_DOWNLOAD_PROFILE_V2；仅由受控 Owner Actions 启用。
 [download]
 enabled = true
 part_size_mib = 16
@@ -95,8 +96,8 @@ split_threshold_mib = 24
 cache_ttl_seconds = 600
 max_cache_bytes = 8589934592
 min_free_bytes = 8589934592
-max_active_tasks = 2
-max_retained_tasks = 4
+max_active_tasks = 24
+max_retained_tasks = 32
 max_waiters = 8
 wait_timeout_seconds = 30
 test_expires_at_epoch = 0
@@ -105,7 +106,7 @@ DOWNLOAD_PRODUCTION_MIN_INITIAL_FREE = 17179869184
 DOWNLOAD_TEST_LEASE_SECONDS = 1800
 DOWNLOAD_TEST_TIMER_INTERVAL_SECONDS = 30
 DOWNLOAD_TEST_TIMER_PREFIX = "r2-relay-download-test-expiry-"
-RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v8-production-download-v1"
+RECEIVER_BUILD_ID = "r2-relay-deploy-receiver-v9-production-download-v2"
 REQUIRED = {
     "vps/pyproject.toml",
     "vps/r2relay_vps/app.py",
@@ -289,6 +290,13 @@ def validate_archive(archive_path: Path, expected_sha: str):
                 )
                 if production_marker is None or production_marker.read(128).decode("ascii") != DOWNLOAD_PRODUCTION_CAPABILITY_MARKER + "\n":
                     raise DeployError("download_production_capability_marker_invalid")
+            if "deploy/production-download-v2" in names:
+                production_v2_marker = archive.extractfile(
+                    archive.getmember("deploy/production-download-v2")
+                )
+                if (production_v2_marker is None or
+                        production_v2_marker.read(128).decode("ascii") != DOWNLOAD_PRODUCTION_CAPABILITY_MARKER_V2 + "\n"):
+                    raise DeployError("download_production_v2_capability_marker_invalid")
             unit_member = archive.getmember("deploy/vps.service")
             unit_stream = archive.extractfile(unit_member)
             if unit_stream is None or unit_stream.read(65536).decode("utf-8") != UNIT_TEXT:
@@ -1138,7 +1146,7 @@ def apply_download_config_production(sha: str) -> dict:
         release = Path(current_target)
         for path, marker in (
             ("deploy/download-config-dropin-v1", DOWNLOAD_CONFIG_MARKER),
-            ("deploy/production-download-v1", DOWNLOAD_PRODUCTION_CAPABILITY_MARKER),
+            ("deploy/production-download-v2", DOWNLOAD_PRODUCTION_CAPABILITY_MARKER_V2),
         ):
             item = release / path
             if not item.is_file() or item.is_symlink() or item.read_text(encoding="ascii").strip() != marker:
@@ -1168,11 +1176,11 @@ def apply_download_config_production(sha: str) -> dict:
                 raise DeployError("download_production_existing_unhealthy_disabled")
             return {
                 "status": "DOWNLOAD_PRODUCTION_ALREADY_ENABLED", "commit": sha,
-                "download_enabled": True, "profile": "production-download-v1",
+                "download_enabled": True, "profile": "production-download-v2",
                 "max_cache_bytes": 8589934592,
                 "min_free_bytes": 8589934592,
-                "max_active_tasks": 2,
-                "max_retained_tasks": 4,
+                "max_active_tasks": 24,
+                "max_retained_tasks": 32,
                 "max_waiters": 8,
                 "config_path": str(DOWNLOAD_CONFIG), "service_restarted": False,
             }
@@ -1182,7 +1190,7 @@ def apply_download_config_production(sha: str) -> dict:
             raise DeployError("download_production_requires_healthy_disabled_service")
         if shutil.disk_usage(DOWNLOAD_CACHE).free < DOWNLOAD_PRODUCTION_MIN_INITIAL_FREE:
             raise DeployError("download_production_insufficient_free_disk")
-        backup = _write_download_config_backup(current, 0o640, gid, sha, "production-download-v1")
+        backup = _write_download_config_backup(current, 0o640, gid, sha, "production-download-v2")
         try:
             _atomic_write_download_config(production, gid)
             run_fixed(["/usr/bin/systemctl", "restart", SERVICE], timeout=90)
@@ -1191,11 +1199,11 @@ def apply_download_config_production(sha: str) -> dict:
             return {
                 "status": "DOWNLOAD_PRODUCTION_ENABLED",
                 "commit": sha, "download_enabled": True,
-                "profile": "production-download-v1",
+                "profile": "production-download-v2",
                 "max_cache_bytes": 8589934592,
                 "min_free_bytes": 8589934592,
-                "max_active_tasks": 2,
-                "max_retained_tasks": 4,
+                "max_active_tasks": 24,
+                "max_retained_tasks": 32,
                 "max_waiters": 8,
                 "config_path": str(DOWNLOAD_CONFIG),
                 "config_mode": "0640", "backup": str(backup),
