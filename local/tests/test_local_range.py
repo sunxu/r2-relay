@@ -1,4 +1,8 @@
 import asyncio
+import hashlib
+import json
+import os
+import zipfile
 from pathlib import Path
 
 import httpx
@@ -579,3 +583,75 @@ async def test_local_directory_process_lock_still_rejects_second_owner(tmp_path)
             assert body == BODY[:128]
         finally:
             await second.close()
+
+
+@pytest.mark.asyncio
+async def test_optional_offline_archive_real_shape_and_sha256(tmp_path):
+    """Use extracted *synthetic* R2 patterns; never read real credentials or use R2."""
+    raw = os.environ.get("R2_LOCAL_RANGE_OFFLINE_ZIP")
+    if not raw:
+        pytest.skip("optional offline ZIP not supplied")
+    archive = Path(raw)
+    if not archive.is_file() or archive.is_symlink():
+        pytest.fail("offline ZIP must be a regular, non-symlinked file")
+    allowed = {
+        "README_CN.md", "all_requests_redacted_index.csv",
+        "selected_cases_redacted.json", "SYNTHETIC_object_25301339.bin",
+        "SYNTHETIC_expected_results.json",
+    }
+    with zipfile.ZipFile(archive) as source:
+        entries = source.infolist()
+        names = [item.filename for item in entries]
+        assert set(names) == allowed and len(names) == len(allowed)
+        assert all(item.file_size <= 32 * MIB and not item.is_dir() for item in entries)
+        expected = json.loads(source.read("SYNTHETIC_expected_results.json"))
+        assert expected["schema"] == "r2_local_range_synthetic_mock_data_v1"
+        assert expected["is_real_r2_data"] is False
+        assert expected["object_filename"] == "SYNTHETIC_object_25301339.bin"
+        data = source.read(expected["object_filename"])
+
+    assert len(data) == expected["object_size_bytes"] == 25301339
+    assert hashlib.sha256(data).hexdigest() == expected["object_sha256"]
+    assert expected["etag_mock"].startswith('"')
+    cases = expected["cases"]
+    assert len(cases) == 10
+
+    results = {}
+    for case in cases:
+        case_id = case["case_id"]
+        assert case_id not in results
+        original, calls = upstream(data, etag=expected["etag_mock"])
+
+        def handler(request):
+            rng = request.headers.get("range")
+            if rng == f"bytes={len(data)}-":
+                calls.append((rng, request.headers.get("if-match")))
+                return httpx.Response(
+                    416,
+                    headers={"Content-Range": f"bytes */{len(data)}", "Content-Length": "0"},
+                    stream=httpx.ByteStream(b""),
+                )
+            return original(request)
+
+        request_range = case["request_range"]
+        original_headers = [("Range", request_range)] if request_range else []
+        case_dir = tmp_path / case_id
+        case_dir.mkdir()
+        result, body = await run_download(case_dir, handler, original_headers)
+        actual_headers = {key.lower(): value for key, value in result.headers}
+        assert result.status_code == case["expected_status"], case_id
+        assert len(body) == case["expected_body_bytes"], case_id
+        assert hashlib.sha256(body).hexdigest() == case["expected_body_sha256"], case_id
+        if case["expected_content_range"] is not None:
+            assert actual_headers["content-range"] == case["expected_content_range"], case_id
+        else:
+            assert "content-range" not in actual_headers, case_id
+        assert calls[0] == (request_range, None), case_id
+        if case["expected_body_bytes"] > 2 * MIB and case["expected_status"] in (200, 206):
+            assert len(calls) > 1, f"{case_id}: expected actual child Ranges"
+            assert all(tag == expected["etag_mock"] for _, tag in calls[1:]), case_id
+        else:
+            assert len(calls) == 1, f"{case_id}: did not expect child Ranges"
+        assert not list((case_dir / "downloads" / "local").glob("r2-range-*.bin")), case_id
+        results[case_id] = len(calls)
+    assert len(results) == 10
