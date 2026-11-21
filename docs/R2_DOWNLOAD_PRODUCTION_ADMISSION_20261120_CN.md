@@ -69,3 +69,13 @@ Production 运行不具有自动租约到期，必须依靠显式关闭、磁盘
 - 独立只读 VPS 验证 `UNIFIED_DEPLOYMENT_STATUS_PASS` 和 `SERVICE_VERIFY_PASS`；但未独立读取本次任务的 VPS manifest / 实际上游 GET 次数。
 - Owner 当前无真实 R2 PUT 上传环境，本轮 **NOT_TESTED_ENV_UNAVAILABLE**；不搭建额外环境、不阻塞已验证的 GET 上线，也不宣称上传回归 PASS。
 - 详细签收及当前回滚边界见：[R2 GET 生产部署与验收签收](R2_DOWNLOAD_PRODUCTION_ACCEPTANCE_20261120_CN.md)。
+
+
+## 7. 容量调整申请（2026-11-21；尚未在 VPS 应用）
+
+Owner 根据 IOTA 实际 R2 GET 并发时 `POST /v1/downloads` 返回 HTTP 503 的日志，明确要求将 VPS 生产下载任务上限修改为 `max_active_tasks = 24` 和 `max_retained_tasks = 32`。此项属于 **production-download-v2 待部署变更**；上文 v1 的 2/4 和此前真实 GET 签收均为历史生产基线，不能将代码准备误称为现网生效。
+
+- 只修改这两个任务上限；`max_waiters = 8`、8 GiB 缓存预算、8 GiB 最低空闲、16 MiB Part、24 MiB 阈值、600 秒 TTL 均不变。提高任务数不意味着提高磁盘容量或等待者数量，仍可能出现 503。
+- 使用新的 `deploy/production-download-v2` 能力标记、固定 `production-download-v2` 配置、Receiver v9、GitHub Actions 精确回执校验；保留 v1 标记作历史兼容，不开放任意数值传参。
+- **必要的维护窗口**：先在 Issue #63 通过当前活动 SHA 执行 `/download-config disabled <旧SHA>` 并确认服务健康；再合并 PR、在 Owner 本机用受信 Root SSH Bootstrap 升级 Receiver v9、通过 Issue #63 执行 `/deploy <新main SHA>`，最后执行 `/download-config production <新main SHA>`。确认回执 `profile=production-download-v2`、`max_active_tasks=24`、`max_retained_tasks=32` 以及 VPS 健康，再恢复 IOTA 下载。不要在生产任务进行中重启服务。
+- 任一步失败维持 disabled 或旧 Release，不直接编辑 root-owned drop-in，不绕过 GitHub required checks；生产配置应用后仍须对真实 IOTA 并发观察 503、缓存空间与等待者上限。

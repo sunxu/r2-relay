@@ -52,7 +52,7 @@ def test_receiver_build_id_is_in_every_emitted_receipt(capsys):
     receiver.emit("TEST", marker="ok")
     import json
     payload = json.loads(capsys.readouterr().out)
-    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v8-production-download-v1"
+    assert payload["receiver_build_id"] == "r2-relay-deploy-receiver-v9-production-download-v2"
     assert payload["marker"] == "ok"
 
 
@@ -702,6 +702,8 @@ def _prepare_download_config_receiver_test(tmp_path, monkeypatch):
     test_marker.write_text(receiver.DOWNLOAD_TEST_CAPABILITY_MARKER + "\n", encoding="ascii")
     prod_marker = release / "deploy/production-download-v1"
     prod_marker.write_text(receiver.DOWNLOAD_PRODUCTION_CAPABILITY_MARKER + "\n", encoding="ascii")
+    prod_v2_marker = release / "deploy/production-download-v2"
+    prod_v2_marker.write_text(receiver.DOWNLOAD_PRODUCTION_CAPABILITY_MARKER_V2 + "\n", encoding="ascii")
 
     current = tmp_path / "current"
     current.symlink_to(release)
@@ -1217,11 +1219,11 @@ def test_production_enabled_requires_exact_sha_marker_disabled_health_and_disk(t
     assert result["status"] == "DOWNLOAD_PRODUCTION_ENABLED"
     assert result["commit"] == SHA
     assert result["download_enabled"] is True
-    assert result["profile"] == "production-download-v1"
+    assert result["profile"] == "production-download-v2"
     assert result["max_cache_bytes"] == 8 * 1024**3
     assert result["min_free_bytes"] == 8 * 1024**3
-    assert result["max_active_tasks"] == 2
-    assert result["max_retained_tasks"] == 4
+    assert result["max_active_tasks"] == 24
+    assert result["max_retained_tasks"] == 32
     assert result["max_waiters"] == 8
     assert config_path.read_text(encoding="utf-8") == receiver.DOWNLOAD_PRODUCTION_PROFILE_TEXT
     assert config_path.stat().st_mode & 0o777 == 0o640
@@ -1254,7 +1256,7 @@ def test_production_enable_rejects_incorrect_profile_and_missing_marker(tmp_path
     with __import__("pytest").raises(receiver.DeployError, match="requires_fixed_disabled_profile"):
         receiver.apply_download_config_production(SHA)
     config_path.write_text(receiver.DOWNLOAD_CONFIG_TEXT, encoding="utf-8")
-    (release / "deploy/production-download-v1").unlink()
+    (release / "deploy/production-download-v2").unlink()
     with __import__("pytest").raises(receiver.DeployError, match="capability_marker_missing"):
         receiver.apply_download_config_production(SHA)
 
@@ -1305,8 +1307,8 @@ def test_production_workflow_requires_main_pytest_and_exact_receipt_limits():
     assert 'select(.name == "pytest"' in workflow
     assert 'result.get("max_cache_bytes") == 8589934592' in workflow
     assert 'result.get("min_free_bytes") == 8589934592' in workflow
-    assert 'result.get("max_active_tasks") == 2' in workflow
-    assert 'result.get("max_retained_tasks") == 4' in workflow
+    assert 'result.get("max_active_tasks") == 24' in workflow
+    assert 'result.get("max_retained_tasks") == 32' in workflow
     assert 'result.get("max_waiters") == 8' in workflow
 
 
@@ -1328,4 +1330,24 @@ def test_archive_rejects_invalid_production_capability_marker(tmp_path):
             info.mode = 0o644
             output.addfile(info, io.BytesIO(data))
     with __import__("pytest").raises(receiver.DeployError, match="production_capability_marker_invalid"):
+        receiver.validate_archive(archive, SHA)
+
+def test_archive_rejects_invalid_production_v2_capability_marker(tmp_path):
+    archive = tmp_path / "invalid-production-v2-marker.tar"
+    files = {
+        "vps/pyproject.toml": b"[build-system]\n",
+        "vps/r2relay_vps/app.py": b"app = True\n",
+        "deploy/vps.service": receiver.UNIT_TEXT.encode(),
+        "deploy/requirements-vps.lock": b"fastapi==0.162.2\n",
+        "deploy/download-config-dropin-v1": (receiver.DOWNLOAD_CONFIG_MARKER + "\n").encode(),
+        "deploy/production-download-v2": b"unsupported-production-profile\n",
+        ".deployment-commit": (SHA + "\n").encode(),
+    }
+    with tarfile.open(archive, "w:") as output:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o644
+            output.addfile(info, io.BytesIO(data))
+    with __import__("pytest").raises(receiver.DeployError, match="download_production_v2_capability_marker_invalid"):
         receiver.validate_archive(archive, SHA)
