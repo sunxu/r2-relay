@@ -62,4 +62,18 @@
 | T32 | RLY-039 | 现有上传路径、默认配置和既有测试全部回归通过。 |
 | T33 | R2 real acceptance | 真实 R2 GET/Range GET 与故障场景 PASS_REAL；Mock 只能标记 PASS_SIMULATED。 |
 
+
+## RLY-033 方案 B 设计验收（2026-11-21，待实施）
+
+历史 v1 的 T27（方案 A：全文校验后才返回）保留为已上线版本的原始验收定义，**不得据此认定方案 B 已通过**。以下为 RLY-033 方案 B 的独立新验收项；当前状态均为 **NOT_IMPLEMENTED / NOT_TESTED**。对应详细场景见 [R2 下载中继规格](R2_DOWNLOAD_RELAY_V1_CN.md) 的 DL-T10/11/14/15/16/18/20/25。
+
+| 测试 ID | 需求 | 方案 B 的待验证通过条件 |
+|---|---|---|
+| T34 | RLY-029/033/034 | VPS 已获得真实 R2 响应头，任务仍 RECEIVING、正文被受控阻塞时，Mac → mitmproxy → 原始客户端**已经收到**真实状态码与合法端到端头；不得因 Loopback/mitmproxy 缓冲等到 COMPLETE；200/206、Range/Content-Range、304、未知长度均保留 HTTP 语义。 |
+| T35 | RLY-025/027/030/032/033/038 | 已知 Content-Length 且 >24 MiB 的响应：任务仍 RECEIVING、Part 2 未 READY 时，客户端可收到经 Mac 长度和 SHA-256 双重核验的 Part 1；Part 乱序并发取回仍严格按响应体顺序交付，背压有效、16/32 并发与内存/磁盘预算不超限；全长及最终 COMPLETE 验证后才能正常 EOF。 |
+| T36 | RLY-024/033/035/036/037 | 头前失败可返回明确代理错误；**头后失败或长度/摘要不符必须异常中断**、客户端能发现，不能插入 502 正文或正常 EOF；小响应保持有界缓冲、未知长度正文可保守等待 COMPLETE；客户端取消安全释放本地/VPS 资源，不重复 GET 混合版本。 |
+| T37 | RLY-033/034/035 | 使用真实 R2 与 IOTA 下载链路独立验证响应头先到、已校验 Part 有序流出、206 Range、签名头、失败/取消语义及 IOTA 接管兼容性；仅在真实证据齐全时报告 PASS_REAL，不以 Mock 或历史 v1 PASS 代替。 |
+
+这些 T34–T37 是 **设计验收目标**，不等于已写测试代码或已投入生产。后续代码实现与部署必须走独立 PR、CI、Owner 授权和真实 R2/IOTA 验收。
+
 详细测试矩阵见 [R2_DOWNLOAD_RELAY_V1_CN.md](R2_DOWNLOAD_RELAY_V1_CN.md)。VPS API 与 TOML 配置的 Stage 1 说明见 [R2_DOWNLOAD_VPS_CORE_CN.md](../R2_DOWNLOAD_VPS_CORE_CN.md)。Gate 0 的 1 GiB PoC 已通过；该结果不代表下载业务实现或真实 R2 验收通过。
