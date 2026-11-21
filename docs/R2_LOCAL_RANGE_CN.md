@@ -83,3 +83,46 @@ python local/poc/real_r2_download_acceptance.py
 已验证协议后，仍使用原有 \`local/poc/real_r2_mitmproxy_acceptance.py\` 在单独的 127.0.0.1:18586 mitmdump 实例上核对 TLS 代理和完整响应。该步骤要求独立临时配置、单独证书与私有样本；不得占用生产 18585，不能将这一步当作 iota-tools 的慢速接管已验证。最终 IOTA 兼容性需在独立 replacement_proxy 及可复现的慢速触发环境下验证，且必须继续保留 IOTA 前缀 SHA-256 责任边界。
 
 **真实验收仍待在拥有私有请求样本的 Mac 运行。** 公开 GitHub Actions 的 Mock 测试结果不代表 R2 真机通过，严禁向 GitHub Secrets、Issue、PR 日志或本文件复制签名 URL / Token。
+
+
+## 独立 Mac 测试工作区（PR #82）
+
+可重复使用仓库内 local/poc/local_range_workspace.sh 初始化，不修改当前 ~/workspace/r2-relay、~/workspace/r2-relay-production 或 ~/.config/r2-relay/config.toml。该脚本仅允许在独立克隆、指定功能分支上执行；已有测试 TOML 不会被覆盖。
+
+首次在 **Mac** 执行：
+
+~~~bash
+mkdir -p "$HOME/workspace"
+git clone --single-branch --branch feat/local-httpx-range-backend \
+  https://github.com/sunxu/r2-relay.git \
+  "$HOME/workspace/r2-relay-local-range-test"
+bash "$HOME/workspace/r2-relay-local-range-test/local/poc/local_range_workspace.sh" setup
+~~~
+
+setup 创建独立 .venv（Python >=3.11）、安装既有 Local/VPS 测试依赖，写入只供测试使用的 Local TOML，执行现有 config/addon/local_range/real-R2-spec **Mock** 测试；不发真实 R2 GET，不启动 18585/18586，不操作生产进程或 VPS。
+
+| 类型 | 工作区 |
+| --- | --- |
+| 独立 Git 代码 | ~/workspace/r2-relay-local-range-test/ |
+| 独立 Python | 该代码目录下的 .venv/ |
+| 只读现有签名请求样本 | 执行者提供原有 mode-0600 绝对路径，不复制 |
+| 私有配置 (0600) | ~/.local/share/r2-relay/private/local-range-acceptance/config.toml |
+| 独立缓存 (0700) | ~/.cache/r2-relay/local-range-acceptance/downloads/ |
+| Local 内部分片文件 | 独立缓存下的 local/，退出后清理 |
+
+配置为 download.enabled=true、backend="local"、max_temp_mib=64，固定 2 MiB 分片、单 GET 8 连接、Local 全局 128 连接，Remote 继续默认且生产无变化。
+
+仅重新运行离线测试：
+
+~~~bash
+bash "$HOME/workspace/r2-relay-local-range-test/local/poc/local_range_workspace.sh" smoke
+~~~
+
+**只有收到明确的真实 R2 测试授权、拥有有效的已有私有 0600 请求样本后**，执行：
+
+~~~bash
+bash "$HOME/workspace/r2-relay-local-range-test/local/poc/local_range_workspace.sh" \
+  real "/absolute/path/to/existing-private-0600.json"
+~~~
+
+脚本会复用同一测试配置和 real_r2_download_acceptance.py，不会输出签名 URL/认证头。PASS_REAL_LOCAL 且 child_range_requests > 0 说明真实样本触发了子 Range；还须检查哈希/响应头及回收结果。该命令会主动发真实 R2 请求，不属于初始化过程。独立 18586 mitmdump/原始 IOTA 替代接管属于后续验收，**初始化不会自动启动**。
