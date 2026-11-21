@@ -108,18 +108,36 @@ def run() -> int:
             raise FileNotFoundError("mitmproxy_ca_missing")
         hasher = hashlib.sha256()
         size = 0
+        header_elapsed_ms = None
+        first_body_elapsed_ms = None
+        first_16mib_elapsed_ms = None
         with httpx.Client(proxy=proxy, verify=str(ca_path), timeout=120,
                           follow_redirects=False, trust_env=False) as client:
             with client.stream("GET", spec["url"], headers=spec["headers"]) as response:
+                header_elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
                 status = response.status_code
-                for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                # R2 acceptance compares the wire representation, not auto-decompressed bytes.
+                for chunk in response.iter_raw(chunk_size=1024 * 1024):
+                    if not chunk:
+                        continue
+                    if first_body_elapsed_ms is None:
+                        first_body_elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
                     size += len(chunk)
                     if size > 64 * 1024 * 1024:
                         raise ValueError("response_over_64_mib")
+                    if size >= 16 * 1024 * 1024 and first_16mib_elapsed_ms is None:
+                        first_16mib_elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
                     hasher.update(chunk)
                 report = check_response(spec, status=status, headers=response.headers,
                                         size=size, digest=hasher.hexdigest())
         report["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 1)
+        report["header_elapsed_ms"] = header_elapsed_ms
+        report["first_body_elapsed_ms"] = first_body_elapsed_ms
+        report["first_16mib_elapsed_ms"] = first_16mib_elapsed_ms
+        # A measured observation, not a synthetic PASS_REAL/T37 assertion.
+        report["header_before_iota_20s_timeout"] = (
+            header_elapsed_ms is not None and header_elapsed_ms < 20000
+        )
         print(json.dumps(report, sort_keys=True, indent=2))
         return 0 if report["status"] == "PASS_REAL_PROXY" else 1
     except Exception as exc:
