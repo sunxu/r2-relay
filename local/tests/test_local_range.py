@@ -431,3 +431,36 @@ async def test_child_transport_retry_reuses_exact_range_without_versions(tmp_pat
     assert len(attempts) == 2
     assert all(count == 2 for count in attempts.values())
     assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_httpx_does_not_inject_new_accept_encoding_or_user_agent(tmp_path):
+    base, _ = upstream()
+    seen = []
+
+    def record(request):
+        seen.append(request.headers)
+        return base(request)
+
+    result, body = await run_download(tmp_path, record)
+    assert result.status_code == 200
+    assert body == BODY
+    assert len(seen) == 3
+    for headers in seen:
+        assert "accept-encoding" not in headers
+        assert "user-agent" not in headers
+        assert "accept" not in headers
+
+    seen.clear()
+    original = [
+        ("Accept-Encoding", "identity"),
+        ("User-Agent", "iota-test"),
+        ("Accept", "application/octet-stream"),
+        ("X-Test-Request", "retained"),
+    ]
+    result, body = await run_download(tmp_path, record, original)
+    assert body == BODY
+    assert len(seen) == 3
+    for headers in seen:
+        for key, value in original:
+            assert headers[key] == value
