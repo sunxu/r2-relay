@@ -516,8 +516,10 @@ class DownloadCoordinator:
             expected = int(expected) if expected is not None else None
             if expected is not None and expected < 0:
                 raise DownloadRelayError("R2 原始 Content-Length 无效")
+            bodyless = status in (204, 304) or 100 <= status < 200
             large = (
-                expected is not None
+                not bodyless
+                and expected is not None
                 and expected > 24 * 1024 * 1024
             )
             if large and (
@@ -525,7 +527,7 @@ class DownloadCoordinator:
                 or shutil.disk_usage(self.root).free < expected
             ):
                 raise DownloadCapacityError("下载响应超过 Mac 临时磁盘容量")
-            if expected is not None and not large and (
+            if expected is not None and not bodyless and not large and (
                 expected > self.settings.download_small_memory_bytes
             ):
                 # No body has been committed yet: fail before sending success headers.
