@@ -228,3 +228,69 @@ def test_real_r2_non_range_spec_still_requires_at_least_one_expected_header(
 
     loaded = MODULE.load_spec()
     assert loaded["expected_headers"] == {"etag": '"object-version"'}
+
+
+@pytest.mark.asyncio
+async def test_real_r2_spec_local_backend_reuses_private_spec_and_stream(tmp_path, monkeypatch, capsys):
+    body = b"private-fixture" * 50
+    data = valid_spec()
+    data.update({
+        "expected_status_code": 206,
+        "expected_size": len(body),
+        "expected_sha256": hashlib.sha256(body).hexdigest(),
+        "headers": [["Range", f"bytes=0-{len(body)-1}"]],
+        "expected_headers": {
+            "content-range": f"bytes 0-{len(body)-1}/{len(body)}",
+            "content-length": str(len(body)),
+        },
+    })
+    path = tmp_path / "private.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    path.chmod(0o600)
+    monkeypatch.setenv("R2_RELAY_REAL_GET_SPEC", str(path))
+    monkeypatch.delenv("R2_RELAY_VPS_URL", raising=False)
+    monkeypatch.delenv("R2_RELAY_TOKEN", raising=False)
+    monkeypatch.setattr(
+        MODULE, "load_settings",
+        lambda: SimpleNamespace(download_enabled=True, download_backend="local"),
+    )
+
+    closed = []
+    class FakeLocal:
+        def __init__(self, settings):
+            self.root = tmp_path
+            self.disk_budget = SimpleNamespace(used=0)
+            self._cleanups = set()
+            self.split_gets = 1
+            self.child_range_requests = 2
+
+        async def download_stream(self, url, headers):
+            assert url == data["url"]
+            assert headers == [("Range", f"bytes=0-{len(body)-1}")]
+            async def chunks():
+                yield body[:123]
+                yield body[123:]
+            async def cleanup():
+                pass
+            return SimpleNamespace(
+                status_code=206,
+                headers=[
+                    ("Content-Length", str(len(body))),
+                    ("Content-Range", f"bytes 0-{len(body)-1}/{len(body)}"),
+                ],
+                stream=chunks(), cleanup=cleanup,
+            )
+
+        async def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(MODULE, "LocalRangeDownloader", FakeLocal)
+    exit_code = await MODULE.run()
+    report = json.loads(capsys.readouterr().out)
+    assert exit_code == 0
+    assert report["status"] == "PASS_REAL_LOCAL"
+    assert report["child_range_requests"] == 2
+    assert report["expected_sha256_match"]
+    assert report["local_temp_cleanup_ok"]
+    assert report["signed_url_or_headers_logged"] is False
+    assert closed == [True]
