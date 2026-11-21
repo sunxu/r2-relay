@@ -152,6 +152,7 @@ async def test_local_backend_selects_direct_downloader_without_token(tmp_path, m
     try:
         assert isinstance(obj.downloads, FakeLocal)
         assert obj.upload_relay_enabled is False
+        assert obj.relay is None
         f = flow(body=b"hello", length=5)
         obj.requestheaders(f)
         await obj.request(f)
