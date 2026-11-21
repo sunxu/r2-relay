@@ -358,6 +358,55 @@ async def test_plan_b_client_disconnect_cancels_pending_part_wait(tmp_path):
         await disk.close()
 
 
+@pytest.mark.asyncio
+async def test_plan_b_304_content_length_is_metadata_not_body_allocation(tmp_path):
+    class NotModifiedRelay:
+        execution_timeout = 5
+        poll_interval = 0.001
+        deleted = False
+
+        async def download_create(self, request_id, url, headers):
+            return {"task_id": "not-modified"}
+
+        async def download_manifest(self, task_id):
+            return {
+                "task_id": task_id, "status": "COMPLETE", "mode": "small",
+                "status_code": 304,
+                "headers": [("Content-Length", str(25 * MIB)), ("ETag", '"metadata-only"')],
+                "total_size": 0, "expected_size": 25 * MIB,
+            }
+
+        async def download_body(self, task_id, *, max_bytes):
+            return bytearray()
+
+        async def download_delete(self, task_id):
+            self.deleted = True
+
+    relay = NotModifiedRelay()
+    coordinator = DownloadCoordinator(relay, local_settings(tmp_path))
+    disk = DiskResponseServer()
+    try:
+        result = await coordinator.download_stream(R2_URL, [])
+        assert result.status_code == 304
+        assert result.stream is not None
+        assert coordinator.disk_budget.used == 0
+        token = await disk.register(result)
+        reader, writer = await asyncio.open_connection("127.0.0.1", disk.port)
+        writer.write(f"GET /download/{token} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+        await writer.drain()
+        raw = await asyncio.wait_for(reader.read(), timeout=3)
+        headers, body = raw.split(b"\r\n\r\n", 1)
+        assert headers.startswith(b"HTTP/1.1 304 Not Modified")
+        assert str(25 * MIB).encode() in headers
+        assert body == b""
+        writer.close()
+        await writer.wait_closed()
+        assert coordinator.disk_budget.used == 0
+    finally:
+        await disk.close()
+        await coordinator.close()
+
+
 class FakeDownloads:
     def __init__(self, result):
         self.result = result
