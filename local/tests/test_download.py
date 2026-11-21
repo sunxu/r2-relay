@@ -359,6 +359,50 @@ async def test_plan_b_client_disconnect_cancels_pending_part_wait(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_plan_b_completed_bytes_client_close_during_cleanup_is_not_truncation(caplog):
+    """The client may close after Content-Length bytes while VPS DELETE is pending."""
+    cleanup_unblock = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def streamed_body():
+        yield b"verified"
+        # Simulate final task / remote cleanup occurring after last body byte.
+        await cleanup_unblock.wait()
+
+    async def cleanup():
+        finished.set()
+
+    disk = DiskResponseServer()
+    token = await disk.register(DownloadResult(
+        status_code=206, headers=[], size=len(b"verified"),
+        stream=streamed_body(), cleanup=cleanup,
+    ))
+    writer = None
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", disk.port)
+        writer.write(f"GET /download/{token} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+        await writer.drain()
+        await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=3)
+        assert await asyncio.wait_for(reader.readexactly(8), timeout=3) == b"verified"
+        writer.close()
+        await writer.wait_closed()
+        cleanup_unblock.set()
+        await asyncio.wait_for(finished.wait(), timeout=3)
+        for _ in range(50):
+            if not disk.handlers:
+                break
+            await asyncio.sleep(0.01)
+        assert not disk.handlers
+        assert not any("R2 download response terminated" in record.getMessage()
+                       for record in caplog.records)
+    finally:
+        cleanup_unblock.set()
+        if writer is not None:
+            writer.close()
+        await disk.close()
+
+
+@pytest.mark.asyncio
 async def test_plan_b_304_content_length_is_metadata_not_body_allocation(tmp_path):
     class NotModifiedRelay:
         execution_timeout = 5
