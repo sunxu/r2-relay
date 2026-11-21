@@ -515,7 +515,7 @@ class DownloadCoordinator:
                 raise DownloadRelayError("R2 原始 Content-Length 无效")
             large = (
                 expected is not None
-                and expected > self.settings.download_split_threshold_bytes
+                and expected > 24 * 1024 * 1024
             )
             if large and (
                 expected > self.settings.download_max_temp_bytes
