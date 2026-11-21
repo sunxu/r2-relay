@@ -105,7 +105,7 @@ def test_proxy_acceptance_streams_without_logging_signed_url(tmp_path, monkeypat
         def __exit__(self, *args):
             pass
         def iter_raw(self, chunk_size):
-            assert chunk_size == 1024 * 1024
+            assert chunk_size == 64 * 1024
             yield body[:2]
             yield body[2:]
 
