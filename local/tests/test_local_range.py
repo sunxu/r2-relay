@@ -464,3 +464,26 @@ async def test_httpx_does_not_inject_new_accept_encoding_or_user_agent(tmp_path)
     for headers in seen:
         for key, value in original:
             assert headers[key] == value
+
+
+@pytest.mark.asyncio
+async def test_original_206_short_of_explicit_range_does_not_split(tmp_path):
+    requests = []
+    observed_length = 3 * MIB
+    requested_end = len(BODY) - 1
+
+    def handler(request):
+        requests.append(request.headers.get("range"))
+        assert request.headers.get("if-match") is None
+        return httpx.Response(206, headers={
+            "Content-Range": f"bytes 0-{observed_length-1}/{len(BODY)}",
+            "Content-Length": str(observed_length),
+            "ETag": ETAG,
+        }, stream=httpx.ByteStream(BODY[:observed_length]))
+
+    result, output = await run_download(
+        tmp_path, handler, [("Range", f"bytes=0-{requested_end}")],
+    )
+    assert result.status_code == 206
+    assert output == BODY[:observed_length]
+    assert requests == [f"bytes=0-{requested_end}"]
