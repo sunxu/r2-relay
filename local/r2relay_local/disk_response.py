@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from http import HTTPStatus
 from urllib.parse import urlsplit
 
 from .download import DownloadResult
+
+LOG = logging.getLogger("r2relay.local.disk_response")
 
 HOP_HEADERS = {
     "connection", "keep-alive", "proxy-connection", "transfer-encoding",
@@ -27,7 +30,10 @@ def _response_headers(result: DownloadResult) -> list[tuple[str, str]]:
         headers = [(k, v) for k, v in headers if k.lower() != "content-length"]
     elif not bodyless:
         headers = [(k, v) for k, v in headers if k.lower() != "content-length"]
-        headers.append(("Content-Length", str(result.size)))
+        if result.size >= 0:
+            headers.append(("Content-Length", str(result.size)))
+        else:
+            headers.append(("Transfer-Encoding", "chunked"))
     headers.append(("Connection", "close"))
     return headers
 
@@ -69,24 +75,40 @@ class DiskResponseServer:
         if status in (204, 304) or 100 <= status < 200:
             return
         sent = 0
-        if result.body is not None:
+
+        async def send(data: bytes) -> None:
+            nonlocal sent
+            if result.size < 0:
+                writer.write(f"{len(data):x}\r\n".encode("ascii"))
+                writer.write(data)
+                writer.write(b"\r\n")
+            else:
+                writer.write(data)
+            await writer.drain()
+            sent += len(data)
+
+        if result.stream is not None:
+            async for chunk in result.stream:
+                if chunk:
+                    await send(chunk)
+        elif result.body is not None:
             view = memoryview(result.body)
             while sent < len(view):
                 chunk = view[sent:sent + 1024 * 1024]
-                writer.write(chunk)
-                await writer.drain()
-                sent += len(chunk)
+                await send(bytes(chunk))
         elif result.path is not None:
             with result.path.open("rb", buffering=0) as stream:
                 while True:
                     chunk = await asyncio.to_thread(stream.read, 1024 * 1024)
                     if not chunk:
                         break
-                    writer.write(chunk)
-                    await writer.drain()
-                    sent += len(chunk)
-        if sent != result.size:
-            raise OSError("本地响应文件长度与已验证长度不一致")
+                    await send(chunk)
+        if result.size >= 0:
+            if sent != result.size:
+                raise OSError("本地响应文件长度与已验证长度不一致")
+        else:
+            writer.write(b"0\r\n\r\n")
+            await writer.drain()
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         current = asyncio.current_task()
@@ -122,9 +144,11 @@ class DiskResponseServer:
             writer.write("".join(head).encode("latin-1"))
             await writer.drain()
             await self._write_body(writer, result)
-        except (asyncio.IncompleteReadError, BrokenPipeError, ConnectionResetError, OSError, ValueError):
-            # 原始客户端可能中途断开；无论如何都要释放本地响应资源。
-            pass
+        except Exception as exc:
+            # After the original status was sent we cannot manufacture a 502.
+            # Abort (not a valid final chunk / EOF) so clients detect truncation.
+            LOG.warning("R2 download response terminated: %s", type(exc).__name__)
+            writer.transport.abort()
         finally:
             if result is not None and result.cleanup is not None:
                 await result.cleanup()
@@ -146,6 +170,8 @@ class DiskResponseServer:
         for writer in tuple(self.writers):
             writer.close()
         handlers = [task for task in self.handlers if task is not asyncio.current_task()]
+        for task in handlers:
+            task.cancel()
         if handlers:
             await asyncio.gather(*handlers, return_exceptions=True)
         for token in tuple(self.routes):
