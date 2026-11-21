@@ -10,6 +10,18 @@ from r2relay_local.relay import RelayUnavailable, UpstreamResult
 
 URL = "https://abc.r2.cloudflarestorage.com/b/k?uploadId=x&partNumber=1"
 
+# Upload-only tests must not inherit the workstation's optional Local GET
+# backend. Instantiating LocalRangeDownloader acquires an exclusive process
+# lock, which these upload fixtures do not own or clean up.
+def upload_only_settings():
+    return Settings(
+        max_part_bytes=128 * 1024 * 1024,
+        global_budget_bytes=1024 * 1024 * 1024,
+        source=Path("test-upload-only.toml"),
+        download_enabled=False,
+    )
+
+
 
 class StubRelay:
     def __init__(self, result=None, error=None):
@@ -42,7 +54,7 @@ async def test_r2_502_stays_r2_502_no_direct_fallback():
     relay = StubRelay(UpstreamResult(
         502, [("ETag", '"test"'), ("Content-Length", "100")], b"R2 failed"
     ))
-    addon = R2RelayAddon(relay)
+    addon = R2RelayAddon(relay, settings=upload_only_settings())
     f = flow(length=5)
     addon.requestheaders(f)
     await addon.request(f)
@@ -56,7 +68,7 @@ async def test_r2_502_stays_r2_502_no_direct_fallback():
 @pytest.mark.asyncio
 async def test_vps_unavailable_leaves_original_flow_for_direct_r2():
     relay = StubRelay(error=RelayUnavailable("offline"))
-    addon = R2RelayAddon(relay)
+    addon = R2RelayAddon(relay, settings=upload_only_settings())
     f = flow(length=5)
     addon.requestheaders(f)
     await addon.request(f)
@@ -68,7 +80,7 @@ async def test_vps_unavailable_leaves_original_flow_for_direct_r2():
 @pytest.mark.asyncio
 async def test_other_traffic_never_uses_relay():
     relay = StubRelay(UpstreamResult(200, [], b""))
-    addon = R2RelayAddon(relay)
+    addon = R2RelayAddon(relay, settings=upload_only_settings())
     f = flow(url="https://example.com/", body=b"noop", length=4)
     await addon.request(f)
     assert relay.calls == []
