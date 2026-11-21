@@ -457,6 +457,9 @@ class DownloadCoordinator:
                 worker.result()  # Raises the original upstream/validation error.
             ready_size = progress.ready.get(next_part)
             if ready_size is None:
+                if worker.done():
+                    worker.result()
+                    raise DownloadRelayError("响应已结束但缺少预期 READY Part")
                 progress.changed.clear()
                 if next_part not in progress.ready and not worker.done():
                     await progress.changed.wait()
