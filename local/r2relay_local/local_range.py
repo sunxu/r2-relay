@@ -151,6 +151,10 @@ class LocalRangeDownloader:
         self.client = client or httpx.AsyncClient(
             http2=http2_enabled(), trust_env=False, follow_redirects=False, verify=True,
             headers={},  # do not inject HTTPX Accept-Encoding into the original GET
+            limits=httpx.Limits(
+                max_connections=settings.download_local_global_max_connections,
+                max_keepalive_connections=min(20, settings.download_local_global_max_connections),
+            ),
             timeout=httpx.Timeout(90.0, connect=15.0, read=90.0, write=30.0),
         )
         self._owns_client = client is None
