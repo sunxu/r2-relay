@@ -263,7 +263,7 @@ async def test_plan_b_headers_and_verified_first_part_arrive_before_vps_complete
         head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=10)
         assert head.startswith(b"HTTP/1.1 206 Partial Content")
         assert f"Content-Length: {expected_length}\r\n".encode() in head
-        assert b"Content-Range:" in head
+        assert b"content-range:" in head.lower()
         assert not release_tail.is_set()
         # At this point the VPS still has 9 MiB of R2 data blocked.
         observed_first = await asyncio.wait_for(reader.readexactly(len(first)), timeout=20)
