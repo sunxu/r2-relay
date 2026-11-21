@@ -70,7 +70,10 @@ class DiskResponseServer:
         if result is not None and result.cleanup is not None:
             await result.cleanup()
 
-    async def _write_body(self, writer: asyncio.StreamWriter, result: DownloadResult) -> None:
+    async def _write_body(
+        self, writer: asyncio.StreamWriter, result: DownloadResult,
+        body_progress: list[int] | None = None,
+    ) -> None:
         status = result.status_code
         if status in (204, 304) or 100 <= status < 200:
             return
@@ -86,6 +89,8 @@ class DiskResponseServer:
                 writer.write(data)
             await writer.drain()
             sent += len(data)
+            if body_progress is not None:
+                body_progress[0] = sent
 
         if result.stream is not None:
             async for chunk in result.stream:
@@ -143,7 +148,8 @@ class DiskResponseServer:
             head.append("\r\n")
             writer.write("".join(head).encode("latin-1"))
             await writer.drain()
-            body_task = asyncio.create_task(self._write_body(writer, result))
+            body_progress = [0]
+            body_task = asyncio.create_task(self._write_body(writer, result, body_progress))
             # The client may leave while waiting for the next READY Part.
             # Cancel promptly rather than keeping VPS and disk reservations alive.
             disconnect_task = asyncio.create_task(reader.read(1))
@@ -152,6 +158,11 @@ class DiskResponseServer:
                     (body_task, disconnect_task), return_when=asyncio.FIRST_COMPLETED,
                 )
                 if body_task in done:
+                    await body_task
+                elif result.size >= 0 and body_progress[0] == result.size:
+                    # A Content-Length response has already been fully written.
+                    # The peer can close while body_stream finishes cleanup,
+                    # including VPS DELETE, without constituting truncation.
                     await body_task
                 else:
                     raise ConnectionResetError("R2 download client disconnected")
