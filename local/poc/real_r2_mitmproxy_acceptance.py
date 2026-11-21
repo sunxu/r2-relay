@@ -117,7 +117,9 @@ def run() -> int:
                 header_elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
                 status = response.status_code
                 # R2 acceptance compares the wire representation, not auto-decompressed bytes.
-                for chunk in response.iter_raw(chunk_size=1024 * 1024):
+                # IOTA reads up to 64 KiB per iteration. Use the same probe
+                # granularity instead of delaying first-body timing by 1 MiB.
+                for chunk in response.iter_raw(chunk_size=64 * 1024):
                     if not chunk:
                         continue
                     if first_body_elapsed_ms is None:
