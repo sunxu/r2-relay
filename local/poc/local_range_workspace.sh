@@ -44,8 +44,11 @@ smoke() {
     validate_config
     (
         cd "$root/local"
-        env -u R2_RELAY_ENABLE_ADDON -u R2_RELAY_TOKEN -u R2_RELAY_VPS_URL -u R2_RELAY_VPS_CA_FILE \
-            R2_RELAY_CONFIG="$config" \
+        # Unit tests use their own settings/fixtures; do not let the
+        # acceptance-only Local config accidentally initialize a real
+        # downloader (and acquire its exclusive cache lock).
+        env -u R2_RELAY_CONFIG -u R2_RELAY_ENABLE_ADDON \
+            -u R2_RELAY_TOKEN -u R2_RELAY_VPS_URL -u R2_RELAY_VPS_CA_FILE \
             "$venv/bin/python" -m pytest -q \
             tests/test_config.py tests/test_addon.py \
             tests/test_local_range.py tests/test_real_r2_download_acceptance.py
