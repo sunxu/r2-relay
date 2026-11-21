@@ -467,10 +467,10 @@ class DownloadCoordinator:
             if ready_size <= 0 or ready_size > total_size - sent or progress.path is None:
                 raise DownloadRelayError("READY Part 的长度或文件位置无效")
             with progress.path.open("rb", buffering=0) as source:
-                await asyncio.to_thread(source.seek, (next_part - 1) * part_size)
+                await _run_disk_operation(source.seek, (next_part - 1) * part_size)
                 remaining = ready_size
                 while remaining:
-                    chunk = await asyncio.to_thread(source.read, min(1024 * 1024, remaining))
+                    chunk = await _run_disk_operation(source.read, min(1024 * 1024, remaining))
                     if not chunk:
                         raise DownloadRelayError("Mac 已验证 Part 在交付前发生截断")
                     yield chunk
@@ -567,7 +567,7 @@ class DownloadCoordinator:
                         elif completed.path is not None:
                             with completed.path.open("rb", buffering=0) as source:
                                 while True:
-                                    chunk = await asyncio.to_thread(source.read, 1024 * 1024)
+                                    chunk = await _run_disk_operation(source.read, 1024 * 1024)
                                     if not chunk:
                                         break
                                     yield chunk
