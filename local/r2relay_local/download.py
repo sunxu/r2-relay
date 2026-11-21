@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import AsyncIterator, Awaitable, Callable
 
 import httpx
 
@@ -77,6 +77,23 @@ class DownloadResult:
     body: bytes | bytearray | None = None
     path: Path | None = None
     cleanup: Callable[[], Awaitable[None]] | None = None
+    stream: AsyncIterator[bytes] | None = None
+
+
+@dataclass
+class _PartStreamProgress:
+    """A Part is exposed only after Mac length and SHA-256 verification."""
+    path: Path | None = None
+    ready: dict[int, int] | None = None
+    changed: asyncio.Event | None = None
+
+    def __post_init__(self) -> None:
+        self.ready = {}
+        self.changed = asyncio.Event()
+
+    def publish(self, number: int, size: int) -> None:
+        self.ready[number] = size
+        self.changed.set()
 
 
 class WeightedBudget:
@@ -191,6 +208,7 @@ class DownloadCoordinator:
         part_size_bytes: int,
         per_file_semaphore: asyncio.Semaphore,
         held_parts: dict[int, int],
+        progress: _PartStreamProgress | None = None,
     ) -> None:
         number = int(part["part_number"])
         size = int(part["size"])
@@ -232,6 +250,8 @@ class DownloadCoordinator:
                 if digest.hexdigest() != expected_hash:
                     raise DownloadRelayError("Part SHA-256 校验失败")
                 held_parts[number] = size
+                if progress is not None:
+                    progress.publish(number, size)
                 return
             except (
                 httpx.TransportError,
@@ -248,11 +268,14 @@ class DownloadCoordinator:
         )
 
     async def _download_large(
-        self, task_id: str, manifest: dict, *, deadline: float
+        self, task_id: str, manifest: dict, *, deadline: float,
+        progress: _PartStreamProgress | None = None,
     ) -> DownloadResult:
         fd, raw_path = tempfile.mkstemp(prefix="r2-download-", suffix=".bin", dir=self.root)
         path = Path(raw_path)
         os.fchmod(fd, 0o600)
+        if progress is not None:
+            progress.path = path
         held_parts: dict[int, int] = {}
         inflight: dict[int, asyncio.Task] = {}
         fetched: set[int] = set()
@@ -319,7 +342,7 @@ class DownloadCoordinator:
                                 self._fetch_one_part(
                                     task_id, part, fd,
                                     int(manifest["part_size_bytes"]),
-                                    per_file_semaphore, held_parts,
+                                    per_file_semaphore, held_parts, progress,
                                 )
                             )
 
