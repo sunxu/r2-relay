@@ -559,3 +559,23 @@ async def test_cancel_while_initial_stream_is_blocked_releases_all_resources(tmp
         finally:
             block.set()
             await downloader.close()
+
+
+@pytest.mark.asyncio
+async def test_local_directory_process_lock_still_rejects_second_owner(tmp_path):
+    """The smoke fix must not weaken actual Local storage exclusivity."""
+    handler, _ = upstream(BODY[:128])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        first = LocalRangeDownloader(settings(tmp_path), client=client)
+        try:
+            with pytest.raises(RuntimeError, match="Local download directory in use"):
+                LocalRangeDownloader(settings(tmp_path), client=client)
+        finally:
+            await first.close()
+        second = LocalRangeDownloader(settings(tmp_path), client=client)
+        try:
+            result = await second.download_stream(URL, [])
+            body = b"".join([part async for part in result.stream])
+            assert body == BODY[:128]
+        finally:
+            await second.close()
