@@ -87,3 +87,10 @@
 - 记录 Part/body 流式 API 实际协商的 HTTP 版本，而不只记录创建任务/manifest 请求。
 - 修正 mitmproxy allow-hosts，明确允许 R2 endpoint 与本地 Loopback 响应服务；新增命令参数回归测试。
 - 真实 R2 手册增加 25 MiB 测试对象、直连 Range 基线、0600 私有 spec 和真实 18585 mitmproxy 路径验收步骤。
+
+## 设计修订（待实施）— 2026-11-21
+- Owner 确认将 RLY-033 的未来交付行为由 **方案 A：全文件完整校验后返回** 改为 **方案 B：R2 响应头尽早交付、已验证 READY Part 按本次响应正文顺序渐进交付**。
+- 保留单次 R2 GET、16 MiB 原子 READY Part、24 MiB 阈值、Mac 16/32 并发及内存/磁盘保护；小响应与未知长度正文首版维持原受控路径，但其响应头不因等待全文完成而延迟。
+- 明确发头后故障只能异常中断，不可改写状态码、伪造正常完成或将第二次 GET 的数据与原任务混合；保持 HTTP 206/Range、端到端头、原始编码字节语义。
+- 历史 v1 的 T27 不改写；新增独立 **T34–T37** 作为方案 B 的 Mock、HTTP、部分交付/背压、故障和真实 R2/IOTA 验收门槛。
+- 关联 [Issue #63](https://github.com/sunxu/r2-relay/issues/63) 与设计 Draft PR #78。**本次仅修改需求文档，不包括代码、配置、部署、服务重启或方案 B PASS 声明**。
