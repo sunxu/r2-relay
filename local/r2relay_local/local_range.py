@@ -92,8 +92,8 @@ def _signed_headers(url: str, headers: list[tuple[str, str]]) -> set[str] | None
 def _plan(
     response: httpx.Response, url: str, headers: list[tuple[str, str]],
     length: int | None, chunk_size: int, minimum: int,
-) -> tuple[int, int, str] | None:
-    """Return (absolute_first_byte, response_length, strong_etag) or single mode."""
+) -> tuple[int, int, str, int] | None:
+    """Return (absolute_first_byte, response_length, etag, object_size) or None."""
     if response.status_code not in (200, 206) or length is None or length <= chunk_size:
         return None
     if length < minimum or response.headers.get("content-encoding", "identity").lower() != "identity":
@@ -122,12 +122,12 @@ def _plan(
                 or last - first + 1 != length
                 or (requested_end is not None and last > requested_end)):
             return None
-        return first, length, etag
+        return first, length, etag, total
     if response.status_code != 200 or response.headers.get("accept-ranges", "").lower() != "bytes":
         return None
     if response.headers.get("content-range") is not None:
         return None
-    return 0, length, etag
+    return 0, length, etag, length
 
 
 class LocalRangeDownloader:
@@ -200,7 +200,8 @@ class LocalRangeDownloader:
 
     async def _child(
         self, url: str, headers: list[tuple[str, str]],
-        first: int, length: int, etag: str, last_modified: str | None,
+        first: int, length: int, etag: str, total: int,
+        last_modified: str | None,
         index: int, fd: int, per_get: asyncio.Semaphore, progress: _Progress,
     ) -> None:
         offset = index * self.chunk_size
@@ -221,7 +222,7 @@ class LocalRangeDownloader:
                             if (response.status_code != 206 or parsed is None
                                     or int(parsed.group(1)) != start
                                     or int(parsed.group(2)) != end
-                                    or int(parsed.group(3)) <= end
+                                    or int(parsed.group(3)) != total
                                     or _length(response) != part_len
                                     or _strong_etag(response) != etag
                                     or response.headers.get("content-encoding", "identity").lower() != "identity"
@@ -239,7 +240,8 @@ class LocalRangeDownloader:
     async def _produce(
         self, initial: httpx.Response, release_initial,
         url: str, headers: list[tuple[str, str]],
-        first: int, length: int, etag: str, last_modified: str | None,
+        first: int, length: int, etag: str, total: int,
+        last_modified: str | None,
         fd: int, progress: _Progress, per_get: asyncio.Semaphore,
     ) -> None:
         count = (length + self.chunk_size - 1) // self.chunk_size
@@ -265,7 +267,7 @@ class LocalRangeDownloader:
                        and next_index < progress.consumed + self.settings.download_local_max_connections_per_get):
                     index = next_index
                     children[index] = asyncio.create_task(self._child(
-                        url, headers, first, length, etag, last_modified,
+                        url, headers, first, length, etag, total, last_modified,
                         index, fd, per_get, progress,
                     ))
                     next_index += 1
@@ -357,7 +359,8 @@ class LocalRangeDownloader:
                 progress = _Progress()
                 producer = asyncio.create_task(self._produce(
                     response, release_initial, url, headers,
-                    plan[0], expected, plan[2], response.headers.get("last-modified"),
+                    plan[0], expected, plan[2], plan[3],
+                    response.headers.get("last-modified"),
                     fd, progress, per_get,
                 ))
                 self.active.add(producer)
