@@ -32,23 +32,23 @@ def upstream(data=BODY, *, etag=ETAG, accept_ranges=True, version_change=False,
         request_range = request.headers.get("range")
         calls.append((request_range, request.headers.get("if-match")))
         if failure_status:
-            return httpx.Response(failure_status, content=b"problem", headers={"X-R2": "error"})
+            return httpx.Response(failure_status, stream=httpx.ByteStream(b"problem"), headers={"X-R2": "error"})
         if request_range:
             assert request_range.startswith("bytes=")
             lo, hi = request_range.removeprefix("bytes=").split("-", 1)
             start = int(lo)
             end = min(int(hi) if hi else len(data)-1, len(data)-1)
             if reject_child and request.headers.get("if-match"):
-                return httpx.Response(412, content=b"changed")
+                return httpx.Response(412, stream=httpx.ByteStream(b"changed"))
             chunk = data[start:end+1]
             version = '"new-version"' if version_change and request.headers.get("if-match") else etag
-            return httpx.Response(206, content=chunk, headers={
+            return httpx.Response(206, stream=httpx.ByteStream(chunk), headers={
                 "Content-Range": f"bytes {start}-{end}/{len(data)}",
                 "Content-Length": str(len(chunk)), "ETag": version,
                 "Last-Modified": "Mon, 01 Jan 2024 00:00:00 GMT",
                 "Content-Encoding": "identity",
             })
-        return httpx.Response(200, content=data, headers={
+        return httpx.Response(200, stream=httpx.ByteStream(data), headers={
             "Content-Length": str(len(data)), "ETag": etag,
             "Last-Modified": "Mon, 01 Jan 2024 00:00:00 GMT",
             **({"Accept-Ranges": "bytes"} if accept_ranges else {}),
@@ -147,7 +147,7 @@ async def test_cannot_prove_split_is_safe_keeps_single_get(tmp_path, case):
         headers.append(("Range", "bytes=0-2,4-8"))
         # This fixture's upstream only supports single ranges. Return a single
         # original response to assert no attempted child requests.
-        handler = lambda req: httpx.Response(200, content=BODY)
+        handler = lambda req: httpx.Response(200, stream=httpx.ByteStream(BODY))
     elif case == "conditional":
         headers.append(("If-Match", ETAG))
     result, content = await run_download(tmp_path, handler, headers)
