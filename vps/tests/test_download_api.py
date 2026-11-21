@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 
 import httpx
 import pytest
@@ -123,7 +124,8 @@ async def test_small_r2_error_body_and_end_to_end_headers_are_preserved(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_25_mib_download_is_atomically_split_into_16_and_9_mib_parts(tmp_path):
+async def test_25_mib_download_is_atomically_split_into_16_and_9_mib_parts(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
     body = b"z" * (25 * MIB)
     calls = []
 
@@ -146,6 +148,20 @@ async def test_25_mib_download_is_atomically_split_into_16_and_9_mib_parts(tmp_p
         created = await create(client, auth)
         manifest = await wait_complete(client, created.json()["task_id"], auth)
         assert manifest["status"] == "COMPLETE"
+        await app.state.downloads.tasks[manifest["task_id"]].worker
+        perf_logs = [r.getMessage() for r in caplog.records if r.getMessage().startswith("r2_get_perf ")]
+        assert len(perf_logs) == 1
+        perf = dict(pair.split("=", 1) for pair in perf_logs[0].split()[1:])
+        assert perf["status"] == "COMPLETE"
+        assert perf["r2_http_status"] == "206"
+        assert int(perf["r2_bytes"]) == len(body)
+        assert float(perf["r2_header_elapsed_ms"]) >= 0
+        assert float(perf["r2_first_body_elapsed_ms"]) >= 0
+        assert float(perf["r2_body_elapsed_ms"]) >= 0
+        assert float(perf["r2_read_wait_ms"]) >= 0
+        assert float(perf["r2_effective_mbps"]) > 0
+        assert float(perf["r2_first_part_ready_ms"]) >= 0
+        assert float(perf["r2_total_elapsed_ms"]) >= 0
         assert manifest["mode"] == "parts"
         assert manifest["status_code"] == 206
         assert manifest["total_size"] == 25 * MIB
@@ -510,7 +526,8 @@ async def test_signed_request_headers_are_forwarded_without_httpx_defaults(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_upstream_exception_manifest_does_not_expose_signed_url(tmp_path):
+async def test_upstream_exception_manifest_does_not_expose_signed_url(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="uvicorn.error")
     secret = "X-Amz-Signature=super-secret-signature"
 
     def upstream(_request):
@@ -529,6 +546,12 @@ async def test_upstream_exception_manifest_does_not_expose_signed_url(tmp_path):
         await asyncio.sleep(0.002)
     manifest = manager.manifest(task)
     assert manifest["status"] == "FAILED"
+    await task.worker
+    perf_logs = [r.getMessage() for r in caplog.records if r.getMessage().startswith("r2_get_perf ")]
+    assert len(perf_logs) == 1
+    assert "status=FAILED" in perf_logs[0]
+    assert "r2_header_elapsed_ms=NA" in perf_logs[0]
+    assert secret not in perf_logs[0]
     assert secret not in str(manifest)
     assert manifest["error"]["message"] == "R2 下载失败；底层异常详情未向客户端公开"
     await manager.close()
