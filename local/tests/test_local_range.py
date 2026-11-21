@@ -376,3 +376,58 @@ async def test_original_error_and_bodyless_statuses_are_not_split(tmp_path, stat
     assert content == (b"" if status in (204, 304) else b"R2 status body")
     assert ("x-origin", "R2") in [(k.lower(), v) for k, v in result.headers]
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_child_content_range_object_total_mismatch_aborts(tmp_path):
+    handler, calls = upstream()
+
+    def mismatched_total(request):
+        response = handler(request)
+        if request.headers.get("if-match") and response.status_code == 206:
+            original = response.headers["Content-Range"]
+            response.headers["Content-Range"] = original.rsplit("/", 1)[0] + f"/{len(BODY)+1}"
+        return response
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(mismatched_total)) as client:
+        downloader = LocalRangeDownloader(settings(tmp_path), client=client)
+        try:
+            result = await downloader.download_stream(URL, [])
+            with pytest.raises(LocalRangeError, match="sub-Range"):
+                _ = b"".join([part async for part in result.stream])
+            assert downloader.disk_budget.used == 0
+            assert len(calls) > 1
+        finally:
+            await downloader.close()
+
+
+@pytest.mark.asyncio
+async def test_insufficient_local_disk_budget_keeps_original_stream(tmp_path):
+    handler, calls = upstream()
+    result, content = await run_download(
+        tmp_path, handler, cfg=settings(tmp_path, download_max_temp_bytes=2*MIB),
+    )
+    assert result.status_code == 200
+    assert content == BODY
+    assert calls == [(None, None)]
+
+
+@pytest.mark.asyncio
+async def test_child_transport_retry_reuses_exact_range_without_versions(tmp_path):
+    base, calls = upstream()
+    attempts = {}
+
+    def flaky(request):
+        rng = request.headers.get("range")
+        if rng is not None and request.headers.get("if-match") == ETAG:
+            attempts[rng] = attempts.get(rng, 0) + 1
+            if attempts[rng] == 1:
+                raise httpx.ConnectError("redacted transport error", request=request)
+        return base(request)
+
+    result, content = await run_download(tmp_path, flaky)
+    assert result.status_code == 200
+    assert content == BODY
+    assert len(attempts) == 2
+    assert all(count == 2 for count in attempts.values())
+    assert len(calls) == 3
