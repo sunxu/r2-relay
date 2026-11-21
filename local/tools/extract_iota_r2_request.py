@@ -127,9 +127,14 @@ def classify(info: dict, summary: dict | None, now: datetime, min_ttl: int):
     if type(observed) is not int or observed < 0:
         observed = None
     info["observed_bytes"] = observed
-    info["prior_status"] = summary.get("response_status") if summary else None
+    raw_status = summary.get("response_status") if summary else None
+    info["prior_status"] = raw_status if type(raw_status) is int and 100 <= raw_status <= 599 else None
     info["prior_complete"] = bool(summary and summary.get("final_status") == "completed")
-    info["takeover"] = summary.get("takeover_result") if summary else None
+    raw_takeover = summary.get("takeover_result") if summary else None
+    info["takeover"] = raw_takeover if raw_takeover in {
+        "completed", "succeeded", "failed", "cancelled", "stream_failed",
+        "stalled", "not_attempted", "not_attempted_capacity_full",
+    } else None
     info["range_bytes"] = range_size(info["headers"])
 
     strict, strict_reason = None, "NO_EVENT_SUMMARY"
