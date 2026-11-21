@@ -30,7 +30,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--listen-host", default="127.0.0.1")
     parser.add_argument("--listen-port", default=18585, type=int)
     args = parser.parse_args(argv)
-    if not os.environ.get("R2_RELAY_TOKEN"):
+    from .config import load_settings
+    settings = load_settings()
+    if not os.environ.get("R2_RELAY_TOKEN") and (
+        not settings.download_enabled or settings.download_backend != "local"
+    ):
         parser.error("R2_RELAY_TOKEN environment variable is required")
     path = Path(__file__).resolve().parent.parent / "addon_entry.py"
     return subprocess.call(command(args.listen_host, args.listen_port, path))
