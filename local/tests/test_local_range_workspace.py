@@ -22,6 +22,9 @@ def test_workspace_setup_only_targets_isolated_config_and_checkout():
     # The smoke suite validates the private Local config separately, then
     # runs pytest with independent fixtures (no shared process-lock owner).
     assert "env -u R2_RELAY_CONFIG -u R2_RELAY_ENABLE_ADDON" in script
+    assert 'R2_LOCAL_RANGE_OFFLINE_ZIP="$archive"' in script
+    assert "offline /absolute/synthetic.zip" in script
+    assert "-u R2_RELAY_REAL_GET_SPEC" in script
     # Do not run the existing production proxy or rewrite user-owned config.
     assert "launchctl" not in script
     assert "systemctl" not in script
