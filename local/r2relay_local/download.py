@@ -3,18 +3,21 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import secrets
 import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import AsyncIterator, Awaitable, Callable
 
 import httpx
 
 from .config import Settings
 from .relay import DownloadPartTransportError
+
+LOG = logging.getLogger("r2relay.local.part_download")
 
 
 def _pwrite_all(fd: int, data: bytes, offset: int) -> None:
@@ -77,6 +80,23 @@ class DownloadResult:
     body: bytes | bytearray | None = None
     path: Path | None = None
     cleanup: Callable[[], Awaitable[None]] | None = None
+    stream: AsyncIterator[bytes] | None = None
+
+
+@dataclass
+class _PartStreamProgress:
+    """A Part is exposed only after Mac length and SHA-256 verification."""
+    path: Path | None = None
+    ready: dict[int, int] | None = None
+    changed: asyncio.Event | None = None
+
+    def __post_init__(self) -> None:
+        self.ready = {}
+        self.changed = asyncio.Event()
+
+    def publish(self, number: int, size: int) -> None:
+        self.ready[number] = size
+        self.changed.set()
 
 
 class WeightedBudget:
@@ -191,6 +211,7 @@ class DownloadCoordinator:
         part_size_bytes: int,
         per_file_semaphore: asyncio.Semaphore,
         held_parts: dict[int, int],
+        progress: _PartStreamProgress | None = None,
     ) -> None:
         number = int(part["part_number"])
         size = int(part["size"])
@@ -202,9 +223,13 @@ class DownloadCoordinator:
             raise DownloadCapacityError("Mac 临时磁盘可用空间不足")
 
         last_error: Exception | None = None
+        started = asyncio.get_running_loop().time()
+        LOG.info("r2_part_started part=%d expected_bytes=%d", number, size)
         for attempt in range(3):
             digest = hashlib.sha256()
             received = 0
+            next_report = 4 * 1024 * 1024
+            first_chunk = True
             try:
                 async with self.global_semaphore, per_file_semaphore:
                     async with self.relay.download_part_stream(task_id, number) as response:
@@ -227,12 +252,33 @@ class DownloadCoordinator:
                             await _run_disk_operation(_pwrite_all, fd, chunk, offset + received)
                             digest.update(chunk)
                             received += len(chunk)
+                            if first_chunk or received >= next_report:
+                                LOG.info(
+                                    "r2_part_progress part=%d attempt=%d received_bytes=%d expected_bytes=%d",
+                                    number, attempt + 1, received, size,
+                                )
+                                first_chunk = False
+                                while received >= next_report:
+                                    next_report += 4 * 1024 * 1024
                 if received != size:
                     raise DownloadRelayError("Part 响应未完整传输")
                 if digest.hexdigest() != expected_hash:
                     raise DownloadRelayError("Part SHA-256 校验失败")
                 held_parts[number] = size
+                LOG.info(
+                    "r2_part_verified part=%d bytes=%d elapsed_ms=%d",
+                    number, size, int(1000 * (asyncio.get_running_loop().time() - started)),
+                )
+                if progress is not None:
+                    progress.publish(number, size)
                 return
+            except asyncio.CancelledError:
+                LOG.warning(
+                    "r2_part_cancelled part=%d attempt=%d received_bytes=%d expected_bytes=%d elapsed_ms=%d",
+                    number, attempt + 1, received, size,
+                    int(1000 * (asyncio.get_running_loop().time() - started)),
+                )
+                raise
             except (
                 httpx.TransportError,
                 httpx.TimeoutException,
@@ -241,6 +287,10 @@ class DownloadCoordinator:
                 ValueError,
             ) as exc:
                 last_error = exc
+                LOG.warning(
+                    "r2_part_retryable_failure part=%d attempt=%d received_bytes=%d expected_bytes=%d error_type=%s",
+                    number, attempt + 1, received, size, type(exc).__name__,
+                )
                 if attempt < 2:
                     await asyncio.sleep((0.15, 0.5)[attempt])
         raise DownloadRelayError(
@@ -248,11 +298,14 @@ class DownloadCoordinator:
         )
 
     async def _download_large(
-        self, task_id: str, manifest: dict, *, deadline: float
+        self, task_id: str, manifest: dict, *, deadline: float,
+        progress: _PartStreamProgress | None = None,
     ) -> DownloadResult:
         fd, raw_path = tempfile.mkstemp(prefix="r2-download-", suffix=".bin", dir=self.root)
         path = Path(raw_path)
         os.fchmod(fd, 0o600)
+        if progress is not None:
+            progress.path = path
         held_parts: dict[int, int] = {}
         inflight: dict[int, asyncio.Task] = {}
         fetched: set[int] = set()
@@ -309,6 +362,11 @@ class DownloadCoordinator:
                 if can_fetch:
                     for part in manifest.get("parts", []):
                         number = int(part["part_number"])
+                        if progress is not None and number != 1 and 1 not in held_parts:
+                            # The first verified Part gates the earliest downstream
+                            # byte. Avoid competing part downloads until it passes
+                            # size/SHA-256 checks; afterward restore normal concurrency.
+                            continue
                         if (
                             part.get("status") == "READY"
                             and number not in fetched
@@ -319,7 +377,7 @@ class DownloadCoordinator:
                                 self._fetch_one_part(
                                     task_id, part, fd,
                                     int(manifest["part_size_bytes"]),
-                                    per_file_semaphore, held_parts,
+                                    per_file_semaphore, held_parts, progress,
                                 )
                             )
 
@@ -399,6 +457,175 @@ class DownloadCoordinator:
                 if reserved_total:
                     await self.disk_budget.release(reserved_total)
 
+    async def _complete_task(
+        self, task_id: str, manifest: dict | None, deadline: float,
+        progress: _PartStreamProgress | None = None,
+    ) -> DownloadResult:
+        """Continue an existing single VPS task; never create a second R2 GET."""
+        while asyncio.get_running_loop().time() < deadline:
+            if manifest is None:
+                manifest = await self.relay.download_manifest(task_id)
+            status = manifest["status"]
+            if status in {"FAILED", "CANCELLED"}:
+                raise DownloadRelayError("VPS 上游 GET 任务失败或已取消")
+            mode = manifest.get("mode")
+            if mode == "small" and status == "COMPLETE":
+                return await self._download_small(task_id, manifest)
+            if mode == "parts":
+                return await self._download_large(
+                    task_id, manifest, deadline=deadline, progress=progress,
+                )
+            await asyncio.sleep(self.relay.poll_interval)
+            manifest = None
+        raise DownloadRelayError("等待 VPS R2 GET 任务超时")
+
+    async def _iter_verified_parts(
+        self, worker: asyncio.Task, progress: _PartStreamProgress,
+        total_size: int, part_size: int,
+    ) -> AsyncIterator[bytes]:
+        """Only expose completely verified Parts, in response-body order."""
+        next_part = 1
+        sent = 0
+        while sent < total_size:
+            # A failed writer invalidates even already prefetched later parts.
+            if worker.done():
+                worker.result()  # Raises the original upstream/validation error.
+            ready_size = progress.ready.get(next_part)
+            if ready_size is None:
+                if worker.done():
+                    worker.result()
+                    raise DownloadRelayError("响应已结束但缺少预期 READY Part")
+                progress.changed.clear()
+                if next_part not in progress.ready and not worker.done():
+                    await progress.changed.wait()
+                continue
+            if ready_size <= 0 or ready_size > total_size - sent or progress.path is None:
+                raise DownloadRelayError("READY Part 的长度或文件位置无效")
+            with progress.path.open("rb", buffering=0) as source:
+                await _run_disk_operation(source.seek, (next_part - 1) * part_size)
+                remaining = ready_size
+                while remaining:
+                    chunk = await _run_disk_operation(source.read, min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise DownloadRelayError("Mac 已验证 Part 在交付前发生截断")
+                    yield chunk
+                    remaining -= len(chunk)
+            sent += ready_size
+            next_part += 1
+        complete = await worker
+        if complete.size != sent:
+            raise DownloadRelayError("最终响应长度与已交付 Part 长度不匹配")
+
+    async def download_stream(
+        self, url: str, headers: list[tuple[str, str]],
+    ) -> DownloadResult:
+        """Return real R2 headers while its body is still downloading.
+
+        Large known-length bodies use checked READY Parts; other bodies retain
+        the bounded v1 completion path, but no longer delay response headers.
+        """
+        if not self.settings.download_enabled or self._closed:
+            raise DownloadRelayError("本地 R2 GET 下载中继未启用或正在关闭")
+        current = asyncio.current_task()
+        if current is not None:
+            self.active.add(current)
+        task_id: str | None = None
+        worker: asyncio.Task | None = None
+        try:
+            created = await self.relay.download_create(secrets.token_urlsafe(18), url, headers)
+            task_id = created["task_id"]
+            deadline = asyncio.get_running_loop().time() + self.relay.execution_timeout
+            manifest: dict | None = None
+            while asyncio.get_running_loop().time() < deadline:
+                manifest = await self.relay.download_manifest(task_id)
+                if manifest["status"] in {"FAILED", "CANCELLED"}:
+                    raise DownloadRelayError("R2 响应头尚未交付时 VPS 任务已失败")
+                if manifest.get("status_code") is not None:
+                    break
+                await asyncio.sleep(self.relay.poll_interval)
+            else:
+                raise DownloadRelayError("等待 R2 原始响应头超时")
+            status = int(manifest["status_code"])
+            original_headers = [(str(k), str(v)) for k, v in manifest["headers"]]
+            expected = manifest.get("expected_size")
+            expected = int(expected) if expected is not None else None
+            if expected is not None and expected < 0:
+                raise DownloadRelayError("R2 原始 Content-Length 无效")
+            bodyless = status in (204, 304) or 100 <= status < 200
+            large = (
+                not bodyless
+                and expected is not None
+                and expected > 24 * 1024 * 1024
+            )
+            if large and (
+                expected > self.settings.download_max_temp_bytes
+                or shutil.disk_usage(self.root).free < expected
+            ):
+                raise DownloadCapacityError("下载响应超过 Mac 临时磁盘容量")
+            if expected is not None and not bodyless and not large and (
+                expected > self.settings.download_small_memory_bytes
+            ):
+                # No body has been committed yet: fail before sending success headers.
+                raise DownloadCapacityError("下载响应超过 Mac 小响应内存预算")
+            progress = _PartStreamProgress() if large else None
+            worker = asyncio.create_task(self._complete_task(task_id, manifest, deadline, progress))
+            self.active.add(worker)
+            worker.add_done_callback(self.active.discard)
+            if progress is not None:
+                worker.add_done_callback(lambda _: progress.changed.set())
+            cleaned = False
+
+            async def cleanup() -> None:
+                nonlocal cleaned
+                if cleaned:
+                    return
+                cleaned = True
+                if not worker.done():
+                    worker.cancel()
+                outcome = (await asyncio.gather(worker, return_exceptions=True))[0]
+                if isinstance(outcome, DownloadResult):
+                    if outcome.cleanup is not None:
+                        await outcome.cleanup()
+                else:
+                    await self._delete_remote(task_id)
+
+            async def body_stream() -> AsyncIterator[bytes]:
+                try:
+                    if progress is not None:
+                        async for chunk in self._iter_verified_parts(
+                            worker, progress, expected, int(manifest["part_size_bytes"]),
+                        ):
+                            yield chunk
+                    else:
+                        completed = await worker
+                        if completed.body is not None:
+                            for offset in range(0, len(completed.body), 1024 * 1024):
+                                yield bytes(completed.body[offset:offset + 1024 * 1024])
+                        elif completed.path is not None:
+                            with completed.path.open("rb", buffering=0) as source:
+                                while True:
+                                    chunk = await _run_disk_operation(source.read, 1024 * 1024)
+                                    if not chunk:
+                                        break
+                                    yield chunk
+                finally:
+                    await cleanup()
+
+            return DownloadResult(
+                status_code=status,
+                headers=original_headers,
+                size=expected if expected is not None else -1,
+                stream=body_stream(),
+                cleanup=cleanup,
+            )
+        except BaseException:
+            if task_id is not None and worker is None:
+                await self._delete_remote(task_id)
+            raise
+        finally:
+            if current is not None:
+                self.active.discard(current)
+
     async def download(self, url: str, headers: list[tuple[str, str]]) -> DownloadResult:
         if not self.settings.download_enabled:
             raise DownloadRelayError("本地 R2 GET 下载中继未启用")
@@ -413,20 +640,7 @@ class DownloadCoordinator:
             created = await self.relay.download_create(request_id, url, headers)
             task_id = created["task_id"]
             deadline = asyncio.get_running_loop().time() + self.relay.execution_timeout
-            while asyncio.get_running_loop().time() < deadline:
-                manifest = await self.relay.download_manifest(task_id)
-                status = manifest["status"]
-                if status in {"FAILED", "CANCELLED"}:
-                    raise DownloadRelayError("VPS 上游 GET 任务失败或已取消")
-                mode = manifest.get("mode")
-                if mode == "small" and status == "COMPLETE":
-                    return await self._download_small(task_id, manifest)
-                if mode == "parts":
-                    return await self._download_large(
-                        task_id, manifest, deadline=deadline
-                    )
-                await asyncio.sleep(self.relay.poll_interval)
-            raise DownloadRelayError("等待 VPS R2 GET 任务超时")
+            return await self._complete_task(task_id, None, deadline)
         except asyncio.CancelledError:
             if task_id is not None:
                 await self._delete_remote(task_id)

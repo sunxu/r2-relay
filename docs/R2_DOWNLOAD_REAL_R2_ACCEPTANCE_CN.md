@@ -2,6 +2,75 @@
 
 本文档用于在 VPS 下载服务部署并启用后，验证一条真实签名 R2 GET 是否能经 Mac RelayClient → VPS → Cloudflare R2 完整取回。CI 不执行本流程，不需要把真实 R2 凭据放入 GitHub。
 
+## RLY-033 方案 B：T37 隔离验收（2026-11-21）
+
+**状态：待执行真实验收，不是 PASS_REAL。** 本节适用于尚未合并的 [PR #79](https://github.com/sunxu/r2-relay/pull/79)；历史章节记录旧方案 A、Receiver v7 和旧版“下载关闭”状态，不能当作当前生产配置或执行旧版本的 `/download-config real-test` / `disabled` 命令。生产实际版本、下载开关和预算以 [Issue #63](https://github.com/sunxu/r2-relay/issues/63) 的最新可信回执为准。**此验收不要求也不授权 VPS 部署、重置配置、切换生产 18585 或重启 IOTA**。
+
+目的：在已有的 `real_r2_mitmproxy_acceptance.py` 中同时检查 **真实 206 Range、Length/ETag/Content-Range、原始字节 SHA-256**，并观察方案 B 的 `header_elapsed_ms`、`first_body_elapsed_ms`、`first_16mib_elapsed_ms` 和 `elapsed_ms`；不新建第二套验收工具。上述时序都是从客户端发出 GET 起的时间，`header_before_iota_20s_timeout` 只用于观察 IOTA 的 20 秒替代打开预算，**不等于完整 IOTA 接管成功**。真实网络不能稳定证明“VPS 未 COMPLETE 时已收到 Part 1”，该时序由 T35 的受控暂停 Mock 测试单独证明。
+
+1. **隔离代码**：仅在 Mac 建立独立 worktree，绝不对生产 worktree 执行 checkout/merge/重装依赖。本仓库的现有生产工作树位于 `~/workspace/r2-relay-production` 时可用以下命令；若实际位置不同，先改成真实路径。已经存在的隔离目录不覆盖。
+
+   ```bash
+   set +x
+   SRC="$HOME/workspace/r2-relay-production"
+   WT="$HOME/workspace/r2-relay-rly033-t37"
+   git -C "$SRC" fetch origin feat/rly033-verified-part-streaming-20261121
+   git -C "$SRC" worktree add --detach "$WT" origin/feat/rly033-verified-part-streaming-20261121
+   git -C "$WT" rev-parse HEAD
+   ```
+
+   核验 SHA 必须与 PR #79 当前 HEAD 一致，且 PR CI 均通过。不能把旧 `PASS_REAL_PROXY` 当作新版本验收。
+
+2. **隔离配置与凭据**：使用原有受信任 venv 的依赖，但强制 `PYTHONPATH="$WT/local"` 从新 worktree 加载源码。单独使用 `~/.config/r2-relay/rly033-t37.toml` 和独立 `temp_dir`，不要修改 `~/.config/r2-relay/config.toml`。以下创建的隔离文件只含非敏感参数，配置目录也不得通过链接指向生产下载临时目录：
+
+   ```bash
+   umask 077
+   cat > "$HOME/.config/r2-relay/rly033-t37.toml" <<'TOML'
+   schema_version = 1
+
+   [download]
+   enabled = true
+   max_concurrency = 16
+   global_max_concurrency = 32
+   small_response_memory_mib = 32
+   max_temp_mib = 64
+   temp_dir = "~/.cache/r2-relay/rly033-t37"
+   TOML
+   export R2_RELAY_CONFIG="$HOME/.config/r2-relay/rly033-t37.toml"
+   export R2_RELAY_REAL_GET_SPEC="$HOME/.config/r2-relay/private/real-get-full-spec.json"
+   # 在当前 Mac shell 私下提供 R2_RELAY_VPS_URL、R2_RELAY_TOKEN、
+   # R2_RELAY_VPS_CA_FILE；不要 echo、set -x 或贴出其值。
+   test -f "$R2_RELAY_REAL_GET_SPEC"
+   test -n "${R2_RELAY_VPS_URL:-}" &&
+   test -n "${R2_RELAY_TOKEN:-}" &&
+   test -f "${R2_RELAY_VPS_CA_FILE:-/nonexistent}"
+   ```
+
+   私有 spec 必须是 **0600 且签名未过期**，其期望响应应是已验证直连基线的 **206、>24 MiB Range 完整字节及 SHA-256**。旧的 2026-11-20 预签名请求可能已经过期，不能直接复用；如无有效凭据或新鲜 spec，则记录 `T37_HOLD_PRIVATE_INPUT`，不得伪造结果。此流程只 GET 现有对象，不新建或覆盖 Bucket 对象。Mac 现有生产下载任务不应与验收相互干扰。
+
+3. **独立 18586 测试代理**：先确认 `127.0.0.1:18586` 没有其它监听者；新开终端 A，使用与当前终端相同的安全环境变量：
+
+   ```bash
+   WT="$HOME/workspace/r2-relay-rly033-t37"
+   VENV="$HOME/workspace/r2-relay-production/.venv"
+   PATH="$VENV/bin:$PATH" PYTHONPATH="$WT/local" \
+     "$VENV/bin/python" -m r2relay_local --listen-host 127.0.0.1 --listen-port 18586
+   ```
+
+   新开终端 B（加载同样的私有环境变量，但仍使用隔离 TOML）运行既有脚本：
+
+   ```bash
+   WT="$HOME/workspace/r2-relay-rly033-t37"
+   VENV="$HOME/workspace/r2-relay-production/.venv"
+   export R2_RELAY_MITMPROXY_CA="$HOME/.mitmproxy/mitmproxy-ca-cert.pem"
+   PYTHONPATH="$WT/local" "$VENV/bin/python" \
+     "$WT/local/poc/real_r2_mitmproxy_acceptance.py"
+   ```
+
+4. **验收判据与记录**：只粘贴脚本输出的脱敏 JSON。必须得到 `PASS_REAL_PROXY`、`http_status=206`、`sha256_match=true`、`size_match=true`、`expected_headers_match=true`；并单独报告 `header_elapsed_ms`、`first_body_elapsed_ms`、`first_16mib_elapsed_ms`、`elapsed_ms`、`header_before_iota_20s_timeout`。对已知 >24 MiB 的完整响应，`first_16mib_elapsed_ms` 应有值。若 `header_before_iota_20s_timeout=false`，说明此真实样本不满足 IOTA 的现有 20 秒接管窗口，即使内容比对通过也不得宣称 IOTA 加速已验收。不要把本脚本成功理解为测试过客户端断连、VPS 真实 Part 数或 IOTA PID 保持：这些需独立证据。
+   
+5. **收尾**：中止独立的 18586 代理进程，确认 `18585`、Supervisor 和 IOTA PID 均未受影响；检查本地隔离 temp 目录和 VPS 任务回收情况，若存在残留再安全排查，不直接删除生产目录。不要自行在 Issue #63 评论 `/download-config disabled ...`，因为当前已是生产下载配置，旧关闭流程不适用。**T37 只有完整真实 R2 + 隔离 IOTA 兼容证据都齐全后才能标记 PASS_REAL**；需修改 IOTA 替代代理指向18586时，另行进行隔离授权与可回滚验证，不得未经批准切换生产 IOTA。
+
 ## 0.1 既有 IOTA 对象：全对象 Range 与真实分片验收
 
 2026-11-20 已完成同一对象 `bytes=12-12650557` 的直连和 RelayClient 真实 R2 小响应验收：`PASS_REAL`，12,650,546 bytes、HTTP 206、HTTP/2、Content-Range / Content-Length / ETag / SHA-256 / 删除任务和本地资源归还全部匹配。受控测试 profile 已通过 Issue #63 关闭，VPS 继续保持 `download_enabled=false`。

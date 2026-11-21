@@ -104,7 +104,8 @@ def test_proxy_acceptance_streams_without_logging_signed_url(tmp_path, monkeypat
             return self
         def __exit__(self, *args):
             pass
-        def iter_bytes(self, chunk_size):
+        def iter_raw(self, chunk_size):
+            assert chunk_size == 64 * 1024
             yield body[:2]
             yield body[2:]
 
@@ -125,6 +126,20 @@ def test_proxy_acceptance_streams_without_logging_signed_url(tmp_path, monkeypat
     monkeypatch.setattr(MODULE.httpx, "Client", FakeClient)
     assert MODULE.run() == 0
     out = capsys.readouterr().out
-    assert json.loads(out)["status"] == "PASS_REAL_PROXY"
+    report = json.loads(out)
+    assert report["status"] == "PASS_REAL_PROXY"
+    assert report["header_elapsed_ms"] >= 0
+    assert report["first_body_elapsed_ms"] >= report["header_elapsed_ms"]
+    assert report["first_16mib_elapsed_ms"] is None
+    assert report["elapsed_ms"] >= report["first_body_elapsed_ms"]
+    assert report["header_before_iota_20s_timeout"] is True
     assert "X-Amz-Signature" not in out
     assert "private" not in out
+
+    # A synthetic 502 may arrive quickly; it cannot satisfy R2 header timing.
+    FakeResponse.status_code = 502
+    assert MODULE.run() == 1
+    failure = json.loads(capsys.readouterr().out)
+    assert failure["status"] == "FAIL_REAL_PROXY"
+    assert failure["status_match"] is False
+    assert failure["header_before_iota_20s_timeout"] is False
