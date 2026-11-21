@@ -126,3 +126,18 @@ bash "$HOME/workspace/r2-relay-local-range-test/local/poc/local_range_workspace.
 ~~~
 
 脚本会复用同一测试配置和 real_r2_download_acceptance.py，不会输出签名 URL/认证头。PASS_REAL_LOCAL 且 child_range_requests > 0 说明真实样本触发了子 Range；还须检查哈希/响应头及回收结果。该命令会主动发真实 R2 请求，不属于初始化过程。独立 18586 mitmdump/原始 IOTA 替代接管属于后续验收，**初始化不会自动启动**。
+
+
+## 真实日志提取的离线协议包（只读 Mock）
+
+可使用 r2_local_range_offline_test_data.zip，**不需要解压、不需要添加到 Git**。独立工作区升级到本功能分支最新提交后，从 Mac 上运行：
+
+~~~bash
+git -C "$HOME/workspace/r2-relay-local-range-test" pull --ff-only
+bash "$HOME/workspace/r2-relay-local-range-test/local/poc/local_range_workspace.sh" \
+  offline "/absolute/path/to/r2_local_range_offline_test_data.zip"
+~~~
+
+offline 只读取经白名单核对的 5 个 ZIP 成员，包括 25,301,339 字节纯合成对象和 SHA-256 期望清单。利用现有 test_local_range.py 的 HTTPX MockTransport、LocalRangeDownloader 和原始 HTTP 响应头逻辑，完整验证 10 种场景的状态、Content-Range、流式正文长度/哈希、首次请求及子 Range 的数量/If-Match、清理；绝不访问真实 R2，绝不调用 VPS。不会将 ZIP 文件内容放入 CI、Git 或日志。其他既有 Mock 故障注入测试继续覆盖对象版本变化/异常与取消，不重复开发。
+
+私人包 r2_local_range_private_replay_candidates.zip 包含原始签名 URL。**不要传给 offline，不能上传 GitHub**，也不能直接交给 real：私人包是 14 条候选请求的集合，不是 real_r2_download_acceptance.py 要求的单请求 0600 JSON 验收格式，且其 expected_sha256 为空。真实签名凭据的有效期需在实际运行时重新检查；“提取时未过期”不代表现在有效。真实 R2 仍须先取得独立内容哈希/响应基准，或采用基线响应和 Local 响应双路一致性验证后才能给出 PASS_REAL_LOCAL；离线 Mock PASS 不代替这一验收。
