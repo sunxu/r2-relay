@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import secrets
 import shutil
@@ -15,6 +16,8 @@ import httpx
 
 from .config import Settings
 from .relay import DownloadPartTransportError
+
+LOG = logging.getLogger("r2relay.local.part_download")
 
 
 def _pwrite_all(fd: int, data: bytes, offset: int) -> None:
@@ -220,9 +223,13 @@ class DownloadCoordinator:
             raise DownloadCapacityError("Mac 临时磁盘可用空间不足")
 
         last_error: Exception | None = None
+        started = asyncio.get_running_loop().time()
+        LOG.info("r2_part_started part=%d expected_bytes=%d", number, size)
         for attempt in range(3):
             digest = hashlib.sha256()
             received = 0
+            next_report = 4 * 1024 * 1024
+            first_chunk = True
             try:
                 async with self.global_semaphore, per_file_semaphore:
                     async with self.relay.download_part_stream(task_id, number) as response:
@@ -245,14 +252,33 @@ class DownloadCoordinator:
                             await _run_disk_operation(_pwrite_all, fd, chunk, offset + received)
                             digest.update(chunk)
                             received += len(chunk)
+                            if first_chunk or received >= next_report:
+                                LOG.info(
+                                    "r2_part_progress part=%d attempt=%d received_bytes=%d expected_bytes=%d",
+                                    number, attempt + 1, received, size,
+                                )
+                                first_chunk = False
+                                while received >= next_report:
+                                    next_report += 4 * 1024 * 1024
                 if received != size:
                     raise DownloadRelayError("Part 响应未完整传输")
                 if digest.hexdigest() != expected_hash:
                     raise DownloadRelayError("Part SHA-256 校验失败")
                 held_parts[number] = size
+                LOG.info(
+                    "r2_part_verified part=%d bytes=%d elapsed_ms=%d",
+                    number, size, int(1000 * (asyncio.get_running_loop().time() - started)),
+                )
                 if progress is not None:
                     progress.publish(number, size)
                 return
+            except asyncio.CancelledError:
+                LOG.warning(
+                    "r2_part_cancelled part=%d attempt=%d received_bytes=%d expected_bytes=%d elapsed_ms=%d",
+                    number, attempt + 1, received, size,
+                    int(1000 * (asyncio.get_running_loop().time() - started)),
+                )
+                raise
             except (
                 httpx.TransportError,
                 httpx.TimeoutException,
@@ -261,6 +287,10 @@ class DownloadCoordinator:
                 ValueError,
             ) as exc:
                 last_error = exc
+                LOG.warning(
+                    "r2_part_retryable_failure part=%d attempt=%d received_bytes=%d expected_bytes=%d error_type=%s",
+                    number, attempt + 1, received, size, type(exc).__name__,
+                )
                 if attempt < 2:
                     await asyncio.sleep((0.15, 0.5)[attempt])
         raise DownloadRelayError(
