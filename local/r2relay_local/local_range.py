@@ -19,7 +19,7 @@ import httpx
 
 from .config import Settings
 from .download import (
-    DownloadCapacityError, DownloadRelayError, DownloadResult, WeightedBudget,
+    DownloadRelayError, DownloadResult, WeightedBudget,
     _pwrite_all, _run_disk_operation,
 )
 from .relay import http2_enabled, is_r2_get
@@ -146,6 +146,7 @@ class LocalRangeDownloader:
         self.chunk_size = settings.download_local_chunk_bytes
         self.connections = asyncio.Semaphore(settings.download_local_global_max_connections)
         self.disk_budget = WeightedBudget(settings.download_max_temp_bytes)
+        self._budget_lock = asyncio.Lock()
         self.root = settings.download_temp_dir / "local"
         self.client = client or httpx.AsyncClient(
             http2=http2_enabled(), trust_env=False, follow_redirects=False, verify=True,
@@ -158,7 +159,7 @@ class LocalRangeDownloader:
         self._closed = False
         self._lock_file = None
         if settings.download_enabled:
-            if self.root.is_symlink():
+            if settings.download_temp_dir.is_symlink() or self.root.is_symlink():
                 raise RuntimeError("Local download directory must not be a symlink")
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
             os.chmod(self.root, 0o700)
@@ -211,7 +212,6 @@ class LocalRangeDownloader:
                         async with self.client.stream(
                             "GET", url, headers=child_headers, follow_redirects=False,
                         ) as response:
-                            content_range = f"bytes {start}-{end}/"
                             got = response.headers.get("content-range", "")
                             parsed = _CONTENT_RANGE.fullmatch(got)
                             if (response.status_code != 206 or parsed is None
@@ -295,7 +295,6 @@ class LocalRangeDownloader:
         if current is not None:
             self.active.add(current)
         per_get = asyncio.Semaphore(self.settings.download_local_max_connections_per_get)
-        acquired = False
         response: httpx.Response | None = None
         init_held = False
         disk_reserved = 0
@@ -339,8 +338,15 @@ class LocalRangeDownloader:
                 and shutil.disk_usage(self.settings.download_temp_dir).free >= expected
             )
             if can_split:
-                await self.disk_budget.acquire(expected)
-                disk_reserved = expected
+                # Never hold the replacement headers waiting on another slow
+                # consumer's disk reservation: retain the original single GET.
+                async with self._budget_lock:
+                    if self.disk_budget.used + expected > self.disk_budget.limit:
+                        can_split = False
+                    else:
+                        await self.disk_budget.acquire(expected)
+                        disk_reserved = expected
+            if can_split:
                 fd, raw_path = tempfile.mkstemp(prefix="r2-range-", suffix=".bin", dir=self.root)
                 path = Path(raw_path)
                 os.fchmod(fd, 0o600)
