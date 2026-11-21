@@ -327,6 +327,37 @@ async def test_plan_b_unknown_length_chunked_and_post_header_failure(tmp_path):
         await disk.close()
 
 
+@pytest.mark.asyncio
+async def test_plan_b_client_disconnect_cancels_pending_part_wait(tmp_path):
+    started = asyncio.Event()
+    stopped = asyncio.Event()
+    never_ready = asyncio.Event()
+
+    async def blocked_chunks():
+        started.set()
+        try:
+            await never_ready.wait()
+            yield b"unreachable"
+        finally:
+            stopped.set()
+
+    disk = DiskResponseServer()
+    token = await disk.register(
+        DownloadResult(status_code=206, headers=[], size=25 * MIB, stream=blocked_chunks())
+    )
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", disk.port)
+        writer.write(f"GET /download/{token} HTTP/1.1\r\nHost: localhost\r\n\r\n".encode())
+        await writer.drain()
+        await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=3)
+        await asyncio.wait_for(started.wait(), timeout=3)
+        writer.close()
+        await writer.wait_closed()
+        await asyncio.wait_for(stopped.wait(), timeout=3)
+    finally:
+        await disk.close()
+
+
 class FakeDownloads:
     def __init__(self, result):
         self.result = result
