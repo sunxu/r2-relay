@@ -120,3 +120,42 @@ def test_global_buffer_budget_is_reserved_and_released():
     addon.requestheaders(after_release)
     assert after_release.request.stream is False
     assert addon.reserved_bytes == 3
+
+@pytest.mark.asyncio
+async def test_local_backend_selects_direct_downloader_without_token(tmp_path, monkeypatch):
+    from r2relay_local.local_range import LocalRangeDownloader
+    from r2relay_local import addon as addon_module
+
+    class FakeLocal:
+        def __init__(self, settings):
+            self.settings = settings
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class FakeClient:
+        def __init__(self, endpoint, token):
+            self.endpoint, self.token = endpoint, token
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(addon_module, "load_settings", lambda: Settings(
+        max_part_bytes=10, global_budget_bytes=20, source=tmp_path / "config",
+        download_enabled=True, download_backend="local", download_max_temp_bytes=64*1024*1024,
+    ))
+    monkeypatch.setattr(addon_module, "LocalRangeDownloader", FakeLocal)
+    monkeypatch.setattr(addon_module, "RelayClient", FakeClient)
+    monkeypatch.delenv("R2_RELAY_TOKEN", raising=False)
+    obj = addon_module.build_addon()
+    try:
+        assert isinstance(obj.downloads, FakeLocal)
+        assert obj.upload_relay_enabled is False
+        f = flow(body=b"hello", length=5)
+        obj.requestheaders(f)
+        await obj.request(f)
+        assert f.response is None
+        assert obj.reserved_bytes == 0
+    finally:
+        await obj.done()
