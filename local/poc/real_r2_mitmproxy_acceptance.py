@@ -134,9 +134,13 @@ def run() -> int:
         report["header_elapsed_ms"] = header_elapsed_ms
         report["first_body_elapsed_ms"] = first_body_elapsed_ms
         report["first_16mib_elapsed_ms"] = first_16mib_elapsed_ms
-        # A measured observation, not a synthetic PASS_REAL/T37 assertion.
+        # Only real expected R2 response headers count towards IOTA's
+        # replacement-open budget. A quickly generated local 502 is not a pass.
         report["header_before_iota_20s_timeout"] = (
-            header_elapsed_ms is not None and header_elapsed_ms < 20000
+            report["status_match"]
+            and report["expected_headers_match"]
+            and header_elapsed_ms is not None
+            and header_elapsed_ms < 20000
         )
         print(json.dumps(report, sort_keys=True, indent=2))
         return 0 if report["status"] == "PASS_REAL_PROXY" else 1
