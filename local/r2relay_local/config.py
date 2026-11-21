@@ -17,6 +17,11 @@ class Settings:
     global_budget_bytes: int
     source: Path
     download_enabled: bool = False
+    download_backend: str = "remote"
+    download_local_chunk_bytes: int = 2 * _MIB
+    download_local_min_bytes: int = 2 * _MIB
+    download_local_max_connections_per_get: int = 8
+    download_local_global_max_connections: int = 128
     download_max_concurrency: int = 16
     download_global_max_concurrency: int = 32
     download_small_memory_bytes: int = 0
@@ -74,6 +79,20 @@ def load_settings(config_path: Path | None = None) -> Settings:
 
     download = data["download"]
     enabled = download["enabled"]
+    backend = download["backend"]
+    if type(backend) is not str or backend not in ("remote", "local"):
+        raise ValueError("download.backend must be remote or local")
+    local_download = download["local"]
+    for name, value, minimum, maximum in (
+        ("download.local.chunk_size_mib", local_download["chunk_size_mib"], 2, 2),
+        ("download.local.min_size_mib", local_download["min_size_mib"], 2, 2),
+        ("download.local.max_connections_per_get", local_download["max_connections_per_get"], 1, 8),
+        ("download.local.global_max_connections", local_download["global_max_connections"], 1, 128),
+    ):
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
+    if local_download["max_connections_per_get"] > local_download["global_max_connections"]:
+        raise ValueError("download.local.max_connections_per_get exceeds global_max_connections")
     if type(enabled) is not bool:
         raise ValueError("download.enabled must be a boolean")
     max_concurrency = download["max_concurrency"]
@@ -93,17 +112,24 @@ def load_settings(config_path: Path | None = None) -> Settings:
         raise ValueError("download.max_concurrency cannot exceed download.global_max_concurrency")
     if not isinstance(temp_dir, str) or not temp_dir.strip():
         raise ValueError("download.temp_dir must be a non-empty path")
-    if enabled:
+    if enabled and backend == "remote":
         if small_memory_mib < 24:
             raise ValueError("download.small_response_memory_mib must be at least 24 when enabled")
         if max_temp_mib < 25:
             raise ValueError("download.max_temp_mib must be at least 25 when enabled")
+    if enabled and backend == "local" and max_temp_mib < 2:
+        raise ValueError("download.max_temp_mib must be at least 2 when local enabled")
 
     return Settings(
         max_part_bytes=max_part_mib * _MIB,
         global_budget_bytes=global_buffer_mib * _MIB,
         source=source,
         download_enabled=enabled,
+        download_backend=backend,
+        download_local_chunk_bytes=local_download["chunk_size_mib"] * _MIB,
+        download_local_min_bytes=local_download["min_size_mib"] * _MIB,
+        download_local_max_connections_per_get=local_download["max_connections_per_get"],
+        download_local_global_max_connections=local_download["global_max_connections"],
         download_max_concurrency=max_concurrency,
         download_global_max_concurrency=global_max_concurrency,
         download_small_memory_bytes=small_memory_mib * _MIB,
