@@ -292,8 +292,9 @@ async def test_plan_b_headers_and_verified_first_part_arrive_before_vps_complete
 
 
 @pytest.mark.asyncio
-async def test_plan_b_first_verified_part_has_download_bandwidth_priority(tmp_path):
+async def test_plan_b_first_verified_part_has_download_bandwidth_priority(tmp_path, caplog):
     """Do not start Part 2 while the first verified downstream byte is gated."""
+    caplog.set_level("INFO", logger="r2relay.local.part_download")
     first = b"a" * (16 * MIB)
     tail = b"b" * (9 * MIB)
     body = first + tail
@@ -344,6 +345,14 @@ async def test_plan_b_first_verified_part_has_download_bandwidth_priority(tmp_pa
         assert await asyncio.wait_for(reader.readexactly(len(tail)), timeout=20) == tail
         assert await asyncio.wait_for(reader.read(), timeout=5) == b""
         assert started == [1, 2]
+        safe_messages = "\n".join(record.getMessage() for record in caplog.records
+                                  if record.name == "r2relay.local.part_download")
+        assert "r2_part_started part=1" in safe_messages
+        assert "r2_part_progress part=1 attempt=1" in safe_messages
+        assert "r2_part_verified part=1" in safe_messages
+        assert "r2_part_verified part=2" in safe_messages
+        assert "https://" not in safe_messages
+        assert "download-test-token" not in safe_messages
         for _ in range(100):
             if coordinator.disk_budget.used == 0 and not app.state.downloads.tasks:
                 break
