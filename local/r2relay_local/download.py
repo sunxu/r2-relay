@@ -332,6 +332,11 @@ class DownloadCoordinator:
                 if can_fetch:
                     for part in manifest.get("parts", []):
                         number = int(part["part_number"])
+                        if progress is not None and number != 1 and 1 not in held_parts:
+                            # The first verified Part gates the earliest downstream
+                            # byte. Avoid competing part downloads until it passes
+                            # size/SHA-256 checks; afterward restore normal concurrency.
+                            continue
                         if (
                             part.get("status") == "READY"
                             and number not in fetched
