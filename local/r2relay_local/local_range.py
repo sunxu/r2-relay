@@ -159,6 +159,9 @@ class LocalRangeDownloader:
             timeout=httpx.Timeout(90.0, connect=15.0, read=90.0, write=30.0),
         )
         self._owns_client = client is None
+        # Safe, non-sensitive counters for isolated real-R2 acceptance.
+        self.split_gets = 0
+        self.child_range_requests = 0
         self._cleanups: set = set()
         self.active: set[asyncio.Task] = set()
         self._closed = False
@@ -238,6 +241,7 @@ class LocalRangeDownloader:
             try:
                 async with per_get:
                     async with self.connections:
+                        self.child_range_requests += 1
                         async with self._stream(url, child_headers) as response:
                             got = response.headers.get("content-range", "")
                             parsed = _CONTENT_RANGE.fullmatch(got)
@@ -376,6 +380,7 @@ class LocalRangeDownloader:
                         await self.disk_budget.acquire(expected)
                         disk_reserved = expected
             if can_split:
+                self.split_gets += 1
                 fd, raw_path = tempfile.mkstemp(prefix="r2-range-", suffix=".bin", dir=self.root)
                 path = Path(raw_path)
                 os.fchmod(fd, 0o600)
