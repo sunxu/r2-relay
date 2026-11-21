@@ -143,7 +143,23 @@ class DiskResponseServer:
             head.append("\r\n")
             writer.write("".join(head).encode("latin-1"))
             await writer.drain()
-            await self._write_body(writer, result)
+            body_task = asyncio.create_task(self._write_body(writer, result))
+            # The client may leave while waiting for the next READY Part.
+            # Cancel promptly rather than keeping VPS and disk reservations alive.
+            disconnect_task = asyncio.create_task(reader.read(1))
+            try:
+                done, _ = await asyncio.wait(
+                    (body_task, disconnect_task), return_when=asyncio.FIRST_COMPLETED,
+                )
+                if body_task in done:
+                    await body_task
+                else:
+                    raise ConnectionResetError("R2 download client disconnected")
+            finally:
+                disconnect_task.cancel()
+                if not body_task.done():
+                    body_task.cancel()
+                await asyncio.gather(body_task, disconnect_task, return_exceptions=True)
         except Exception as exc:
             # After the original status was sent we cannot manufacture a 502.
             # Abort (not a valid final chunk / EOF) so clients detect truncation.
