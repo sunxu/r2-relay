@@ -43,6 +43,29 @@ def test_vps_download_settings_are_loaded_from_toml(tmp_path):
     assert settings.max_retained_tasks == 32
 
 
+def test_resource_limits_can_exceed_previous_arbitrary_ceilings(tmp_path):
+    path = tmp_path / "larger-resource-limits.toml"
+    path.write_text(
+        "[download]\n"
+        "part_size_mib = 1025\n"
+        "split_threshold_mib = 4097\n"
+        "cache_ttl_seconds = 86401\n"
+        "max_active_tasks = 4097\n"
+        "max_retained_tasks = 65537\n"
+        "max_waiters = 65537\n"
+        "wait_timeout_seconds = 301\n",
+        encoding="utf-8",
+    )
+    loaded = load_download_settings(path)
+    assert loaded.part_size_bytes == 1025 * 1024 * 1024
+    assert loaded.split_threshold_bytes == 4097 * 1024 * 1024
+    assert loaded.cache_ttl_seconds == 86401
+    assert loaded.max_active_tasks == 4097
+    assert loaded.max_retained_tasks == 65537
+    assert loaded.max_waiters == 65537
+    assert loaded.wait_timeout_seconds == 301
+
+
 def test_expired_real_r2_test_profile_fails_closed_at_service_start(tmp_path, monkeypatch):
     import time
 

@@ -71,22 +71,26 @@ def load_download_settings(
     if type(enabled) is not bool:
         raise ValueError("download.enabled must be a boolean")
 
-    integer_ranges = {
-        "part_size_mib": (1, 1024),
-        "split_threshold_mib": (1, 4096),
-        "cache_ttl_seconds": (1, 86400),
-        "max_cache_bytes": (0, 2**63 - 1),
-        "min_free_bytes": (0, 2**63 - 1),
-        "max_active_tasks": (0, 4096),
-        "max_retained_tasks": (0, 65536),
-        "max_waiters": (0, 65536),
-        "wait_timeout_seconds": (1, 300),
-        "test_expires_at_epoch": (0, 2**63 - 1),
+    integer_minimums = {
+        "part_size_mib": 1,
+        "split_threshold_mib": 1,
+        "cache_ttl_seconds": 1,
+        "max_cache_bytes": 0,
+        "min_free_bytes": 0,
+        "max_active_tasks": 0,
+        "max_retained_tasks": 0,
+        "max_waiters": 0,
+        "wait_timeout_seconds": 1,
+        "test_expires_at_epoch": 0,
     }
-    for key, (minimum, maximum) in integer_ranges.items():
+    for key, minimum in integer_minimums.items():
         value = section[key]
-        if type(value) is not int or not minimum <= value <= maximum:
-            raise ValueError(f"download.{key} must be an integer from {minimum} to {maximum}")
+        if type(value) is not int or value < minimum:
+            raise ValueError(f"download.{key} must be an integer >= {minimum}")
+    # Keep signed 64-bit bounds for byte counters and epoch interoperability.
+    for key in ("max_cache_bytes", "min_free_bytes", "test_expires_at_epoch"):
+        if section[key] > 2**63 - 1:
+            raise ValueError(f"download.{key} must fit in a signed 64-bit integer")
 
     part_size = section["part_size_mib"]
     threshold = section["split_threshold_mib"]
