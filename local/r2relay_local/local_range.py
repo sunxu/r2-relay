@@ -138,11 +138,15 @@ class LocalRangeDownloader:
         if (settings.download_local_chunk_bytes != 2 * _MIB
                 or settings.download_local_min_bytes != 2 * _MIB):
             raise ValueError("local Range size and minimum must be 2 MiB")
-        if not 1 <= settings.download_local_max_connections_per_get <= 8:
-            raise ValueError("local max_connections_per_get out of range")
-        if not (settings.download_local_max_connections_per_get
-                <= settings.download_local_global_max_connections <= 128):
-            raise ValueError("local global_max_connections out of range")
+        for name, value in (
+            ("max_connections_per_get", settings.download_local_max_connections_per_get),
+            ("global_max_connections", settings.download_local_global_max_connections),
+        ):
+            if type(value) is not int or value < 1:
+                raise ValueError(f"local {name} must be a positive integer")
+        if (settings.download_local_max_connections_per_get
+                > settings.download_local_global_max_connections):
+            raise ValueError("local max_connections_per_get exceeds global_max_connections")
         self.settings = settings
         self.chunk_size = settings.download_local_chunk_bytes
         self.connections = asyncio.Semaphore(settings.download_local_global_max_connections)

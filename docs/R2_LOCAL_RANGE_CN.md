@@ -7,7 +7,7 @@
 IOTA 原始 GET 路由、iota-tools 慢速探测、替代响应状态/响应头对照及已交付前缀 SHA-256 验证全部保留。只有当现有慢速接管调用 replacement_proxy，代理才执行所选下载后端。
 
 - remote：原有 VPS DownloadCoordinator；保持默认且不修改其算法。
-- local：使用 HTTPX 直接连接允许的 HTTPS Cloudflare R2 主机。单 GET 最多 8 条连接，全 Local 最多 128 条 R2 GET 连接。
+- local：使用 HTTPX 直接连接允许的 HTTPS Cloudflare R2 主机。单 GET 默认 8 条连接，全 Local 默认 128 条 R2 GET 连接；可以通过配置提高额度，仍受实际 Semaphore 限制。
 - 上传：配置 Token 时仍使用原有 VPS 上传中继。无 Token 且启用 local 下载时，上传请求保持原始直连路径，不伪造 VPS UploadPart 成功。
 - 原有 DiskResponseServer 将初始 GET 的状态、端到端响应头及完整字节流交付给 iota-tools；不会交付只有尾部的替代响应。
 
@@ -33,7 +33,7 @@ global_max_connections = 128
 
 \`backend\` 只接受 remote 或 local；未指定时 remote。Local 需要设置非零的 \`max_temp_mib\`，但无需设置 Remote 专用的小响应内存预算，无需配置 VPS Endpoint、Token 或 CA。若继续要求 VPS UploadPart 缓存，仍需单独提供有效 VPS Token 等设置。当前仅在单独测试配置中使用 local，不改动正在运行的实例。
 
-Local 需要 2 MiB 固定分片。每个 GET 响应长度小于等于 2 MiB 或无法证明 Range 并发安全时，保留最初单连接的原始响应流，不额外发起 HEAD 或重复 GET。未知长度默认单流。
+Local 需要 2 MiB 固定分片。连接并发及内存、磁盘预算允许正整数配置超过原有固定上限，0/负值、非整数及单 GET 大于全局连接额度仍被拒绝。每个 GET 响应长度小于等于 2 MiB 或无法证明 Range 并发安全时，保留最初单连接的原始响应流，不额外发起 HEAD 或重复 GET。未知长度默认单流。
 
 ## 可拆分性与版本保护
 
@@ -52,7 +52,7 @@ Local 需要 2 MiB 固定分片。每个 GET 响应长度小于等于 2 MiB 或�
 
 网络按 64 KiB 原始字节流读取，使用已有受控异步 pwrite 工具写入单任务临时文件，按原始响应体相对偏移定位。不执行多分片文件合并，READY 仅在完整分片字节数、HTTP 元数据及磁盘写入验证后发布。返回最初 GET 的响应状态和响应头；完整 READY 分片按顺序交付。Loopback 已有断连监听与异常结束机制负责使正文错误表现为截断，不伪造成功 EOF。
 
-资源预算由 Local 独立全局 Semaphore（128）与每 GET Semaphore（8）控制，包含初始连接、子 Range 与重试。仅调度有限的在途分片，未消费分片窗口按每 GET 连接上限约束，慢客户端背压不会无限扩张预取量。临时文件位于 \`~/.cache/r2-relay/downloads/local/\`，权限 0600，目录 0700；采用独立进程锁，启动时只清理该目录中的历史遗留文件。取消时等待已有后台写入结束后关闭 FD、删除文件并释放磁盘预算；不影响 Remote 缓存目录。
+资源预算由 Local 独立全局 Semaphore（默认 128）与每 GET Semaphore（默认 8）控制，包含初始连接、子 Range 与重试。仅调度有限的在途分片，未消费分片窗口按每 GET 连接上限约束，慢客户端背压不会无限扩张预取量。临时文件位于 \`~/.cache/r2-relay/downloads/local/\`，权限 0600，目录 0700；采用独立进程锁，启动时只清理该目录中的历史遗留文件。取消时等待已有后台写入结束后关闭 FD、删除文件并释放磁盘预算；不影响 Remote 缓存目录。
 
 ## 验证与限制
 
@@ -110,7 +110,7 @@ setup 创建独立 .venv（Python >=3.11）、安装既有 Local/VPS 测试依�
 | 独立缓存 (0700) | ~/.cache/r2-relay/local-range-acceptance/downloads/ |
 | Local 内部分片文件 | 独立缓存下的 local/，退出后清理 |
 
-配置为 download.enabled=true、backend="local"、max_temp_mib=64，固定 2 MiB 分片、单 GET 8 连接、Local 全局 128 连接，Remote 继续默认且生产无变化。
+配置为 download.enabled=true、backend="local"、max_temp_mib=64，固定 2 MiB 分片、单 GET 默认 8 连接、Local 全局默认 128 连接，Remote 继续默认且生产无变化。
 
 仅重新运行离线测试：
 

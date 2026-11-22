@@ -70,10 +70,10 @@ def load_settings(config_path: Path | None = None) -> Settings:
     upload = data["upload"]
     max_part_mib = upload["max_part_mib"]
     global_buffer_mib = upload["global_buffer_mib"]
-    if type(max_part_mib) is not int or not 1 <= max_part_mib <= 4096:
-        raise ValueError("upload.max_part_mib must be an integer from 1 to 4096")
-    if type(global_buffer_mib) is not int or not 1 <= global_buffer_mib <= 16384:
-        raise ValueError("upload.global_buffer_mib must be an integer from 1 to 16384")
+    if type(max_part_mib) is not int or max_part_mib < 1:
+        raise ValueError("upload.max_part_mib must be a positive integer")
+    if type(global_buffer_mib) is not int or global_buffer_mib < 1:
+        raise ValueError("upload.global_buffer_mib must be a positive integer")
     if max_part_mib > global_buffer_mib:
         raise ValueError("upload.max_part_mib cannot exceed upload.global_buffer_mib")
 
@@ -83,14 +83,14 @@ def load_settings(config_path: Path | None = None) -> Settings:
     if type(backend) is not str or backend not in ("remote", "local"):
         raise ValueError("download.backend must be remote or local")
     local_download = download["local"]
-    for name, value, minimum, maximum in (
-        ("download.local.chunk_size_mib", local_download["chunk_size_mib"], 2, 2),
-        ("download.local.min_size_mib", local_download["min_size_mib"], 2, 2),
-        ("download.local.max_connections_per_get", local_download["max_connections_per_get"], 1, 8),
-        ("download.local.global_max_connections", local_download["global_max_connections"], 1, 128),
-    ):
-        if type(value) is not int or not minimum <= value <= maximum:
-            raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
+    for name in ("chunk_size_mib", "min_size_mib"):
+        value = local_download[name]
+        if type(value) is not int or value != 2:
+            raise ValueError(f"download.local.{name} must be exactly 2 MiB")
+    for name in ("max_connections_per_get", "global_max_connections"):
+        value = local_download[name]
+        if type(value) is not int or value < 1:
+            raise ValueError(f"download.local.{name} must be a positive integer")
     if local_download["max_connections_per_get"] > local_download["global_max_connections"]:
         raise ValueError("download.local.max_connections_per_get exceeds global_max_connections")
     if type(enabled) is not bool:
@@ -100,14 +100,14 @@ def load_settings(config_path: Path | None = None) -> Settings:
     small_memory_mib = download["small_response_memory_mib"]
     max_temp_mib = download["max_temp_mib"]
     temp_dir = download["temp_dir"]
-    for name, value, minimum, maximum in (
-        ("download.max_concurrency", max_concurrency, 1, 128),
-        ("download.global_max_concurrency", global_max_concurrency, 1, 256),
-        ("download.small_response_memory_mib", small_memory_mib, 0, 8192),
-        ("download.max_temp_mib", max_temp_mib, 0, 1048576),
+    for name, value, minimum in (
+        ("download.max_concurrency", max_concurrency, 1),
+        ("download.global_max_concurrency", global_max_concurrency, 1),
+        ("download.small_response_memory_mib", small_memory_mib, 0),
+        ("download.max_temp_mib", max_temp_mib, 0),
     ):
-        if type(value) is not int or not minimum <= value <= maximum:
-            raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
+        if type(value) is not int or value < minimum:
+            raise ValueError(f"{name} must be an integer >= {minimum}")
     if max_concurrency > global_max_concurrency:
         raise ValueError("download.max_concurrency cannot exceed download.global_max_concurrency")
     if not isinstance(temp_dir, str) or not temp_dir.strip():

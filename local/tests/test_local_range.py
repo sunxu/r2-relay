@@ -28,6 +28,28 @@ def settings(tmp_path, **kw):
     return Settings(**data)
 
 
+@pytest.mark.asyncio
+async def test_local_downloader_accepts_connection_limits_above_old_caps(tmp_path):
+    downloader = LocalRangeDownloader(settings(
+        tmp_path, download_local_max_connections_per_get=9,
+        download_local_global_max_connections=129,
+    ))
+    try:
+        assert downloader.connections._value == 129
+    finally:
+        await downloader.close()
+
+
+@pytest.mark.parametrize("per_get, global_max", [(0, 128), (1, 0), (9, 8)])
+def test_local_downloader_rejects_invalid_connection_limits(tmp_path, per_get, global_max):
+    cfg = settings(
+        tmp_path, download_local_max_connections_per_get=per_get,
+        download_local_global_max_connections=global_max,
+    )
+    with pytest.raises(ValueError):
+        LocalRangeDownloader(cfg)
+
+
 def upstream(data=BODY, *, etag=ETAG, accept_ranges=True, version_change=False,
              reject_child=False, failure_status=None):
     calls = []

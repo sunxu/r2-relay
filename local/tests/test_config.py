@@ -58,6 +58,35 @@ class UploadBufferConfigTests(unittest.TestCase):
             self.assertEqual(settings.download_backend, "local")
             self.assertEqual(settings.download_small_memory_bytes, 0)
 
+    def test_can_configure_resource_limits_above_previous_ceilings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text(
+                "[upload]\n"
+                "max_part_mib = 4097\n"
+                "global_buffer_mib = 16385\n"
+                "[download]\n"
+                "enabled = true\n"
+                'backend = "local"\n'
+                "max_concurrency = 129\n"
+                "global_max_concurrency = 257\n"
+                "small_response_memory_mib = 8193\n"
+                "max_temp_mib = 1048577\n"
+                "[download.local]\n"
+                "max_connections_per_get = 9\n"
+                "global_max_connections = 129\n",
+                encoding="utf-8",
+            )
+            loaded = load_settings(path)
+        self.assertEqual(loaded.max_part_mib, 4097)
+        self.assertEqual(loaded.global_buffer_mib, 16385)
+        self.assertEqual(loaded.download_max_concurrency, 129)
+        self.assertEqual(loaded.download_global_max_concurrency, 257)
+        self.assertEqual(loaded.download_small_memory_bytes, 8193 * 1024 * 1024)
+        self.assertEqual(loaded.download_max_temp_bytes, 1048577 * 1024 * 1024)
+        self.assertEqual(loaded.download_local_max_connections_per_get, 9)
+        self.assertEqual(loaded.download_local_global_max_connections, 129)
+
     def test_rejects_invalid_or_unknown_values(self):
         invalid = (
             "schema_version = 1\n[upload]\nmax_part_mib = 0\n",
@@ -70,8 +99,11 @@ class UploadBufferConfigTests(unittest.TestCase):
             "schema_version = 1\n[download]\nmax_concurrency = 33\nglobal_max_concurrency = 32\n",
             'schema_version = 1\n[download]\nbackend = "auto"\n',
             'schema_version = 1\n[download.local]\nchunk_size_mib = 4\n',
-            'schema_version = 1\n[download.local]\nmax_connections_per_get = 9\n',
             'schema_version = 1\n[download.local]\nmax_connections_per_get = 8\nglobal_max_connections = 4\n',
+            'schema_version = 1\n[download.local]\nmax_connections_per_get = 0\n',
+            'schema_version = 1\n[download.local]\nglobal_max_connections = 0\n',
+            'schema_version = 1\n[download]\nmax_concurrency = 0\n',
+            'schema_version = 1\n[download]\nsmall_response_memory_mib = -1\n',
         )
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"
