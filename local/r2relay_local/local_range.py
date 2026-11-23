@@ -135,9 +135,12 @@ class LocalRangeDownloader:
     """Direct R2 downloader; does not start or communicate with the VPS."""
 
     def __init__(self, settings: Settings, *, client: httpx.AsyncClient | None = None):
-        if (settings.download_local_chunk_bytes != 2 * _MIB
-                or settings.download_local_min_bytes != 2 * _MIB):
-            raise ValueError("local Range size and minimum must be 2 MiB")
+        for name, value in (
+            ("chunk_size", settings.download_local_chunk_bytes),
+            ("min_size", settings.download_local_min_bytes),
+        ):
+            if type(value) is not int or value < _MIB or value % _MIB:
+                raise ValueError(f"local {name} must be a positive integer MiB")
         for name, value in (
             ("max_connections_per_get", settings.download_local_max_connections_per_get),
             ("global_max_connections", settings.download_local_global_max_connections),
@@ -291,7 +294,7 @@ class LocalRangeDownloader:
             children[0] = first_task
             next_index = 1
             while children or next_index < count:
-                # At most eight scheduled chunks and eight unconsumed chunks.
+                # Bound scheduled and unconsumed chunks by this GET's configured concurrency.
                 while (next_index < count
                        and len(children) < self.settings.download_local_max_connections_per_get
                        and next_index < progress.consumed + self.settings.download_local_max_connections_per_get):

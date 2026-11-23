@@ -87,6 +87,20 @@ class UploadBufferConfigTests(unittest.TestCase):
         self.assertEqual(loaded.download_local_max_connections_per_get, 9)
         self.assertEqual(loaded.download_local_global_max_connections, 129)
 
+    def test_configurable_local_chunk_and_minimum_sizes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            for chunk_mib, min_mib in ((1, 1), (4, 1), (1, 6), (8, 8)):
+                with self.subTest(chunk_mib=chunk_mib, min_mib=min_mib):
+                    path.write_text(
+                        f"[download.local]\nchunk_size_mib = {chunk_mib}\n"
+                        f"min_size_mib = {min_mib}\n",
+                        encoding="utf-8",
+                    )
+                    loaded = load_settings(path)
+                    self.assertEqual(loaded.download_local_chunk_bytes, chunk_mib * 1024 * 1024)
+                    self.assertEqual(loaded.download_local_min_bytes, min_mib * 1024 * 1024)
+
     def test_rejects_invalid_or_unknown_values(self):
         invalid = (
             "schema_version = 1\n[upload]\nmax_part_mib = 0\n",
@@ -98,7 +112,12 @@ class UploadBufferConfigTests(unittest.TestCase):
             "schema_version = 1\n[download]\nenabled = true\nsmall_response_memory_mib = 24\nmax_temp_mib = 16\n",
             "schema_version = 1\n[download]\nmax_concurrency = 33\nglobal_max_concurrency = 32\n",
             'schema_version = 1\n[download]\nbackend = "auto"\n',
-            'schema_version = 1\n[download.local]\nchunk_size_mib = 4\n',
+            'schema_version = 1\n[download.local]\nchunk_size_mib = 0\n',
+            'schema_version = 1\n[download.local]\nchunk_size_mib = -1\n',
+            'schema_version = 1\n[download.local]\nchunk_size_mib = 1.5\n',
+            'schema_version = 1\n[download.local]\nmin_size_mib = 0\n',
+            'schema_version = 1\n[download.local]\nmin_size_mib = -1\n',
+            'schema_version = 1\n[download.local]\nmin_size_mib = 1.5\n',
             'schema_version = 1\n[download.local]\nmax_connections_per_get = 8\nglobal_max_connections = 4\n',
             'schema_version = 1\n[download.local]\nmax_connections_per_get = 0\n',
             'schema_version = 1\n[download.local]\nglobal_max_connections = 0\n',

@@ -85,8 +85,8 @@ def load_settings(config_path: Path | None = None) -> Settings:
     local_download = download["local"]
     for name in ("chunk_size_mib", "min_size_mib"):
         value = local_download[name]
-        if type(value) is not int or value != 2:
-            raise ValueError(f"download.local.{name} must be exactly 2 MiB")
+        if type(value) is not int or value < 1:
+            raise ValueError(f"download.local.{name} must be a positive integer")
     for name in ("max_connections_per_get", "global_max_connections"):
         value = local_download[name]
         if type(value) is not int or value < 1:

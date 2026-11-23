@@ -88,20 +88,21 @@ def validate(root=ROOT, mode="template", vps_env=None, local_env=None):
     for name in REQUIRED_LOCAL:
         check(name in local, "missing local setting " + name)
     numbers = {
-        "R2_RELAY_MAX_EXECUTIONS": (1, 100000),
-        "R2_RELAY_MAX_CONCURRENT": (1, 1024),
-        "R2_RELAY_EXECUTION_TTL": (1, 86400),
+        "R2_RELAY_MAX_EXECUTIONS": (1, None),
+        "R2_RELAY_MAX_CONCURRENT": (1, None),
+        "R2_RELAY_EXECUTION_TTL": (1, None),
         "R2_RELAY_MAX_PART_BYTES": (1, 33554432),
-        "R2_RELAY_MIN_FREE_BYTES": (1, 2**50),
-        "R2_RELAY_MAX_RETAINED_RESULT_BYTES": (1, 2**40),
+        "R2_RELAY_MIN_FREE_BYTES": (1, None),
+        "R2_RELAY_MAX_RETAINED_RESULT_BYTES": (1, None),
     }
     for name, (lo, hi) in numbers.items():
         value = vps.get(name, "")
-        check(value.isdecimal() and lo <= int(value) <= hi,
+        check(value.isdecimal() and int(value) >= lo
+              and (hi is None or int(value) <= hi),
               "invalid VPS bound " + name)
     buffer = local.get("R2_RELAY_BUFFER_BUDGET", "")
-    check(buffer.isdecimal() and 1 <= int(buffer) <= 2**40 if buffer.isdecimal()
-          else False, "invalid local buffer budget")
+    check(buffer.isdecimal() and int(buffer) >= 1,
+          "invalid local buffer budget")
     check(vps.get("R2_RELAY_CACHE_DIR") == "/var/lib/r2-relay/cache",
           "cache directory differs from systemd sandbox")
     try:

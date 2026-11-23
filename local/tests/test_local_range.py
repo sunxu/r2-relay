@@ -98,6 +98,29 @@ async def run_download(tmp_path, handler, headers=None, cfg=None):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunk_mib,min_mib,child_requests",
+    [(1, 1, 5), (4, 1, 1), (1, 6, 0), (8, 1, 0)],
+)
+async def test_nondefault_chunk_sizes_and_split_threshold(tmp_path, chunk_mib, min_mib, child_requests):
+    handler, calls = upstream()
+    cfg = settings(
+        tmp_path,
+        download_local_chunk_bytes=chunk_mib * MIB,
+        download_local_min_bytes=min_mib * MIB,
+    )
+    result, content = await run_download(tmp_path, handler, cfg=cfg)
+    assert result.status_code == 200
+    assert content == BODY
+    assert calls[0] == (None, None)
+    assert len(calls) == 1 + child_requests
+    assert all(etag == ETAG for _, etag in calls[1:])
+    if child_requests:
+        starts = sorted(int(rng.removeprefix("bytes=").split("-", 1)[0]) for rng, _ in calls[1:])
+        assert starts == [i * chunk_mib * MIB for i in range(1, child_requests + 1)]
+
+
+@pytest.mark.asyncio
 async def test_2mib_exact_is_single_and_small_is_single(tmp_path):
     for size in (1024, 2*MIB):
         handler, calls = upstream(BODY[:size])
