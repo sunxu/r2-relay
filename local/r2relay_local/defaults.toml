@@ -8,11 +8,14 @@ global_buffer_mib = 1024
 [download]
 enabled = false
 backend = "remote"
+max_temp_mib = 0
+temp_dir = "~/.cache/r2-relay/downloads"
+
+# Mac-side VPS download coordinator settings. Not VPS server settings.
+[download.remote]
 max_concurrency = 16
 global_max_concurrency = 32
 small_response_memory_mib = 0
-max_temp_mib = 0
-temp_dir = "~/.cache/r2-relay/downloads"
 
 # Local-only limits (ignored by the remote VPS download backend).
 [download.local]

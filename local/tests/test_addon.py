@@ -172,3 +172,59 @@ async def test_local_backend_selects_direct_downloader_without_token(tmp_path, m
         assert obj.reserved_bytes == 0
     finally:
         await obj.done()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected_backend", ["remote", "local"])
+async def test_startup_logs_only_selected_backend_and_safe_configuration(
+    tmp_path, caplog, selected_backend,
+):
+    import logging
+
+    class FakeDownload:
+        async def close(self):
+            return None
+
+    cfg = Settings(
+        max_part_bytes=32 * 1024 * 1024,
+        global_budget_bytes=512 * 1024 * 1024,
+        source=tmp_path / "config.toml",
+        download_enabled=True,
+        download_backend=selected_backend,
+        download_max_temp_bytes=512 * 1024 * 1024,
+        download_temp_dir=tmp_path / "downloads",
+        download_max_concurrency=6,
+        download_global_max_concurrency=12,
+        download_small_memory_bytes=64 * 1024 * 1024,
+        download_local_chunk_bytes=4 * 1024 * 1024,
+        download_local_min_bytes=8 * 1024 * 1024,
+        download_local_max_connections_per_get=3,
+        download_local_global_max_connections=48,
+        download_predownload_enabled=True,
+        download_predownload_dir=tmp_path / "predownload",
+    )
+    with caplog.at_level(logging.INFO, logger="r2relay.local"):
+        addon = R2RelayAddon(
+            None, settings=cfg, download_coordinator=FakeDownload(),
+            upload_relay_enabled=False,
+        )
+    try:
+        out = caplog.text
+        assert "upload buffer config loaded" in out
+        assert "download config loaded enabled=True" in out
+        assert f"backend={selected_backend}" in out
+        assert "max_temp_mib=512" in out
+        assert "predownload_enabled=True" in out
+        assert f"directory={cfg.download_predownload_dir}" in out
+        if selected_backend == "remote":
+            assert "download.remote config loaded max_concurrency=6" in out
+            assert "global_max_concurrency=12 small_response_memory_mib=64" in out
+            assert "download.local config loaded" not in out
+        else:
+            assert "download.local config loaded chunk_size_mib=4 min_size_mib=8" in out
+            assert "max_connections_per_get=3 global_max_connections=48" in out
+            assert "download.remote config loaded" not in out
+        assert "R2_RELAY_TOKEN" not in out
+        assert "X-Amz-Signature" not in out
+    finally:
+        await addon.done()

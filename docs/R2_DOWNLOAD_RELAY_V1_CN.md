@@ -21,7 +21,7 @@
 | 单文件最大并发 | 16 | Mac ~/.config/r2-relay/config.toml | Mac |
 | 全局最大并发 | 32 | Mac ~/.config/r2-relay/config.toml | Mac |
 
-VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、cache_ttl_seconds=600。Mac 的 [download] 配置段包含 max_concurrency=16、global_max_concurrency=32，并与现有上传配置共存。
+VPS 的 [download] 配置段包含 part_size_mib=16、split_threshold_mib=24、cache_ttl_seconds=600。Mac 的 [download.remote] 配置段包含 max_concurrency=16、global_max_concurrency=32、small_response_memory_mib=0（历史默认值）；共享的 max_temp_mib、temp_dir 保留在 Mac [download] 配置段，并与现有上传配置共存。
 
 VPS 通用配置路径为 /etc/r2-relay/config.toml；受控下载配置使用 /etc/r2-relay-download/download.toml 独立 drop-in（其 [download] 配置优先于通用配置），不会改写上传或其他服务设置。下载默认 enabled=false；Receiver v7 只允许在 Issue #63 显式授权下应用固定 30 分钟 real-r2-test-v1 测试 profile（64 MiB 缓存、最低磁盘空闲 5 GiB、活动任务 1、保留任务 2、等待者 4），到期自动关闭；测试完成必须立即手动 disabled。这不是生产 GET 启用授权。Mac 配置路径为 ~/.config/r2-relay/config.toml；真实验收使用独立 real-r2-test.toml 和 18586 端口，不修改 18585。
 

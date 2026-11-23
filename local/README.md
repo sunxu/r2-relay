@@ -65,26 +65,40 @@ global_buffer_mib = 1024
 # 下载默认关闭；启用前必须根据 Mac 内存和临时磁盘容量填写预算。
 [download]
 enabled = false
+backend = "remote"
+max_temp_mib = 0
+temp_dir = "~/.cache/r2-relay/downloads"
+
+[download.remote]
 max_concurrency = 16
 global_max_concurrency = 32
 small_response_memory_mib = 0
-max_temp_mib = 0
-temp_dir = "~/.cache/r2-relay/downloads"
+
+[download.local]
+chunk_size_mib = 2
+min_size_mib = 2
+max_connections_per_get = 8
+global_max_connections = 128
+
+[download.predownload]
+enabled = false
 ```
 
 - `max_part_mib`：单个 UploadPart 进入缓存加速的最大请求体，默认 128 MiB。
 - `global_buffer_mib`：所有正在缓存的 UploadPart 共享的 Content-Length 预留预算，默认 1024 MiB。
 - 超过任一上传限制的请求仍由 mitmproxy 流式转发到原始 R2，不会被拒绝。
-- `download.max_concurrency = 16`：单文件同时取回的 Part 数上限。
-- `download.global_max_concurrency = 32`：所有下载任务共享的 Part 传输上限；等待 VPS READY 的 Part 不占用传输名额。
-- `download.small_response_memory_mib`：所有小响应共享的内存预算；启用下载时至少为 24 MiB，预算耗尽时排队。
-- `download.max_temp_mib`：所有大响应共享的本地临时磁盘预算；启用下载时至少为 25 MiB，超预算的单个对象明确失败，不会无限占用磁盘。
+- `download.remote.max_concurrency = 16`：单文件同时取回的 Part 数上限。
+- `download.remote.global_max_concurrency = 32`：所有下载任务共享的 Part 传输上限；等待 VPS READY 的 Part 不占用传输名额。
+- `download.remote.small_response_memory_mib`：所有小响应共享的内存预算；启用下载时至少为 24 MiB，预算耗尽时排队。
+- `download.max_temp_mib`：remote/local 共享的大响应共享的本地临时磁盘预算；启用下载时至少为 25 MiB，超预算的单个对象明确失败，不会无限占用磁盘。
 - `download.temp_dir`：本地任务级临时文件目录。大响应只使用一个任务文件，按 Part 偏移写入，不保存第二套 Part 文件。
 - 下载默认关闭。只有明确填写小响应内存预算和临时磁盘预算后，才能设置 `enabled = true`；不在没有 Mac 资源测量的情况下预设预算值。
 - 所有发往 Cloudflare R2 S3 endpoint 的 GET 在下载启用后由本地代理接管；原始 URL、Range/条件请求头和签名头交给 VPS。VPS 不可用或下载失败时返回明确 502，不静默直连 R2。
 - Mac 只并发取回 VPS 已 READY 的 Part：单文件最多 16、所有任务合计最多 32。每片验证长度和 SHA-256 后直接写入一个任务级文件；所有 Part 完成且 VPS 任务 COMPLETE 后才返回原始响应。
 - 大文件通过仅监听 `127.0.0.1` 的 Loopback 文件响应服务交给 mitmproxy，并开启 response streaming；不把完整大文件读入 Python 内存。
 - 本地代理启动时使用 mitmproxy `connection_strategy=lazy`：先让 addon 决定是否接管，再建立上游连接，避免已接管的 R2 GET/UploadPart 预先连接原始 R2 主机。
+- 旧版 `[download]` 下的 `max_concurrency`、`global_max_concurrency` 和 `small_response_memory_mib` 已删除；**不向后兼容**，必须迁移到 `[download.remote]`，否则启动时明确报 `unknown config key`。共享 `max_temp_mib`、`temp_dir` 仍保留在 `[download]`。
+- 启动时日志输出实际加载的配置来源、上传预算、下载启用状态及后端、共享临时目录和预算、Predownload 状态与目录、当前后端的并发和内存设置；不打印 Token、VPS URL、R2 签名 URL 或请求头。
 - 修改配置后重启本地 R2 Relay（18585）进程生效。
 - 可用 `R2_RELAY_CONFIG=/absolute/path/config.toml` 指定另一份配置文件；该变量只指定配置文件路径，不承载数值配置。
 

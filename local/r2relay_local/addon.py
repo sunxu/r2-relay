@@ -44,6 +44,37 @@ class R2RelayAddon:
             self.settings.max_part_mib,
             self.settings.global_buffer_mib,
         )
+        LOG.info(
+            "download config loaded enabled=%s backend=%s max_temp_mib=%d temp_dir=%s "
+            "predownload_enabled=%s",
+            self.settings.download_enabled,
+            self.settings.download_backend,
+            self.settings.download_max_temp_bytes // (1024 * 1024),
+            self.settings.download_temp_dir,
+            self.settings.download_predownload_enabled,
+        )
+        if self.settings.download_predownload_enabled:
+            LOG.info(
+                "predownload config loaded directory=%s",
+                self.settings.download_predownload_dir,
+            )
+        if self.settings.download_backend == "remote":
+            LOG.info(
+                "download.remote config loaded max_concurrency=%d "
+                "global_max_concurrency=%d small_response_memory_mib=%d",
+                self.settings.download_max_concurrency,
+                self.settings.download_global_max_concurrency,
+                self.settings.download_small_memory_bytes // (1024 * 1024),
+            )
+        else:
+            LOG.info(
+                "download.local config loaded chunk_size_mib=%d min_size_mib=%d "
+                "max_connections_per_get=%d global_max_connections=%d",
+                self.settings.download_local_chunk_bytes // (1024 * 1024),
+                self.settings.download_local_min_bytes // (1024 * 1024),
+                self.settings.download_local_max_connections_per_get,
+                self.settings.download_local_global_max_connections,
+            )
         self.reserved_bytes = 0
         self.reservations: dict[int, int] = {}
 

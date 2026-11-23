@@ -13,16 +13,18 @@ IOTA 原始 GET 路由、iota-tools 慢速探测、替代响应状态/响应头�
 
 ## 配置
 
-原位置：\`~/.config/r2-relay/config.toml\`。已有 Remote 部署无需更新。
+配置文件：\`~/.config/r2-relay/config.toml\`。Remote 专用参数已移入 \ `.download.remote`。旧版顶层键不再兼容，升级前必须迁移。
 
 \`\`\`toml
 [download]
 enabled = true
 backend = "local"
 max_temp_mib = 512
-# Remote 配置继续保留但 Local 不使用：
+[download.remote]
+# Local 后端不使用这组参数。
 max_concurrency = 16
 global_max_concurrency = 32
+small_response_memory_mib = 0
 
 [download.local]
 chunk_size_mib = 2
