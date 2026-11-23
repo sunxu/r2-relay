@@ -20,3 +20,7 @@ chunk_size_mib = 2
 min_size_mib = 2
 max_connections_per_get = 8
 global_max_connections = 128
+
+# Optional local pre-placed file check before either download backend.
+[download.predownload]
+enabled = false

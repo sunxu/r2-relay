@@ -12,6 +12,7 @@ from .relay import RelayClient, RelayUnavailable, RelayOutcomeUnknown, is_upload
 from .download import DownloadCoordinator
 from .local_range import LocalRangeDownloader
 from .disk_response import DiskResponseServer
+from .predownload import PredownloadDownloader
 
 LOG = logging.getLogger("r2relay.local")
 
@@ -32,6 +33,8 @@ class R2RelayAddon:
                 self.downloads = LocalRangeDownloader(self.settings)
             else:
                 self.downloads = DownloadCoordinator(relay, self.settings)
+        if self.downloads is not None and self.settings.download_predownload_enabled:
+            self.downloads = PredownloadDownloader(self.downloads, self.settings)
         self.disk_responses = disk_response_server or DiskResponseServer()
         self.max_part_bytes = self.settings.max_part_bytes
         self.global_budget_bytes = self.settings.global_budget_bytes
