@@ -130,7 +130,7 @@ class PredownloadDownloader:
         self._owns_client = client is None
         self.client = client or httpx.AsyncClient(
             headers=[], http2=http2_enabled(), verify=True, trust_env=False,
-            follow_redirects=False, timeout=httpx.Timeout(20.0, connect=10.0),
+            follow_redirects=False, timeout=httpx.Timeout(5.0, connect=3.0),
         )
 
     def _candidate(self, url: str) -> int | None:

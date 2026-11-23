@@ -8,6 +8,7 @@ from mitmproxy import http
 
 from r2relay_local.addon import R2RelayAddon
 from r2relay_local.config import Settings
+from r2relay_local.disk_response import DiskResponseServer
 from r2relay_local.predownload import PredownloadDownloader
 
 
@@ -71,6 +72,7 @@ async def test_no_same_name_skips_probe_and_uses_selected_backend(tmp_path, back
         try:
             root = settings(tmp_path).download_predownload_dir
             assert root.is_dir()
+            assert (root.stat().st_mode & 0o777) == 0o700
             assert await wrapper.download_stream(URL, [("X-Test", "raw")]) == "backend-result"
             assert len(backend.calls) == 1
             assert called == []
@@ -290,4 +292,52 @@ async def test_file_descriptor_pins_file_after_rename(tmp_path):
             assert await stream(result) == BODY
             assert backend.calls == []
         finally:
+            await wrapper.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("range_request, expected_status, expected_body", [
+    (None, 200, BODY),
+    ("bytes=2-6", 206, BODY[2:7]),
+])
+async def test_disk_response_reuses_original_r2_status_and_headers(
+    tmp_path, range_request, expected_status, expected_body,
+):
+    """Check the actual loopback HTTP response, not just DownloadResult."""
+    cfg = settings(tmp_path)
+    cfg.download_predownload_dir.mkdir(parents=True)
+    (cfg.download_predownload_dir / "video one.bin").write_bytes(BODY)
+    original = HeaderOnlyStream()
+
+    def handler(request):
+        headers = {
+            "Content-Length": str(len(expected_body)),
+            "ETag": '"genuine-r2-etag"',
+            "Content-Type": "application/octet-stream",
+        }
+        if range_request is not None:
+            headers["Content-Range"] = "bytes 2-6/15"
+        return httpx.Response(expected_status, headers=headers, stream=original)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as probe_client:
+        wrapper = PredownloadDownloader(Backend(), cfg, client=probe_client)
+        server = DiskResponseServer()
+        try:
+            headers = [("Range", range_request)] if range_request else []
+            result = await wrapper.download_stream(URL, headers)
+            token = await server.register(result)
+            async with httpx.AsyncClient(trust_env=False) as consumer:
+                response = await consumer.get(
+                    f"http://127.0.0.1:{server.port}/download/{token}"
+                )
+            assert response.status_code == expected_status
+            assert response.content == expected_body
+            assert response.headers["etag"] == '"genuine-r2-etag"'
+            assert response.headers["content-length"] == str(len(expected_body))
+            assert response.headers["content-type"] == "application/octet-stream"
+            if range_request is not None:
+                assert response.headers["content-range"] == "bytes 2-6/15"
+            assert original.closed and not original.read_attempted
+        finally:
+            await server.close()
             await wrapper.close()
