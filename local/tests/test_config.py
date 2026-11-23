@@ -134,7 +134,7 @@ class UploadBufferConfigTests(unittest.TestCase):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / "config.toml"
                 path.write_text(
-                    f'[download]\\nbackend = "local"\\n{name} = {value}\\n',
+                    f'[download]\nbackend = "local"\n{name} = {value}\n',
                     encoding="utf-8",
                 )
                 with self.assertRaises(ValueError) as raised:
