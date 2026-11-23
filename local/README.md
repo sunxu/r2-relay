@@ -90,9 +90,9 @@ enabled = false
 - `download.remote.max_concurrency = 16`：单文件同时取回的 Part 数上限。
 - `download.remote.global_max_concurrency = 32`：所有下载任务共享的 Part 传输上限；等待 VPS READY 的 Part 不占用传输名额。
 - `download.remote.small_response_memory_mib`：所有小响应共享的内存预算；启用下载时至少为 24 MiB，预算耗尽时排队。
-- `download.max_temp_mib`：remote/local 共享的大响应共享的本地临时磁盘预算；启用下载时至少为 25 MiB，超预算的单个对象明确失败，不会无限占用磁盘。
+- `download.max_temp_mib`：remote/local 共享的本地临时磁盘预算；启用 remote 时至少为 25 MiB，启用 local 时至少为 2 MiB。超预算的单个对象按原有逻辑处理。
 - `download.temp_dir`：本地任务级临时文件目录。大响应只使用一个任务文件，按 Part 偏移写入，不保存第二套 Part 文件。
-- 下载默认关闭。只有明确填写小响应内存预算和临时磁盘预算后，才能设置 `enabled = true`；不在没有 Mac 资源测量的情况下预设预算值。
+- 下载默认关闭。启用 remote 时须配置小响应内存预算及临时磁盘预算；启用 local 时只需共享临时磁盘预算，不需要 remote 小响应内存预算。
 - 所有发往 Cloudflare R2 S3 endpoint 的 GET 在下载启用后由本地代理接管；原始 URL、Range/条件请求头和签名头交给 VPS。VPS 不可用或下载失败时返回明确 502，不静默直连 R2。
 - Mac 只并发取回 VPS 已 READY 的 Part：单文件最多 16、所有任务合计最多 32。每片验证长度和 SHA-256 后直接写入一个任务级文件；所有 Part 完成且 VPS 任务 COMPLETE 后才返回原始响应。
 - 大文件通过仅监听 `127.0.0.1` 的 Loopback 文件响应服务交给 mitmproxy，并开启 response streaming；不把完整大文件读入 Python 内存。
