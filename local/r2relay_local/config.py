@@ -100,26 +100,27 @@ def load_settings(config_path: Path | None = None) -> Settings:
         raise ValueError("download.local.max_connections_per_get exceeds global_max_connections")
     if type(enabled) is not bool:
         raise ValueError("download.enabled must be a boolean")
-    max_concurrency = download["max_concurrency"]
-    global_max_concurrency = download["global_max_concurrency"]
-    small_memory_mib = download["small_response_memory_mib"]
+    remote_download = download["remote"]
+    max_concurrency = remote_download["max_concurrency"]
+    global_max_concurrency = remote_download["global_max_concurrency"]
+    small_memory_mib = remote_download["small_response_memory_mib"]
     max_temp_mib = download["max_temp_mib"]
     temp_dir = download["temp_dir"]
     for name, value, minimum in (
-        ("download.max_concurrency", max_concurrency, 1),
-        ("download.global_max_concurrency", global_max_concurrency, 1),
-        ("download.small_response_memory_mib", small_memory_mib, 0),
+        ("download.remote.max_concurrency", max_concurrency, 1),
+        ("download.remote.global_max_concurrency", global_max_concurrency, 1),
+        ("download.remote.small_response_memory_mib", small_memory_mib, 0),
         ("download.max_temp_mib", max_temp_mib, 0),
     ):
         if type(value) is not int or value < minimum:
             raise ValueError(f"{name} must be an integer >= {minimum}")
     if max_concurrency > global_max_concurrency:
-        raise ValueError("download.max_concurrency cannot exceed download.global_max_concurrency")
+        raise ValueError("download.remote.max_concurrency cannot exceed download.remote.global_max_concurrency")
     if not isinstance(temp_dir, str) or not temp_dir.strip():
         raise ValueError("download.temp_dir must be a non-empty path")
     if enabled and backend == "remote":
         if small_memory_mib < 24:
-            raise ValueError("download.small_response_memory_mib must be at least 24 when enabled")
+            raise ValueError("download.remote.small_response_memory_mib must be at least 24 when enabled")
         if max_temp_mib < 25:
             raise ValueError("download.max_temp_mib must be at least 25 when enabled")
     if enabled and backend == "local" and max_temp_mib < 2:
