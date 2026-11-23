@@ -33,7 +33,7 @@ global_max_connections = 128
 
 \`backend\` 只接受 remote 或 local；未指定时 remote。Local 需要设置非零的 \`max_temp_mib\`，但无需设置 Remote 专用的小响应内存预算，无需配置 VPS Endpoint、Token 或 CA。若继续要求 VPS UploadPart 缓存，仍需单独提供有效 VPS Token 等设置。当前仅在单独测试配置中使用 local，不改动正在运行的实例。
 
-Local 需要 2 MiB 固定分片。连接并发及内存、磁盘预算允许正整数配置超过原有固定上限，0/负值、非整数及单 GET 大于全局连接额度仍被拒绝。每个 GET 响应长度小于等于 2 MiB 或无法证明 Range 并发安全时，保留最初单连接的原始响应流，不额外发起 HEAD 或重复 GET。未知长度默认单流。
+Local 默认使用 2 MiB 分片；chunk_size_mib 和 min_size_mib 分别接受正整数 MiB，并可独立配置。连接并发及内存、磁盘预算允许正整数配置超过原有固定上限，0/负值、非整数及单 GET 大于全局连接额度仍被拒绝。每个 GET 响应长度小于等于配置的 chunk_size_mib 或无法证明 Range 并发安全时，保留最初单连接的原始响应流，不额外发起 HEAD 或重复 GET。未知长度默认单流。
 
 ## 可拆分性与版本保护
 
@@ -42,9 +42,9 @@ Local 需要 2 MiB 固定分片。连接并发及内存、磁盘预算允许正�
 1. 初始 R2 GET 返回 200 或 206、明确的 Content-Length、强 ETag 和 identity（或无）Content-Encoding。
 2. 206 必须具有和原始单一 \`Range: bytes=start-end\`／\`bytes=start-\` 一致的 Content-Range；200 无 Range 时必须声明 \`Accept-Ranges: bytes\`。
 3. 请求不得包含条件请求、多 Range、含糊的认证签名约束，且签名不得绑定 Range 或新增的 If-Match。
-4. 响应长度大于 2 MiB 且临时磁盘有足够可预留预算与剩余空间。
+4. 响应长度大于配置的 chunk_size_mib、且不小于 min_size_mib，并且临时磁盘有足够可预留预算与剩余空间。
 
-首个 GET 已建立的连接读取响应头和首个 2 MiB，后续连接只读取原响应范围内的其它 2 MiB 子 Range。对子请求附加强 ETag 的 If-Match，逐条校验 206、Content-Range、Content-Length、Content-Encoding、ETag 和 Last-Modified，禁止混用不同版本。TransportError 最多重试两次；响应版本或范围不匹配立即终止。
+首个 GET 已建立的连接读取响应头和首个配置大小的分片，后续连接只读取原响应范围内的其它同尺寸子 Range（尾块可更小）。对子请求附加强 ETag 的 If-Match，逐条校验 206、Content-Range、Content-Length、Content-Encoding、ETag 和 Last-Modified，禁止混用不同版本。TransportError 最多重试两次；响应版本或范围不匹配立即终止。
 
 如果对象版本条件无法证明，使用原单连接，不放宽验收规则。HTTPX 不信任环境代理设置，验证 TLS，不跟随重定向；保留原始请求 URL 和必要端到端请求头。禁止将签名 URL、认证头、原始异常字符串写入日志。
 

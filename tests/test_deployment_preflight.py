@@ -81,3 +81,45 @@ def test_duplicate_env_name_fails(tmp_path):
     result = module.validate(root)
     assert result["status"] == "FAIL"
     assert result["secrets_emitted"] is False
+
+@pytest.mark.parametrize("file,key,large", [
+    ("vps.env.example", "R2_RELAY_MAX_EXECUTIONS", 100001),
+    ("vps.env.example", "R2_RELAY_MAX_CONCURRENT", 1025),
+    ("vps.env.example", "R2_RELAY_EXECUTION_TTL", 86401),
+    ("vps.env.example", "R2_RELAY_MIN_FREE_BYTES", 2**50 + 1),
+    ("vps.env.example", "R2_RELAY_MAX_RETAINED_RESULT_BYTES", 2**40 + 1),
+    ("local.env.example", "R2_RELAY_BUFFER_BUDGET", 2**40 + 1),
+])
+def test_accepts_values_above_previous_arbitrary_ceilings(tmp_path, file, key, large):
+    root = copy_deploy(tmp_path)
+    target = root / "deploy" / file
+    original = target.read_text()
+    lines = [f"{key}={large}" if line.startswith(f"{key}=") else line
+             for line in original.splitlines()]
+    target.write_text("\n".join(lines) + "\n")
+    result = module.validate(root)
+    assert result["status"] == "PASS", result
+
+
+@pytest.mark.parametrize("key", [
+    "R2_RELAY_MAX_EXECUTIONS", "R2_RELAY_MAX_CONCURRENT", "R2_RELAY_EXECUTION_TTL",
+    "R2_RELAY_MAX_PART_BYTES", "R2_RELAY_MIN_FREE_BYTES",
+    "R2_RELAY_MAX_RETAINED_RESULT_BYTES",
+])
+def test_rejects_nonpositive_vps_config(tmp_path, key):
+    root = copy_deploy(tmp_path)
+    target = root / "deploy/vps.env.example"
+    target.write_text("\n".join(
+        f"{key}=0" if line.startswith(f"{key}=") else line
+        for line in target.read_text().splitlines()
+    ) + "\n")
+    assert module.validate(root)["status"] == "FAIL"
+
+
+def test_rejects_nonpositive_local_buffer_budget(tmp_path):
+    root = copy_deploy(tmp_path)
+    target = root / "deploy/local.env.example"
+    target.write_text(target.read_text().replace(
+        "R2_RELAY_BUFFER_BUDGET=536870912", "R2_RELAY_BUFFER_BUDGET=0"
+    ))
+    assert module.validate(root)["status"] == "FAIL"
