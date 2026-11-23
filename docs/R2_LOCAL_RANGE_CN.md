@@ -13,7 +13,7 @@ IOTA 原始 GET 路由、iota-tools 慢速探测、替代响应状态/响应头�
 
 ## 配置
 
-配置文件：\`~/.config/r2-relay/config.toml\`。Remote 专用参数已移入 \ `.download.remote`。旧版顶层键不再兼容，升级前必须迁移。
+配置文件：\`~/.config/r2-relay/config.toml\`。Remote 专用参数已移入 \`[download.remote]\`。旧版顶层键不再兼容，升级前必须迁移。
 
 \`\`\`toml
 [download]

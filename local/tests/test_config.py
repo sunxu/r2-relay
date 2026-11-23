@@ -125,6 +125,24 @@ class UploadBufferConfigTests(unittest.TestCase):
             self.assertEqual(loaded.download_global_max_concurrency, 12)
             self.assertEqual(loaded.download_small_memory_bytes, 32 * 1024 * 1024)
 
+    def test_legacy_remote_keys_fail_with_unknown_config_key(self):
+        for name, value in (
+            ("max_concurrency", 16),
+            ("global_max_concurrency", 32),
+            ("small_response_memory_mib", 24),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "config.toml"
+                path.write_text(
+                    f'[download]\\nbackend = "local"\\n{name} = {value}\\n',
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ValueError) as raised:
+                    load_settings(path)
+                self.assertEqual(
+                    str(raised.exception), f"unknown config key: download.{name}"
+                )
+
     def test_rejects_invalid_or_unknown_values(self):
         invalid = (
             "schema_version = 1\n[upload]\nmax_part_mib = 0\n",
