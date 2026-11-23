@@ -19,6 +19,8 @@ class UploadBufferConfigTests(unittest.TestCase):
         self.assertEqual(settings.download_global_max_concurrency, 32)
         self.assertEqual(settings.download_small_memory_bytes, 0)
         self.assertEqual(settings.download_max_temp_bytes, 0)
+        self.assertFalse(settings.download_predownload_enabled)
+        self.assertEqual(settings.download_predownload_dir, Path.home() / ".cache" / "r2-relay" / "predownload")
 
     def test_local_override(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -101,6 +103,12 @@ class UploadBufferConfigTests(unittest.TestCase):
                     self.assertEqual(loaded.download_local_chunk_bytes, chunk_mib * 1024 * 1024)
                     self.assertEqual(loaded.download_local_min_bytes, min_mib * 1024 * 1024)
 
+    def test_predownload_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text("[download.predownload]\nenabled = true\n", encoding="utf-8")
+            self.assertTrue(load_settings(path).download_predownload_enabled)
+
     def test_rejects_invalid_or_unknown_values(self):
         invalid = (
             "schema_version = 1\n[upload]\nmax_part_mib = 0\n",
@@ -112,6 +120,8 @@ class UploadBufferConfigTests(unittest.TestCase):
             "schema_version = 1\n[download]\nenabled = true\nsmall_response_memory_mib = 24\nmax_temp_mib = 16\n",
             "schema_version = 1\n[download]\nmax_concurrency = 33\nglobal_max_concurrency = 32\n",
             'schema_version = 1\n[download]\nbackend = "auto"\n',
+            'schema_version = 1\n[download.predownload]\nenabled = 1\n',
+            'schema_version = 1\n[download.predownload]\nunknown = true\n',
             'schema_version = 1\n[download.local]\nchunk_size_mib = 0\n',
             'schema_version = 1\n[download.local]\nchunk_size_mib = -1\n',
             'schema_version = 1\n[download.local]\nchunk_size_mib = 1.5\n',

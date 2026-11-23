@@ -27,6 +27,8 @@ class Settings:
     download_small_memory_bytes: int = 0
     download_max_temp_bytes: int = 0
     download_temp_dir: Path = Path.home() / ".cache" / "r2-relay" / "downloads"
+    download_predownload_enabled: bool = False
+    download_predownload_dir: Path = Path.home() / ".cache" / "r2-relay" / "predownload"
 
     @property
     def max_part_mib(self) -> int:
@@ -82,6 +84,9 @@ def load_settings(config_path: Path | None = None) -> Settings:
     backend = download["backend"]
     if type(backend) is not str or backend not in ("remote", "local"):
         raise ValueError("download.backend must be remote or local")
+    predownload = download["predownload"]
+    if type(predownload["enabled"]) is not bool:
+        raise ValueError("download.predownload.enabled must be a boolean")
     local_download = download["local"]
     for name in ("chunk_size_mib", "min_size_mib"):
         value = local_download[name]
@@ -135,4 +140,5 @@ def load_settings(config_path: Path | None = None) -> Settings:
         download_small_memory_bytes=small_memory_mib * _MIB,
         download_max_temp_bytes=max_temp_mib * _MIB,
         download_temp_dir=Path(temp_dir).expanduser(),
+        download_predownload_enabled=predownload["enabled"],
     )
